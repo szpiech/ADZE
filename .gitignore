@@ -10,3 +10,12 @@
 # python bytecode
 __pycache__/
 *.pyc
+
+# latex build products
+doc/*.aux
+doc/*.dvi
+doc/*.log
+doc/*.out
+doc/*.toc
+doc/options.tex
+doc/ADZE_Manual.pdf
