@@ -1530,7 +1530,8 @@ bool readTupleFile(const string& file, Population pop[], int numDivs,
  */
 void calcPgTuples(Population pop[], int numDivs,
 		  const vector< vector<int> >& tuples, const ParamSet &param,
-		  bool full_comb, string comb_out, bool namedTuples)
+		  bool full_comb, string comb_out, bool namedTuples,
+		  const vector<Window>& windows, const LocusMap& lmap)
 {
   const int numLoci = param.loci.val;
   const int tot_m = int(tuples.size());
@@ -1596,6 +1597,14 @@ void calcPgTuples(Population pop[], int numDivs,
 
   vector<string> names(widest);
   vector<char> inTuple(numDivs,0);
+  ofstream comb_win_out;
+  if(!windows.empty())
+    {
+      string name = nameCreate(comb_out,"_windows");
+      comb_win_out.open(name.c_str());
+      writeWindowHeader(comb_win_out,"TUPLE");
+    }
+
   vector<double> pgcomb(size_t(gStride) * numLoci, 0.0); //[g][locus]
 
   for(int m = 0; m < tot_m; m++)
@@ -1687,17 +1696,84 @@ void calcPgTuples(Population pop[], int numDivs,
 	    }
 	}
 
+      if(!windows.empty())
+	{
+	  /*
+	   * The tuple label is comma-joined here whatever the genome-wide
+	   * format, since window output is always tab-separated and the label
+	   * has to stay one field.
+	   */
+	  const string win_names = combineNames(&names[0],k,',');
+	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
+			   win_names,2,gLast);
+	}
+
       if(!param.tsv.val) reg_out << endl;
       full_out << endl;
     }
 
   if(param.pp.val) bar.done();
 
+  if(comb_win_out.is_open()) comb_win_out.close();
+
+  return;
+}
+
+/*
+ * ------------------------------------------------------------------------
+ * Windowed output
+ * ------------------------------------------------------------------------
+ *
+ * A window is a contiguous run of surviving loci, and each statistics pass
+ * already holds its per-locus values as a [g][locus] buffer -- the same array
+ * the _fulldata files print.  A windowed row is therefore the existing
+ * summary over a subrange of that array: same mean, variance and standard
+ * error code, applied to the loci inside the window instead of all of them.
+ * Nothing about the estimators changes.
+ *
+ * Window files always carry a header and are always tab-separated. They are
+ * new output with no 1.0 consumer to keep compatible, and a genome scan is
+ * read by machine.
+ */
+void writeWindowHeader(ostream& out, const char* groupColumn)
+{
+  out << "CHROM\tSTART\tEND\t" << groupColumn
+      << "\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+  return;
+}
+
+void writeWindowStats(ostream& out, vector<double>& perLocus, int numLoci,
+		      const vector<Window>& windows, const LocusMap& lmap,
+		      const string& label, int gFirst, int gLast)
+{
+  for(int g = gFirst; g <= gLast; g++)
+    {
+      for(size_t w = 0; w < windows.size(); w++)
+	{
+	  const Window& win = windows[w];
+
+	  Stats st;
+	  st.putData(&perLocus[size_t(g)*numLoci + win.first],win.numLoci());
+	  st.calcAvg();
+	  st.calcVar();
+	  st.calcStdErr();
+
+	  ostringstream head;
+	  head << lmap.chromName[win.chrom] << '\t' << win.start << '\t'
+	       << win.end << '\t' << label;
+
+	  //tsv = true: a window undefined at this g is reported as NA rather
+	  //than dropped, so a scan keeps one row per window per g.
+	  st.printStats(out,head.str(),g,1);
+	}
+    }
+
   return;
 }
 
 void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
-		bool full_priv,string private_out)
+		bool full_priv,string private_out,
+		const vector<Window>& windows,const LocusMap& lmap)
 {
   const int numLoci = param.loci.val;
   ofstream pg_full_out,pg_out;
@@ -1719,6 +1795,14 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
   pg_out.open(private_out.c_str());
   if(param.tsv.val) pg_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+
+  ofstream pg_win_out;
+  if(!windows.empty())
+    {
+      string name = nameCreate(private_out,"_windows");
+      pg_win_out.open(name.c_str());
+      writeWindowHeader(pg_win_out,"POP_GROUPING");
+    }
 
   /*
    * Smallest Nj per locus (for the -9 sentinel) and over the whole dataset.
@@ -1834,6 +1918,12 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	    }
 	}
 
+      if(!windows.empty())
+	{
+	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
+			   pop[j].getName(),2,gLast);
+	}
+
       if(!param.tsv.val) pg_out << endl;
       pg_full_out << endl;
     }
@@ -1846,13 +1936,15 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   pg_out.close();
+  if(pg_win_out.is_open()) pg_win_out.close();
 
   return;
 }
 
 
 void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
-		bool full_rich,string richness_out)
+		bool full_rich,string richness_out,
+		const vector<Window>& windows,const LocusMap& lmap)
 {
   const int numLoci = param.loci.val;
   const int gTop = param.g.val;
@@ -1876,6 +1968,14 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
   ag_out.open(richness_out.c_str());
   if(param.tsv.val) ag_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+
+  ofstream ag_win_out;
+  if(!windows.empty())
+    {
+      string name = nameCreate(richness_out,"_windows");
+      ag_win_out.open(name.c_str());
+      writeWindowHeader(ag_win_out,"POP_GROUPING");
+    }
 
   ProgressBar bar(&adzelog(),double(numDivs)*(gTop-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
@@ -1964,6 +2064,12 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	    }
 	}
 
+      if(!windows.empty())
+	{
+	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
+			   pop[j].getName(),2,gTop);
+	}
+
       if(!param.tsv.val) ag_out << endl;
       ag_full_out << endl;
     }
@@ -1976,6 +2082,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   ag_out.close();
+  if(ag_win_out.is_open()) ag_win_out.close();
 
   return;
 }

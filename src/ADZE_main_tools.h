@@ -81,8 +81,14 @@ int min(int,int);
 
 void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
 		 int gMax,int gStride,vector<double>& q);
-void calcAllAgs(Population[],int,const ParamSet&,bool,string);
-void calcAllPgs(Population[],int,const ParamSet&,bool,string);
+void writeWindowHeader(ostream& out,const char* groupColumn);
+void writeWindowStats(ostream& out,vector<double>& perLocus,int numLoci,
+		      const vector<Window>& windows,const LocusMap& lmap,
+		      const string& label,int gFirst,int gLast);
+void calcAllAgs(Population[],int,const ParamSet&,bool,string,
+		const vector<Window>&,const LocusMap&);
+void calcAllPgs(Population[],int,const ParamSet&,bool,string,
+		const vector<Window>&,const LocusMap&);
 
 
 
@@ -93,7 +99,8 @@ bool readTupleFile(const string& file,Population pop[],int numDivs,
 		   vector< vector<int> >& out);
 void calcPgTuples(Population pop[],int numDivs,
 		  const vector< vector<int> >& tuples,const ParamSet& p,
-		  bool full_comb,string comb_out,bool namedTuples);
+		  bool full_comb,string comb_out,bool namedTuples,
+		  const vector<Window>& windows,const LocusMap& lmap);
 extern bool ADZE_QUIET;
 ostream& adzelog();
 bool stderrIsTerminal();

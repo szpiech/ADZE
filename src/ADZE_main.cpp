@@ -446,7 +446,7 @@ int main(int argc, char* argv[])
   if(do_rich)
     {
       adzelog() << "Calculating allelic richness...\n";
-      calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val);
+      calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val,windows,lmap);
       if(p.pp.val) adzelog() << endl;
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());
@@ -460,7 +460,7 @@ int main(int argc, char* argv[])
   if(do_priv)
     {
       adzelog() << "Calculating private allelic richness...\n";
-      calcAllPgs(pop,numDivs,p,p.full_p.val,p.p_out.val);
+      calcAllPgs(pop,numDivs,p,p.full_p.val,p.p_out.val,windows,lmap);
       if(p.pp.val) adzelog() << endl;
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());
@@ -477,7 +477,7 @@ int main(int argc, char* argv[])
 	{
 	  adzelog() << "Calculating private alleles for " << tuples.size()
 		    << " named tuples...\n";
-	  calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,p.c_out.val,1);
+	  calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,p.c_out.val,1,windows,lmap);
 	  if(p.pp.val) adzelog() << endl;
 	  adzelog() << "Completed at (d:h:m:s) ";
 	  displayTime(adzelog());
@@ -499,7 +499,7 @@ int main(int argc, char* argv[])
 	      const string new_comb_out = nameCreate(p.c_out.val,suffix.str());
 
 	      buildKTuples(numDivs,*i,tuples);
-	      calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,new_comb_out,0);
+	      calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,new_comb_out,0,windows,lmap);
 
 	      if(p.pp.val) adzelog() << endl;
 	      adzelog() << "Completed at (d:h:m:s) ";
