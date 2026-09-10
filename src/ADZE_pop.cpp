@@ -143,59 +143,6 @@ double Population::calcQjig(int i, int g, int locus)
   return Q;
 }
 
-//Implements calcQjig to calculate the allelic richness of population j
-//at a sample size of g
-double Population::calcAg(int g, int locus)
-{
-  double ag = 0, P, Q = 1;
-  bool good;
-  
-  if(locus > numLoci-1 || locus < 0)
-    {
-      //bad bounds
-      return -9;
-    }
-  else if(g > Nj[locus] || g < 2)
-    {
-      //Can't have a g greater than your actual sample size or less than 2
-      return -9;
-    }
-  else
-    {
-           
-      /* Calculate Qjig
-       *          / Nj - Nji \       g-1
-       *          \    g     /      ----    Nj - Nji - u
-       *  Qjig = --------------  =  |  | -----------------
-       *            /  Nj \         |  |      Nj - u
-       *            \  g  /         u = 0
-       *
-       */
-      for (int i = 0; i < NjiColLength[locus]; i++)
-	{
-	  for (int u = 0; u < g; u++)
-	    {
-	      Q *= double(Nj[locus]-Nji[locus][i]-u)/double(Nj[locus]-u);
-	    }
-	  
-	  //Calculate Pjig
-	  P = 1 - Q;
-	  //Calc ag
-	  ag += P;
-	  
-	  /*TESTING OUTPUT
-	    cout << "Qjig[" << j << "][" << i << "] = " 
-	    << Q << " ";
-	  
-	  cout << "Pj" << i << g << " = " << P << "\n";
-	  TESTING*/
-	  Q = 1;
-	}
-      
-      return ag;
-    } 
-}
-
 //Initializes Nj with specified number
 void Population::fillNj(int n)
 {

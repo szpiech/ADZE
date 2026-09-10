@@ -24,7 +24,6 @@ class Population
   string* locusName; //A vector to hold all the loci names
   vector<string> deletedLocus;//to hold the names of the deleted loci
   void fillData(string);
-  void fillRichness(int);
   void fillNj(int);
 
   int** Nji; //A matrix whose entries correspond to the number of i alleles in the jth population
@@ -43,7 +42,6 @@ class Population
   void setRowsLoci(int,int);
   void setName(string str) {name = str;};
   bool setLocusName(string str, int pos);
-  bool setAllelicRichness(double val, int locus);
   bool putDataElement(string dataElem, int row, int col);
   bool setNjiColLength(int,int);
   bool putNji(int,int,int);
@@ -61,6 +59,5 @@ class Population
   void printDeleted(ostream&);
   void deleteLoci(const vector<char>& del);
 
-  double calcAg(int,int);
   double calcQjig(int,int,int);
 };

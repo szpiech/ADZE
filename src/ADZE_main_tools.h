@@ -31,7 +31,8 @@ void calcNj(Population[],int);
 void calcAg(Population[],int,int);
 void calcPjig(Population pop[],vector<int> Nji[],
 	      int Nj[],int locus,int numDivs);
-double calcPg(Population[],int,int,int,int);
+void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
+		 int gMax,int gStride,vector<double>& q);
 void calcAllAgs(Population[],int,const ParamSet&,bool,string);
 void calcAllPgs(Population[],int,const ParamSet&,bool,string);
 int countCols(string);

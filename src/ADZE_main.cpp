@@ -230,6 +230,24 @@ int main(int argc, char* argv[])
 	} 
     }
   p.loci.val = pop[0].getNumLoci();
+
+  /*
+   * With no surviving locus every statistic is undefined.  1.0 carried on and
+   * printed rows of "nan -0 nan"; say so and stop instead.
+   */
+  if(p.loci.val == 0)
+    {
+      cout << "ERROR: no locus survived filtering at TOLERANCE " << p.tol.val
+	   << ".\n       Every statistic would be undefined; "
+	   << "raise TOLERANCE or check MISSING.\n"
+	   << "Program terminated.\n";
+      summary << "ERROR: no locus survived filtering at TOLERANCE "
+	      << p.tol.val << ".\n";
+      summary.close();
+      if(pop) delete [] pop;
+      return -1;
+    }
+
   int numLoci = p.loci.val;
   
 

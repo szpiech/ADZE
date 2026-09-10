@@ -74,6 +74,29 @@ def masked(path):
     return "\n".join(l for l in text.splitlines() if not TIME_LINE.search(l)).encode()
 
 
+def reference_has_no_loci(directory, files):
+    """True if the reference reported statistics over zero loci.
+
+    ADZE 1.0 carried on when filtering removed every locus and printed rows of
+    'nan -0 nan' with NUM_LOCI = 0.  Those cases have no comparable output; the
+    candidate is expected to diagnose the input instead.  Result rows are
+    'group g num_loci ...', so the third field carries the locus count.
+    """
+    for f in files:
+        if f.endswith("_summary") or f.endswith("_deletedloci"):
+            continue
+        try:
+            with open(os.path.join(directory, f)) as fh:
+                lines = fh.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) >= 3 and fields[2] == "0" and "NUM_LOCI" not in line:
+                return True
+    return False
+
+
 def compare(dir_a, dir_b, files):
     diffs = []
     for f in files:
@@ -144,6 +167,16 @@ def main():
                 status, detail = "FIXED", (
                     "reference died on signal %d, candidate exited 0 with %d outputs" % (
                         -ref.returncode, len(outputs(cnd_dir, dfile))))
+        elif reference_has_no_loci(ref_dir, outputs(ref_dir, dfile)):
+            # Reference reported statistics over zero loci; only the
+            # candidate's handling of the degenerate input is checkable.
+            if cnd.returncode == 0:
+                status, detail = "XFAIL", (
+                    "reference reported 0 loci; candidate also exited 0")
+            else:
+                status, detail = "FIXED", (
+                    "reference reported statistics over 0 loci, candidate "
+                    "exited %d with a diagnostic" % cnd.returncode)
         elif ref.returncode != cnd.returncode:
             status, detail = "FAIL", "exit status %d vs %d" % (ref.returncode, cnd.returncode)
         else:

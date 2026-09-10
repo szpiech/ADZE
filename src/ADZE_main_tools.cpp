@@ -194,6 +194,57 @@ int min(int a, int b)
 }
 
 
+/*
+ * Fill q[(p*numAlleles + i)*gStride + g] with Qpig -- the probability that
+ * allele i is absent from a sample of g gene copies drawn from grouping p --
+ * for one locus, every grouping, every allele, and every g in 1..gMax.
+ *
+ *           / Nj - Nji \        g-1
+ *           \    g     /       ----   Nj - Nji - u
+ *  Qjig =  --------------  =   |  |  --------------
+ *             /  Nj \          |  |      Nj - u
+ *             \  g  /          u = 0
+ *
+ * ADZE 1.0 evaluated that product from scratch inside the g sweep, so the
+ * sweep cost sum_g g = G^2/2 divisions per (grouping, allele, locus) instead
+ * of G.  The recurrence
+ *
+ *      Q(g) = Q(g-1) * (Nj - Nji - (g-1)) / (Nj - (g-1))
+ *
+ * performs exactly the same multiplications in the same order as the loop it
+ * replaces, so every cached value is bit-identical to what 1.0 computed.
+ *
+ * Entries for g > Nj are left at zero and never read: the callers guard those
+ * cases with the -9 sentinel, exactly as 1.0 did.  Not writing them also keeps
+ * the recurrence away from a zero denominator.
+ */
+void buildQTable(Population pop[], int numDivs, int locus, int numAlleles,
+		 int gMax, int gStride, vector<double>& q)
+{
+  q.assign(size_t(numDivs) * numAlleles * gStride, 0.0);
+
+  for(int p = 0; p < numDivs; p++)
+    {
+      const int Nj = pop[p].getNj(locus);
+      const int gTop = (gMax < Nj) ? gMax : Nj;
+
+      for(int i = 0; i < numAlleles; i++)
+	{
+	  const int Nji = pop[p].getNji(i,locus);
+	  double* qpi = &q[(size_t(p) * numAlleles + i) * gStride];
+	  double Q = 1;
+
+	  for(int g = 1; g <= gTop; g++)
+	    {
+	      Q *= double(Nj - Nji - (g-1))/double(Nj - (g-1));
+	      qpi[g] = Q;
+	    }
+	}
+    }
+
+  return;
+}
+
 void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 		   bool full_comb, string comb_out)
 {
@@ -365,10 +416,7 @@ bool isIn(int j, gsl_combination* c)
 void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 		bool full_priv,string private_out)
 {
-
-  int numLoci = param.loci.val;
-  int maxG = param.g.val+1;
-  double* pg; //private allelic richness
+  const int numLoci = param.loci.val;
   ofstream pg_full_out,pg_out;
 
   if(full_priv)
@@ -388,71 +436,108 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
   pg_out.open(private_out.c_str());
 
+  /*
+   * Smallest Nj per locus (for the -9 sentinel) and over the whole dataset.
+   *
+   * 1.0 walked g upward and set a breakG flag as soon as any grouping at any
+   * locus had Nj < g+1, leaving the sweep after finishing that g -- so the
+   * largest g it ever evaluated was the smallest Nj in the dataset.  Computing
+   * that bound up front gives the same set of g values without the flag, and
+   * lets the per-locus result buffer be sized to the g values that are
+   * actually reached.
+   */
+  vector<int> minNjLocus(numLoci,0);
+  int minNjAll = 0;
+  for(int locus = 0; locus < numLoci; locus++)
+    {
+      int m = pop[0].getNj(locus);
+      for(int p = 1; p < numDivs; p++)
+	{
+	  int Nj = pop[p].getNj(locus);
+	  if(Nj < m) m = Nj;
+	}
+      minNjLocus[locus] = m;
+      if(locus == 0 || m < minNjAll) minNjAll = m;
+    }
 
-  ProgressBar bar(&cout,numDivs*(maxG-2)*numLoci,BARLEN[0]);
+  int gLast = param.g.val;
+  if(minNjAll < gLast) gLast = minNjAll;
+  if(gLast < 2) gLast = 2; //1.0 always evaluated g = 2 at least once
+  const int gStride = gLast + 1;
+
+  vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  vector<double> q;
+
+  ProgressBar bar(&cout,double(numDivs)*(gLast-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
     }
 
-  //CALCULATE pg's
+  /*
+   * Calculate the private allelic richness
+   *            m              J
+   *            _             ___ 
+   * __(j)     \   /        / | |       \ \
+   * ||g  =    /_  \ Pijg * \ | | Qij'g / /
+   *           i=1           j'=1
+   *                         j'!=j
+   */
   for(int j = 0; j < numDivs; j++)
     {
-      for(int g = 2; g < maxG; g++)
+      for(int locus = 0; locus < numLoci; locus++)
 	{
-	  bool breakG = 0;
-	  pg = new double[numLoci];
+	  const int numAlleles = pop[j].getNjiColLength(locus);
+	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
 
-	  for(int locus = 0;locus < numLoci; locus++)
+	  for(int g = 2; g <= gLast; g++)
 	    {
-	      pg[locus] = calcPg(pop,j,locus,g,numDivs);
-
-	      //Good to go for next g?
-	      for(int p = 0; p < numDivs; p++)
+	      if(minNjLocus[locus] < g)
 		{
-		  int Nj = pop[p].getNj(locus);
-		  if(Nj < g+1) breakG = 1; 
+		  pg[size_t(g)*numLoci + locus] = -9;
+		  continue;
 		}
 
-	      if(param.pp.val) ++bar;
-	    }
-	  
-	  Stats pg_stats;
-	  pg_stats.putData(pg,numLoci);
+	      double total = 0;
+	      for(int i = 0; i < numAlleles; i++)
+		{
+		  double Q = 1;
+		  for(int p = 0; p < numDivs; p++)
+		    {
+		      if(p != j) Q *= q[(size_t(p)*numAlleles + i)*gStride + g];
+		    }
 
-	  //Calc Avg
+		  double P = 1 - q[(size_t(j)*numAlleles + i)*gStride + g];
+		  total += P*Q;
+		}
+
+	      pg[size_t(g)*numLoci + locus] = total;
+	    }
+
+	  if(param.pp.val) bar.adv(gLast-1);
+	}
+
+      for(int g = 2; g <= gLast; g++)
+	{
+	  Stats pg_stats;
+	  pg_stats.putData(&pg[size_t(g)*numLoci],numLoci);
 	  pg_stats.calcAvg();
-	  
-	  //Calc Var
 	  pg_stats.calcVar();
-	  
-	  //Calc Std_err
 	  pg_stats.calcStdErr();
 
-	  //Ouput
 	  pg_stats.printStats(pg_out,pop[j].getName(),g);
 
 	  if(full_priv)
 	    {
 	      pg_stats.printData(pg_full_out,pop[j].getName(),g);
 	    }
-
-	  //Delete
-	  delete [] pg;
-	  
-	  if(breakG)
-	    {
-	      if(param.pp.val) bar.adv((maxG-g-1)*numLoci);
-	      break;
-	    }
 	}
-    
+
       pg_out << endl;
       pg_full_out << endl;
     }
 
   if(param.pp.val) bar.done();
-
 
   if(pg_full_out.is_open())
     {
@@ -460,7 +545,6 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   pg_out.close();
-  
 
   return;
 }
@@ -469,10 +553,9 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 		bool full_rich,string richness_out)
 {
-
-  int numLoci = param.loci.val;
-  int maxG = param.g.val+1;
-  double* ag; //allelic richness
+  const int numLoci = param.loci.val;
+  const int gTop = param.g.val;
+  const int gStride = gTop + 1;
   ofstream ag_full_out,ag_out;
 
   if(full_rich)
@@ -492,50 +575,73 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
   ag_out.open(richness_out.c_str());
 
-  ProgressBar bar(&cout,numDivs*(maxG-2)*numLoci,BARLEN[0]);
+  ProgressBar bar(&cout,double(numDivs)*(gTop-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
     }
-  
-  //CALCULATE ag's
+
+  vector<double> ag(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  vector<double> q;
+
+  /*
+   * Calculate the allelic richness
+   *            m
+   *            _
+   *   (j)     \
+   *  A g  =   /_  Pijg
+   *           i=1
+   *
+   * One grouping and one locus at a time, so the Qjig table for that locus is
+   * built once (by the recurrence in g) and read by every g, instead of being
+   * recomputed from scratch for each g as in 1.0.  Loci where g exceeds the
+   * grouping's sample size keep the -9 sentinel that calcAg returned.
+   */
   for(int j = 0; j < numDivs; j++)
     {
-      for(int g = 2; g < maxG; g++)
+      for(int locus = 0; locus < numLoci; locus++)
 	{
-	  ag = new double[numLoci];
+	  const int numAlleles = pop[j].getNjiColLength(locus);
+	  const int Nj = pop[j].getNj(locus);
 
-	  for(int locus = 0;locus < numLoci; locus++)
+	  buildQTable(&pop[j],1,locus,numAlleles,gTop,gStride,q);
+
+	  for(int g = 2; g <= gTop; g++)
 	    {
-	      
-	      ag[locus] = pop[j].calcAg(g,locus);
-	      if(param.pp.val) ++bar;
-	    }
-	  
-	  Stats ag_stats;
-	  ag_stats.putData(ag,numLoci);
+	      if(g > Nj)
+		{
+		  ag[size_t(g)*numLoci + locus] = -9;
+		  continue;
+		}
 
-	  //Calc Avg
+	      double total = 0;
+	      for(int i = 0; i < numAlleles; i++)
+		{
+		  total += 1 - q[size_t(i)*gStride + g];
+		}
+
+	      ag[size_t(g)*numLoci + locus] = total;
+	    }
+
+	  if(param.pp.val) bar.adv(gTop-1);
+	}
+
+      for(int g = 2; g <= gTop; g++)
+	{
+	  Stats ag_stats;
+	  ag_stats.putData(&ag[size_t(g)*numLoci],numLoci);
 	  ag_stats.calcAvg();
-	  
-	  //Calc Var
 	  ag_stats.calcVar();
-	  
-	  //Calc Std_err
 	  ag_stats.calcStdErr();
 
-	  //Ouput
 	  ag_stats.printStats(ag_out,pop[j].getName(),g);
 
 	  if(full_rich)
 	    {
 	      ag_stats.printData(ag_full_out,pop[j].getName(),g);
 	    }
-
-	  //Delete
-
-	  delete [] ag;	  
 	}
+
       ag_out << endl;
       ag_full_out << endl;
     }
@@ -548,59 +654,8 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   ag_out.close();
-  
 
   return;
-}
-
-
-
-
-double calcPg(Population pop[],int j,int locus,int g,int numDivs)
-{
-  int Nj;
-  
-  for(int p = 0; p < numDivs; p++)
-    {
-      Nj = pop[p].getNj(locus);
-
-      if(Nj < g)
-	{
-	  return -9;
-	}      
-    }
-
-  int maxI = pop[j].getNjiColLength(locus);
-  double pg = 0;
-  double Q = 1;
-  double P;
-
-  /*
-   * Calculate the private allelic richness
-   *            m              J
-   *            _             ___ 
-   * __(j)     \   /        / | |       \ \
-   * ||g  =    /_  \ Pijg * \ | | Qij'g / /
-   *           i=1           j'=1
-   *                         j'!=j
-   */
-
-  for(int i = 0; i < maxI; i++)
-    {
-      for(int p = 0; p < numDivs; p++)
-	{
-	  if(p != j)
-	    {
-	      Q *= pop[p].calcQjig(i,g,locus);
-	    }
-	}
-
-      P = 1 - pop[j].calcQjig(i,g,locus);
-      pg += P*Q;
-      Q = 1; //reset Q
-    }
-
-  return pg;
 }
 
 
