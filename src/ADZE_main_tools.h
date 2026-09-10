@@ -1,4 +1,6 @@
 #include <fstream>
+#include <sstream>
+#include <algorithm>
 #include <map>
 #include <unordered_map>
 #include <gsl/gsl_combination.h>
@@ -14,29 +16,13 @@ typedef map<int,string> IntStrMap;
 const int BARLEN[] = {50,100,500,500};
 
 int min(int,int);
-bool sameStr(string, string);
-int seenLabel(vector<string>&, string);
-int seenBefore(vector<int>&,int);
-
-//bool openFile(ifstream&, string);
-void getDivLines(ifstream&,vector<string>&,vector<int>&,const ParamSet&);
-void getLociNames(ifstream&, string[], const ParamSet&);
-void readData(/*ifstream&,*/ Population[],vector<string>&,int,const ParamSet&);
 
 
-int calcG(vector<int>[],int);
-void calcNji(Population[],int,const string& missing);
-void calcNj(Population[],int);
-//void storeG(Population[],int,int,int);
-void calcAg(Population[],int,int);
-void calcPjig(Population pop[],vector<int> Nji[],
-	      int Nj[],int locus,int numDivs);
+
 void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
 		 int gMax,int gStride,vector<double>& q);
 void calcAllAgs(Population[],int,const ParamSet&,bool,string);
 void calcAllPgs(Population[],int,const ParamSet&,bool,string);
-int countCols(string);
-void checkDatafile(const ParamSet&);
 
 
 
@@ -47,7 +33,8 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet& p,
 string combineNames(string names[],int k);
 bool validK(int numDivs,list<int> k);
 void filterLoci(Population pop[],int numDivs,double tol,string private_out,
-		string missing, bool pp);
+		bool pp);
+Population* readDataset(ParamSet& p,vector<string>& groupNames,int& numDivs);
 list<int> parseKVals(string str);
 void warning(int loci,int numDivs,list<int> k,Population pop[]);
 

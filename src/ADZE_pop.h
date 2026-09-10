@@ -1,3 +1,4 @@
+#include <climits>
 #include <string>
 //#include "binom.h"
 #include <list>
@@ -18,34 +19,34 @@ class Population
   double tol;
   int numLociOrig;
   int numLoci; //The number of loci in the data
-  int rows; //The number of individuals in the data
+  int rows; //The number of gene copies (data rows) in this grouping
   string name; //The name of the population
-  string** data; //The data block to be allocated with dimentions numLoci, rows
   string* locusName; //A vector to hold all the loci names
   vector<string> deletedLocus;//to hold the names of the deleted loci
-  void fillData(string);
   void fillNj(int);
 
   int** Nji; //A matrix whose entries correspond to the number of i alleles in the jth population
   int* NjiColLength; //The length of the columns (loci) in the matrix Nji
   int* Nj; //A vector holding the total number of alleles in the jth population
-  
+  int* missing; //Number of missing gene copies at each locus
+
  public:
 
   int minG;
   Population();
-  Population(string n, int numLoci, int rows);
   ~Population();
 
-  void recLociDelete(double tolerance, const string& missing, vector<char>& del);
+  void recLociDelete(double tolerance, vector<char>& del);
 
-  void setRowsLoci(int,int);
+  void setLoci(int numLoci);
   void setName(string str) {name = str;};
+  void setRows(int r) {rows = r;};
   bool setLocusName(string str, int pos);
-  bool putDataElement(string dataElem, int row, int col);
   bool setNjiColLength(int,int);
   bool putNji(int,int,int);
   bool putNj(int,int);
+  void putMissing(int count, int locus);
+  void sumNj();
 
   int getNj(int);
   int getNji(int,int);
@@ -53,7 +54,6 @@ class Population
   string getName() {return name;};
   int getNumLoci() {return numLoci;};
   int getNumRows() {return rows;};
-  const string& getDataElement(int row, int col) const;
   string getLocusName(int);
 
   void printDeleted(ostream&);

@@ -91,14 +91,316 @@ list<int> parseKVals(string str)
 
 
 
+
+/*
+ * ------------------------------------------------------------------------
+ * Reading the data file
+ * ------------------------------------------------------------------------
+ *
+ * ADZE 1.0 read the file three times: checkDatafile validated the column
+ * counts, getLociNames plus getDivLines discovered the groupings and counted
+ * their rows, and readData stored every genotype as a std::string in a
+ * numLoci x rows matrix per grouping.  Each field was extracted with
+ * `stream >> string`, at roughly 230 ns per genotype, and the resident matrix
+ * cost 34 bytes per gene copy -- 8.5x the size of the input file.
+ *
+ * One pass does all of it.  Fields are tokenized in place out of a reused line
+ * buffer; allele labels are interned per locus to a dense slot index; and the
+ * only things retained are the per-locus allele counts, the missing-data
+ * tallies, and the row counts -- which is all the estimators ever read.  The
+ * genotype matrix is never materialized.
+ *
+ * Allele slots are renumbered at the end of the pass into the order 1.0
+ * assigned them (first appearance scanning groupings in discovery order, then
+ * rows within a grouping), so Nji column order -- and therefore the summation
+ * order of every statistic -- is unchanged.
+ */
+
+
+//Orders allele slots by where each was first seen, so that Nji columns come out
+//in the same order ADZE 1.0 produced.
+struct FirstSeenLess
+{
+  const vector<long long>& key;
+  FirstSeenLess(const vector<long long>& k) : key(k) {}
+  bool operator()(int a, int b) const { return key[a] < key[b]; }
+};
+
+typedef pair<const char*,size_t> Field;
+
+//Split a line on whitespace, into spans pointing back into the line itself.
+static void tokenize(const string& line, vector<Field>& out)
+{
+  out.clear();
+  const char* p = line.c_str();
+  const char* end = p + line.size();
+
+  while(p < end)
+    {
+      while(p < end && isspace((unsigned char)*p)) p++;
+      if(p >= end) break;
+      const char* start = p;
+      while(p < end && !isspace((unsigned char)*p)) p++;
+      out.push_back(Field(start,size_t(p-start)));
+    }
+
+  return;
+}
+
+namespace {
+
+  //Per-locus allele bookkeeping while the file streams past.
+  struct LocusTally
+  {
+    unordered_map<string,int> slotOf;  //allele label -> dense slot
+    vector<long long> firstSeen;       //per slot: (grouping, row) of first sighting
+    vector<int> count;                 //slot-major, stride groupCap
+    vector<int> missing;               //per grouping
+  };
+
+  struct Accumulator
+  {
+    vector<string> groupName;
+    vector<int> groupRows;
+    unordered_map<string,int> groupOf;
+    vector<string> locusName;
+    vector<LocusTally> locus;
+    int groupCap;
+
+    Accumulator() : groupCap(4) {}
+
+    int group(const string& label)
+    {
+      unordered_map<string,int>::iterator it = groupOf.find(label);
+      if(it != groupOf.end()) return it->second;
+
+      int index = int(groupName.size());
+      groupOf.insert(make_pair(label,index));
+      groupName.push_back(label);
+      groupRows.push_back(0);
+
+      if(index >= groupCap)
+	{
+	  //Widen every locus's count block. Groupings are discovered early in
+	  //practice, and doubling bounds the total reshuffling to O(loci *
+	  //alleles * groupings).
+	  int newCap = groupCap * 2;
+	  for(size_t l = 0; l < locus.size(); l++)
+	    {
+	      LocusTally& t = locus[l];
+	      int slots = int(t.firstSeen.size());
+	      vector<int> wider(size_t(slots) * newCap, 0);
+	      for(int sl = 0; sl < slots; sl++)
+		{
+		  for(int g = 0; g < groupCap; g++)
+		    {
+		      wider[size_t(sl)*newCap + g] = t.count[size_t(sl)*groupCap + g];
+		    }
+		}
+	      t.count.swap(wider);
+	    }
+	  groupCap = newCap;
+	}
+
+      for(size_t l = 0; l < locus.size(); l++) locus[l].missing.push_back(0);
+
+      return index;
+    }
+  };
+
+} //anonymous namespace
+
+static void badData(const string& msg)
+{
+  cout << "ERROR: " << msg << "\n";
+  BAD_PARAM x;
+  throw x;
+}
+
+/*
+ * Read the data file and return a freshly allocated array of numDivs
+ * Population objects, one per grouping, with allele counts, sample sizes and
+ * missing-data tallies already filled in.
+ *
+ * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if its shape
+ * disagrees with the declared LOCI, DATA_LINES or NON_DATA_COLS.
+ */
+Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
+{
+  ifstream in(p.dfile.val.c_str());
+  if(in.fail())
+    {
+      cout << "ERROR: Could not open " << p.dfile.val << "\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  const int declaredLoci = p.loci.val;
+  const int ndCols = p.nd_cols.val;
+  const int groupCol = p.sort_by.val - 1;
+  const string& missingLabel = p.miss.val;
+
+  string line;
+  vector<Field> fields;
+
+  //Row 1 of the non-data rows carries the locus names.
+  if(!getline(in,line)) badData("no locus-name row in " + p.dfile.val + ".");
+  tokenize(line,fields);
+
+  if(int(fields.size()) != declaredLoci)
+    {
+      ostringstream m;
+      m << "Expected " << declaredLoci << (declaredLoci == 1 ? " locus " : " loci ")
+	<< "in " << p.dfile.val << " but found " << fields.size() << ".";
+      badData(m.str());
+    }
+
+  Accumulator acc;
+  acc.locusName.reserve(fields.size());
+  for(size_t l = 0; l < fields.size(); l++)
+    {
+      acc.locusName.push_back(string(fields[l].first,fields[l].second));
+    }
+  acc.locus.resize(acc.locusName.size());
+
+  //Remaining non-data rows are ignored, exactly as in 1.0.
+  for(int skip = 1; skip < p.nd_rows.val; skip++) getline(in,line);
+
+  const int expected = ndCols + declaredLoci;
+  string token;
+  long long dataRows = 0, physicalRows = 0;
+
+  while(getline(in,line))
+    {
+      physicalRows++;
+      tokenize(line,fields);
+      if(fields.empty()) continue; //blank separator line
+
+      if(int(fields.size()) != expected)
+	{
+	  ostringstream m;
+	  m << "Expected " << expected << " columns at data line " << physicalRows
+	    << " in " << p.dfile.val << " but found " << fields.size()
+	    << ". Possible bad NON_DATA_COLS, NON_DATA_ROWS, or LOCI value.";
+	  badData(m.str());
+	}
+
+      if(dataRows >= p.dlines.val)
+	{
+	  ostringstream m;
+	  m << "Expected " << p.dlines.val << " data lines in " << p.dfile.val
+	    << " but found at least " << dataRows+1 << ".";
+	  badData(m.str());
+	}
+
+      token.assign(fields[groupCol].first,fields[groupCol].second);
+      const int g = acc.group(token);
+      const int rowInGroup = acc.groupRows[g]++;
+      const long long firstKey = (long long)(g) * 4294967296LL + rowInGroup;
+      dataRows++;
+
+      for(int l = 0; l < declaredLoci; l++)
+	{
+	  LocusTally& t = acc.locus[l];
+	  const Field& f = fields[ndCols + l];
+
+	  token.assign(f.first,f.second);
+	  if(token.compare(missingLabel) == 0)
+	    {
+	      t.missing[g]++;
+	      continue;
+	    }
+
+	  pair<unordered_map<string,int>::iterator,bool> found =
+	    t.slotOf.insert(make_pair(token,int(t.firstSeen.size())));
+
+	  if(found.second)
+	    {
+	      t.firstSeen.push_back(firstKey);
+	      t.count.resize(t.count.size() + acc.groupCap, 0);
+	    }
+
+	  t.count[size_t(found.first->second)*acc.groupCap + g]++;
+	}
+    }
+
+  in.close();
+
+  if(dataRows != p.dlines.val)
+    {
+      ostringstream m;
+      m << "Expected " << p.dlines.val << " data lines in " << p.dfile.val
+	<< " but found " << dataRows << ".";
+      badData(m.str());
+    }
+
+  numDivs = int(acc.groupName.size());
+  groupNames = acc.groupName;
+
+  Population* pop = new Population[numDivs];
+  for(int j = 0; j < numDivs; j++)
+    {
+      pop[j].setLoci(declaredLoci);
+      pop[j].setName(acc.groupName[j]);
+      pop[j].setRows(acc.groupRows[j]);
+      for(int l = 0; l < declaredLoci; l++)
+	{
+	  pop[j].setLocusName(acc.locusName[l],l);
+	}
+    }
+
+  //Renumber slots into 1.0's first-appearance order and publish the counts.
+  vector<int> order;
+  int emptyLoci = 0;
+
+  for(int l = 0; l < declaredLoci; l++)
+    {
+      LocusTally& t = acc.locus[l];
+      const int slots = int(t.firstSeen.size());
+      if(slots == 0) emptyLoci++;
+
+      order.resize(slots);
+      for(int sl = 0; sl < slots; sl++) order[sl] = sl;
+      sort(order.begin(),order.end(),FirstSeenLess(t.firstSeen));
+
+      for(int j = 0; j < numDivs; j++)
+	{
+	  pop[j].setNjiColLength(slots,l);
+	  for(int i = 0; i < slots; i++)
+	    {
+	      pop[j].putNji(t.count[size_t(order[i])*acc.groupCap + j],i,l);
+	    }
+	  pop[j].putMissing(t.missing[j],l);
+	}
+
+      //Release this locus's bookkeeping as soon as it is published.
+      unordered_map<string,int>().swap(t.slotOf);
+      vector<int>().swap(t.count);
+      vector<long long>().swap(t.firstSeen);
+    }
+
+  for(int j = 0; j < numDivs; j++) pop[j].sumNj();
+
+  if(emptyLoci > 0)
+    {
+      cout << "WARNING: " << emptyLoci
+	   << ((emptyLoci == 1) ? " locus has" : " loci have")
+	   << " no observed alleles in any grouping.\n"
+	   << "         Such loci make every statistic undefined at every g; "
+	   << "set TOLERANCE < 1 to drop them.\n";
+    }
+
+  return pop;
+}
+
 void filterLoci(Population pop[],int numDivs, double tol, string file,
-		string missing, bool pp)
+		bool pp)
 {
   vector<char> toDelete(pop[0].getNumLoci(),0);
 
   for(int n = 0; n < numDivs; n++)
     {
-      pop[n].recLociDelete(tol,missing,toDelete);
+      pop[n].recLociDelete(tol,toDelete);
     }
 
   int size1 = 0;
@@ -635,425 +937,6 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
   return;
 }
 
-
-/*
- * Calculates all Nji's for every locus
- * Stores in Population objects
- *
- */
-void calcNji(Population pop[],int numDivs,const string& missing)
-{
-  int numLoci = pop[0].getNumLoci();
-  int emptyLoci = 0;
-
-  /*
-   * ADZE 1.0 kept a map<int,string> of index -> allele label and, to ask
-   * whether a label had been seen, walked the whole map (it could not even
-   * break early, because the same loop supplied the next free index).  It then
-   * walked the map again for every genotype to find the bin to increment, so
-   * binning cost O(loci * rows * alleles) string comparisons where O(loci *
-   * rows) suffices.  A hash index from label to dense bin does the same work
-   * in one pass; allele indices are still assigned in order of first
-   * appearance, scanning groupings then rows, so Nji column order -- and
-   * therefore the summation order of every downstream statistic -- is
-   * unchanged.
-   */
-  unordered_map<string,int> alleleIndex;
-  vector< vector<int> > Nji(numDivs);
-
-  for(int locus = 0; locus < numLoci; locus++)
-    {
-      alleleIndex.clear();
-      for(int j = 0; j < numDivs; j++) Nji[j].clear();
-
-      for(int j = 0; j < numDivs; j++)
-	{
-	  int numRows = pop[j].getNumRows();
-	  for(int row = 0; row < numRows; row++)
-	    {
-	      const string& allele = pop[j].getDataElement(row,locus);
-	      if(allele.compare(missing) == 0) continue; //missing data
-
-	      pair<unordered_map<string,int>::iterator,bool> found =
-		alleleIndex.insert(make_pair(allele,int(alleleIndex.size())));
-
-	      if(found.second) //first sighting of this allele at this locus
-		{
-		  for(int jj = 0; jj < numDivs; jj++) Nji[jj].push_back(0);
-		}
-
-	      Nji[j][found.first->second]++;
-	    }
-	}
-
-      int NjiColLength = int(alleleIndex.size());
-
-      /*
-       * A locus with no observed allele in any grouping is legal input (it
-       * happens in merged panels) and 1.0 crashed on it: it decremented the
-       * end() iterator of the empty allele map.  Record zero alleles instead.
-       * Nj then comes out 0, so the locus reports -9 like any locus whose
-       * sample size is smaller than g.
-       */
-      if(NjiColLength == 0) emptyLoci++;
-
-      for(int j = 0; j < numDivs; j++)
-	{
-	  pop[j].setNjiColLength(NjiColLength,locus);
-	  for(int i = 0; i < NjiColLength; i++)
-	    {
-	      pop[j].putNji(Nji[j][i],i,locus);
-	    }
-	}
-    }
-
-  if(emptyLoci > 0)
-    {
-      cout << "WARNING: " << emptyLoci
-	   << ((emptyLoci == 1) ? " locus has" : " loci have")
-	   << " no observed alleles in any grouping.\n"
-	   << "         Such loci make every statistic undefined at every g; "
-	   << "set TOLERANCE < 1 to drop them.\n";
-    }
-
-  return;
-}
-
-/* CALCULATE Nj
- *      m
- *      __
- * Nj = \  Nji
- *      /_
- *     i = 0
- *
- * where m = Nji[j].size()
- */
-void calcNj(Population pop[],int numDivs)
-{
-  int loci = pop[0].getNumLoci();
-  int Nj, tally = 0;
-  bool good;
-
-  for(int locus = 0; locus < loci; locus++)
-    {
-      for (int j = 0; j < numDivs; j++)
-	{
-	  Nj = 0;
-	  for (int i = 0; i < pop[j].getNjiColLength(locus); i++)
-	    {
-	      Nj += pop[j].getNji(i,locus);
-	    }
-	  good = pop[j].putNj(Nj,locus);
-	}
-    }
-  return;
-}
-
-int seenBefore(vector<int>& allele, int current)
-{
-  for (int i = 0; i < allele.size(); i++)
-    {
-      if (allele[i] == current)
-	{
-	  return i;
-	}
-    }
-  
-  return -9;
-}
-
-void readData(/*ifstream& data,*/ Population pop[],
-	      vector<string>& sortLabel,int numDivs, const ParamSet &param)
-{
-  ifstream data;
-  data.open(param.dfile.val.c_str());
-  string junk;
-
-  for(int i = 0; i < param.nd_rows.val;i++)
-    {
-      getline(data,junk);
-    }
-
-  string *sortOption;
-  sortOption = new string[param.nd_cols.val];
-  //cout << "param.nd_cols.val " << param.nd_cols.val << endl;
-
-  //track which line of the division data block to write to
-  int *divLine = new int[numDivs]; 
-  
-  for (int i = 0; i < numDivs; i++)
-    {
-      divLine[i] = 0;
-    }
-  
-  string element; // int element;
-  bool goodStore;
-  
-  //Initial read of data line 1
-  for (int j = 0; j < param.nd_cols.val; j++)
-    {
-      data >> sortOption[j];
-    }
-  
-  int p = 0; //population index to write in
-  
-  for (int l = 0; l < param.loci.val; l++)
-    {
-      data >> element;
-      goodStore = pop[p].putDataElement(element,divLine[p],l);
-    }
-  
-  divLine[p]++;
-  
-  //Go line by line through the data file
-  //First read the preceding columns before the data
-  //and store as a string array
-  //split the data into chunks based on requested parameter
-  //store in the class population
-  for (int i = 1; i < param.dlines.val; i++)
-    {
-      
-      for (int j = 0; j < param.nd_cols.val; j++)
-        {
-	  data >> sortOption[j];
-	  //cout << "sortOption[j] " << sortOption[j] << endl;
-	}
-      //Check to see if the current data line falls in the current category
-      if (!sameStr(sortLabel[p],sortOption[(param.sort_by.val - 1)]))
-	{
-	  //It does not, so check to see which division the data line
-	  //fits into
-	  /*cout << "sortLabel,sortOption[(param.sort_by.val - 1) = " 
-	       << sortLabel[p] << " " << sortOption[(param.sort_by.val - 1)] 
-	       << endl;*/
-	  p = seenLabel(sortLabel,sortOption[(param.sort_by.val - 1)]);
-	  //cout << p << endl;
-	}
-      
-      //Read in the data to the appropriate object indexed by p
-      for (int l = 0; l < param.loci.val; l++)
-	{
-	  data >> element;
-	  //cout << i << " " << l << " " << element << endl;
-	  goodStore = pop[p].putDataElement(element,divLine[p],l);
-	}
-      
-      divLine[p]++;
-    }
-  
-  delete [] divLine;
-  delete [] sortOption;
-  
-  return;
-}
-
-void checkDatafile(const ParamSet &p)
-{
-
-  ifstream data;
-  data.open(p.dfile.val.c_str());
-
-  string line;
-  int count;
- 
-  getline(data,line);
-  count = countCols(line);
-  
-  if(count != p.loci.val)
-    {
-      cout << "ERROR: Expected " << p.loci.val; 
-      if(p.loci.val == 1) cout << " locus ";
-      else cout << " loci ";
-      cout << "in " << p.dfile.val << " but found " << count << ".\n";
-      data.close();
-      BAD_PARAM x;
-      throw x;
-    }
- 
-  for(int i = 1; i < p.nd_rows.val; i++)
-    {
-      getline(data,line);
-    }
-
-  count = 0;
-
-  int count2 = 0;
-  int blank = 0;
-  //getline(data,line);
-  while(!data.eof())
-    {
-      getline(data,line);
-      count2++;
-      count = countCols(line);
-      if(count == 0) blank++;
-      if(count2-blank > p.dlines.val)
-	{
-	  cout << "ERROR: Expected " << p.dlines.val << " data lines "
-	       << "in " << p.dfile.val << "\nbut found at least "
-	       << count2-blank << ".\n";
-	  data.close();
-	  BAD_PARAM x;
-	  throw x;
-	}
-      if(count != (p.nd_cols.val + p.loci.val) && count != 0)
-	{
-	  cout << "ERROR: Expected " << p.nd_cols.val + p.loci.val
-	       << " columns at data line " << count2 << " in " 
-	       << p.dfile.val << "\nbut found " << count
-	       << ". Possible bad NON_DATA_COLS, NON_DATA_ROWS, "
-	       << "or LOCI value.\n";
-	  data.close();
-	  BAD_PARAM x;
-	  throw x;
-	}
-    }
-
-  if(count2-blank != p.dlines.val)
-    {
-      cout << "ERROR: Expected " << p.dlines.val << " data lines "
-	   << "in " << p.dfile.val << "\nbut found " << count2-blank << ".\n";
-      data.close();
-      BAD_PARAM x;
-      throw x;
-    }
-
-  data.close();
-  return;
-}
-
-int countCols(string s)
-{
-  char c;
-  int count = 0;
-  bool countThis = 1;
-  string::iterator i;
-  for(i = s.begin(); i != s.end(); i++)
-    {
-      c = *i;
-      if(isgraph(c) && countThis)
-	{
-	  count++;
-	  countThis = 0;
-	}
-      else if(!isgraph(c)) countThis = 1;
-    }
-  return count;
-}
-
-void getLociNames(ifstream& data, string names[], const ParamSet &p)
-{
-  string junk;
-  //Read in all the names of the loci
-  for (int l = 0; l < p.loci.val; l++)
-    {
-      data >> names[l];
-    }
-  
-  getline(data,junk);
-
-  return;
-}
-
-void getDivLines(ifstream& data,vector<string>& divisionNames,
-		 vector<int>& lines,const ParamSet &p)
-{
-  string junk;
-  
-  string *sortOption;
-  sortOption = new string[p.nd_cols.val];
-  
-  //Initial read of before data strings
-  for (int j = 0; j < p.nd_cols.val; j++)
-    {
-      data >> sortOption[j];
-    }
-  getline(data,junk); //throw away the rest of the line
-  
-  int index, foundAt;
-  
-  divisionNames.push_back(sortOption[(p.sort_by.val - 1)]);
-  lines.push_back(1);
-  index = 0;
-  
-  //Read through data and count lines in each division, and keep their names
-  for (int i = 1; i < p.dlines.val; i++)
-    {
-      //Read in before data strings
-      for (int j = 0; j < p.nd_cols.val; j++)
-	{
-	  data >> sortOption[j];
-	}
-      getline(data,junk); //Throw away rest of line
-      
-      //Look to see if the current line division has been seen before
-      foundAt = seenLabel(divisionNames,sortOption[(p.sort_by.val - 1)]);
-      
-      if (foundAt < 0) //Its a new division
-	{
-	  divisionNames.push_back(sortOption[(p.sort_by.val - 1)]);
-	  lines.push_back(1);
-	}
-      else // foundAt  >= 0, its a previously seen divison
-	{
-	  lines[foundAt] = lines[foundAt]+1;
-	}
-    }
-  
-  delete [] sortOption;
-  
-  return;
-}
-
-/*
- * seenLabel
- * INPUT:
- *       a string vector in which to search
- *       a string to search for
- * OUTPUT:
- *       returns the index at which the string was found in the vector
- *       otherwise returns -9
- * FUNCTION:
- *       uses sameStr to compare the string of interest to every
- *       element in the vector
- */
-int seenLabel(vector<string>& seen, string current)
-{
-  for (int i = 0; i < seen.size(); i++)
-    {
-      //cout << "seen " << seen[i] << " current " << current << endl;
-      if (sameStr(seen[i],current))
-	{
-	  return i;
-	}
-    }
-  
-  return -9;
-}
-
-
-/*
- * sameStr
- * INPUT:
- *	two strings
- * OUTPUT:
- *	TRUE of the strings are the same
- *	FALSE if the strings are different
- * FUNCTION:
- *	uses the compare() class function to compare strings
- */
-bool sameStr(string str1, string str2)
-{
-  int outcome = str1.compare(str2);
-  
-  if (outcome < 0 || outcome > 0)
-    {
-      return 0;
-    }
-  else
-    {
-      return 1;
-    }
-}
 
 string nameCreate(string name,string toPut)
 {

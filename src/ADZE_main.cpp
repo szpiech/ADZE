@@ -102,21 +102,6 @@ int main(int argc, char* argv[])
   summary << endl;
 
 
-  ifstream data;
-
-  data.open(p.dfile.val.c_str());
-
-  if(data.fail())
-    {
-      cout << "ERROR: Could not open " << p.dfile.val 
-	   << "\nProgram terminated.\n";
-      return -1;
-    }
-  else
-    {
-      cout << p.dfile.val << " sucessfully opened.\n";
-    }
-     
   list<int> k;
   try
     {
@@ -128,95 +113,48 @@ int main(int argc, char* argv[])
       return -1;
     }
 
+  cout << "Reading " << p.dfile.val << "...\n";
 
-  int begin;
-    
-  cout << "Reading and sorting...\n";
-  if(!p.skip_chk.val)
-    {
-      try
-	{
-	  checkDatafile(p);
-	}
-      catch(BAD_PARAM x)
-	{
-	  cout << "Program terminated.\n";
-	  return -1;
-	}
-    }
-
-  //allocate an array to hold lociNames
-  string *lociNames = new string[p.loci.val];
-  
-  getLociNames(data,lociNames,p);
-  
-  //Get rid of non_data_rows
-  string junk;
-  for(int skip = 1; skip < p.nd_rows.val; skip++)
-    {
-      getline(data,junk);
-      //cout << junk << endl;
-    }
-
-
- 
-  //note the beginning of the data
-  //begin = data.tellg();
-  
-  //Vectors to store the name of each division
-  //and the number of data lines per division
+  /*
+   * One pass over the data file yields the groupings, the allele counts, the
+   * sample sizes and the missing-data tallies.  1.0 read the file three times
+   * (validate, discover groupings, load) and kept every genotype in memory.
+   */
   vector<string> divisionNames;
-  vector<int> lines;
-  
-  //fill up the above vectors
+  int numDivs = 0;
+  Population* pop = NULL;
+
   try
     {
-      getDivLines(data,divisionNames,lines,p);
+      pop = readDataset(p,divisionNames,numDivs);
     }
-  catch(BAD_PARAM x)
+  catch(BAD_FILE x)
     {
-      delete [] lociNames;
       cout << "Program terminated.\n";
       return -1;
     }
-  
-  int numDivs = divisionNames.size();
-  
+  catch(BAD_PARAM x)
+    {
+      cout << "Program terminated.\n";
+      return -1;
+    }
+
+  cout << "Done\n";
+  cout << "Completed at (d:h:m:s) ";
+  displayTime(cout);
+  cout << endl;
+
   if(p.comb.val)
     if(!validK(numDivs,k))
       {
-	delete [] lociNames;
+	delete [] pop;
 	return -1;
       }
-  
-  //Allocate and initialize population objects
-  Population *pop = NULL;
-  pop = new Population[numDivs];
-
-  for (int i = 0; i < numDivs; i++)
-    {
-      pop[i].setRowsLoci(lines[i],p.loci.val);
-      pop[i].setName(divisionNames[i]);
-      
-      for (int j = 0; j < p.loci.val; j++)
-	{
-	  pop[i].setLocusName(lociNames[j],j);
-	}
-    }
-  
-  delete [] lociNames;	
-  
-  //data.seekg(begin); //go back to beginning of data
-  data.close();
-  readData(/*data,*/pop,divisionNames,numDivs,p);
-  //data.close();
- 
-  cout << "Done\n"; //done reading file
 
   if(p.tol.val != 1)
     {
       cout << "Throwing out bad loci...\n";
-      filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.miss.val,p.pp.val);
+      filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val);
       //cout << "Done\n";
       
       cout << "Completed at (d:h:m:s) ";
@@ -251,22 +189,6 @@ int main(int argc, char* argv[])
   int numLoci = p.loci.val;
   
 
-  //CALCULATE Nji's
-  cout << "Calculating Nji's...\n";
-  //cout.flush();
-  calcNji(pop,numDivs,p.miss.val);
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
-
-  //CALCULATE Nj's
-  cout << "Calculating Nj's...\n";
-  //cout.flush();
-  calcNj(pop,numDivs);
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
-  
   cout << "Calculating total alleles...\n";
   calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val);
   if(p.pp.val) cout << endl;
@@ -333,6 +255,8 @@ int main(int argc, char* argv[])
   cout << "Completed at (d:h:m:s) ";
   displayTime(cout);
   */
+
+  if(pop) delete [] pop;
 
   cout << "\nADZE finished in (d:h:m:s) ";
   summary << "\nADZE finished in (d:h:m:s) ";
