@@ -2,36 +2,33 @@
 
 using namespace std;
 
-void Population::printDeleted(ostream& out)
+/*
+ * One-line account of what the missing-data filter removed.  1.0 built this
+ * inside printDeleted and wrote it to cout as well as to the file, with
+ * different stream flags on each, so the console and the _deletedloci file
+ * disagreed on how the percentage was formatted.
+ */
+string Population::deletedSummary() const
 {
-  cout << deletedLocus.size();
-  out << deletedLocus.size();
-  if(deletedLocus.size() == 1)
-    {
-      cout << " locus has ";
-      out << " locus has ";
-    }
-  else
-    {
-      cout << " loci have ";
-      out << " loci have ";
-    }
-  cout << "at least one grouping with";
-  cout.setf(ios::fixed,ios::floatfield);
-  if(tol > 0) cout << " more than " << 100*tol << "%";
-  cout << " missing data.\n";
+  ostringstream out;
 
+  out << deletedLocus.size();
+  out << ((deletedLocus.size() == 1) ? " locus has " : " loci have ");
   out << "at least one grouping with";
   if(tol > 0) out << " more than " << 100*tol << "%";
   out << " missing data.\n";
- 
+
+  return out.str();
+}
+
+void Population::printDeleted(ostream& out)
+{
   for(vector<string>::iterator i = deletedLocus.begin();
       i != deletedLocus.end(); i++)
     {
-      
       out << *i << endl;
     }
-  
+
   return;
 }
 

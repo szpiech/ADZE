@@ -57,7 +57,13 @@ void Stats::calcVar()
       
       if(var != -9)
 	{
-	  var /= double(numLoci-1);
+	  /*
+	   * With one locus there is no across-locus variance to estimate.
+	   * 1.0 divided by numLoci-1 regardless, so the reported value was
+	   * whatever 0.0/0.0 happened to produce; make it an explicit NaN.
+	   */
+	  if(numLoci < 2) var = numeric_limits<double>::quiet_NaN();
+	  else var /= double(numLoci-1);
 	}
     }
   

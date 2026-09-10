@@ -2,82 +2,62 @@
 
 using namespace std;
 
+/*
+ * Parse a K_RANGE value: a comma- or space-separated list of tuple sizes and
+ * inclusive ranges, e.g. "2", "1-3", "1,3,5-7".  Returns the sizes sorted and
+ * deduplicated.
+ *
+ * 1.0 hand-rolled this with a fixed 10-byte buffer, a range convention that
+ * pushed negative sentinels to be expanded afterwards against an
+ * uninitialized `prev`, and single-character whitespace skipping that could
+ * not handle "1, 2".
+ */
 list<int> parseKVals(string str)
 {
-  int size = 10;
-  char val[size];
-  list<int> nums;
   string err = "ERROR: \"";
   err += str;
   err += "\" not a valid K_RANGE definition.\n";
 
-  //cout << str.size() << endl;
+  list<int> nums;
 
-  for(int i = 0; i < str.size(); i++)
+  size_t i = 0;
+  const size_t n = str.size();
+
+  while(i < n)
     {
-      //cout << i << " ";
-      if(i >= str.size()) break;
+      if(str[i] == '#') break; //trailing comment
+      if(isspace((unsigned char)str[i]) || str[i] == ',') { i++; continue; }
+      if(!isdigit((unsigned char)str[i])) throw err;
 
-      for(int n = 0; n < size-1; n++) val[n] = '\0';
- 
-      if(str.at(i) == '#') break;
-
-      if(str.at(i) == ' ' ||
-	 //	 str.at(i) == '0' ||
-	 isalpha(str.at(i))) i++;
-      if(i >= str.size()) break;
-
-      if(isdigit(str.at(i)))
+      long lo = 0;
+      while(i < n && isdigit((unsigned char)str[i]))
 	{
-	  int a = 0;
-	  do
-	    {
-	      val[a] = str.at(i);
-	      i++;
-	      if(i >= str.size()) break;
-	      a++;
-	      if(a >= size) throw err;
-	    }while(isdigit(str.at(i)) && i < str.size());
-
-	  nums.push_back(atoi(val));
+	  lo = lo*10 + (str[i]-'0');
+	  if(lo > 1000000) throw err;
+	  i++;
 	}
 
-      if(i >= str.size()) break;
-      if(str.at(i) == '-')
+      long hi = lo;
+      if(i < n && str[i] == '-')
 	{
-	  if(i+1 >= str.size()) break;
-	  if(!isdigit(str.at(i+1))) throw err;
-
-	  int a = 0;
-	  do
+	  i++;
+	  if(i >= n || !isdigit((unsigned char)str[i])) throw err;
+	  hi = 0;
+	  while(i < n && isdigit((unsigned char)str[i]))
 	    {
-	      val[a] = str.at(i);
+	      hi = hi*10 + (str[i]-'0');
+	      if(hi > 1000000) throw err;
 	      i++;
-	      if(i >= str.size()) break;
-	      a++;
-	      if(a >= size) throw err;
-	    }while(isdigit(str.at(i)));
-	  nums.push_back(atoi(val));
-	}
-      
-    }
-
-  int prev;
-
-  for(list<int>::iterator i = nums.begin(); i != nums.end(); i++)
-    {
-      //if(*i == 0) throw err;
-      if(*i < 0)
-	{
-	  if((0-(*i)) < prev) throw err;
-	  for(int n = prev; n < (0-(*i)); n++)
-	    {
-	      nums.push_back(n);
 	    }
-	  //nums.erase(i);
-	  *i = (0-(*i));
+	  if(hi < lo) throw err;
 	}
-      prev = *i;
+
+      for(long v = lo; v <= hi; v++) nums.push_back(int(v));
+
+      if(i < n && !(isspace((unsigned char)str[i]) || str[i] == ',' || str[i] == '#'))
+	{
+	  throw err;
+	}
     }
 
   if(nums.empty()) throw err;
@@ -86,10 +66,7 @@ list<int> parseKVals(string str)
   nums.unique();
 
   return nums;
-  
 }
-
-
 
 
 /*
@@ -430,6 +407,9 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
   ofstream lout;
   lout.open(file.c_str());
 
+  const string report = pop[0].deletedSummary();
+  cout << report;
+  lout << report;
   pop[0].printDeleted(lout);
 
   return;
@@ -438,24 +418,42 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
 
 
 
+/*
+ * Elapsed wall-clock time since the program started, as d:h:m:s.
+ *
+ * 1.0 reported clock()/CLOCKS_PER_SEC, an integer division that truncated
+ * everything to whole seconds -- which is why every phase in the shipped
+ * example reports 0:0:0:0 -- and measured CPU rather than elapsed time, so it
+ * would also have counted every thread separately once the loops are
+ * parallelized.
+ */
 double displayTime(ostream& out)
 {
-  clock_t tempClock = clock();
-  double CPU_sec = tempClock/CLOCKS_PER_SEC;
-  double sec = CPU_sec;
-  
+  static const chrono::steady_clock::time_point start =
+    chrono::steady_clock::now();
+
+  const double sec =
+    chrono::duration<double>(chrono::steady_clock::now() - start).count();
+
+  double rest = sec;
+  const ios::fmtflags flags = out.flags();
+  const streamsize prec = out.precision();
+
   out.unsetf(ios::floatfield);
   out.unsetf(ios::showpoint);
 
-  out << floor(CPU_sec/86400.0) << ":";
-  CPU_sec = CPU_sec - floor(CPU_sec/86400.0)*86400.0;
-  out << floor(CPU_sec/3600.0) << ":";
-  CPU_sec = CPU_sec - floor(CPU_sec/3600.0)*3600.0;
-  out << floor(CPU_sec/60.0) << ":";
-  CPU_sec = CPU_sec - floor(CPU_sec/60.0)*60.0;
-  out << CPU_sec;
-  
-  return (sec);
+  out << long(rest/86400.0) << ":";
+  rest -= floor(rest/86400.0)*86400.0;
+  out << long(rest/3600.0) << ":";
+  rest -= floor(rest/3600.0)*3600.0;
+  out << long(rest/60.0) << ":";
+  rest -= floor(rest/60.0)*60.0;
+  out << fixed << setprecision(2) << rest;
+
+  out.flags(flags);
+  out.precision(prec);
+
+  return sec;
 }
 
 bool validK(int n, list<int> k)

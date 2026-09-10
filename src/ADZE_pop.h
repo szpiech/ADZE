@@ -4,6 +4,7 @@
 #include <list>
 #include <vector>
 #include <iomanip>
+#include <sstream>
 #include <iostream>
 
 using namespace std;
@@ -56,6 +57,7 @@ class Population
   int getNumRows() {return rows;};
   string getLocusName(int);
 
+  string deletedSummary() const;
   void printDeleted(ostream&);
   void deleteLoci(const vector<char>& del);
 

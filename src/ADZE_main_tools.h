@@ -4,7 +4,8 @@
 #include <map>
 #include <unordered_map>
 #include <gsl/gsl_combination.h>
-#include <time.h>
+#include <chrono>
+#include <iomanip>
 #include "ADZE_binom.h"
 #include "ADZE_stats.h"
 #include "ADZE_pfile.h"
@@ -36,10 +37,7 @@ void filterLoci(Population pop[],int numDivs,double tol,string private_out,
 		bool pp);
 Population* readDataset(ParamSet& p,vector<string>& groupNames,int& numDivs);
 list<int> parseKVals(string str);
-void warning(int loci,int numDivs,list<int> k,Population pop[]);
 
 
 
-void estimate(ofstream& out, int J, int k, Population pop[],const ParamSet &p, 
-	      double time);
 

@@ -2,50 +2,44 @@
 
 using namespace std;
 
+/*
+ * Syntax check for a K_RANGE value: comma- or space-separated tuple sizes and
+ * inclusive ranges, e.g. "2", "1-3", "1,3,5-7".
+ *
+ * 1.0's version compared characters against the first and last character of
+ * the string to decide whether it was safe to look ahead, then read *(i+1) --
+ * which is one past the last character when the guard misfired.
+ */
 bool ParamSet::isvalidk(string s)
 {
-  char c, prev, next, beg, end;
-  bool cb4d = 1;
-  string::iterator i;
-  string::reverse_iterator j;
+  size_t i = 0;
+  const size_t n = s.size();
+  bool any = false;
 
-  j = s.rbegin();
-  end = *j;
-  i = s.begin();
-  beg = *i;
- 
-
-  for(i = s.begin();i != s.end(); i++)
+  while(i < n)
     {
-      c = *i;
-      if((!isdigit(c) && c == beg) || (!isdigit(c) && c == end))
+      if(s[i] == '#') break;
+      if(isspace((unsigned char)s[i]) || s[i] == ',') { i++; continue; }
+
+      if(!isdigit((unsigned char)s[i])) return 0;
+      while(i < n && isdigit((unsigned char)s[i])) i++;
+      any = true;
+
+      if(i < n && s[i] == '-')
 	{
-	  return 0;
-	}
-      if(!(isdigit(c) || c == ',' || c == '-'))
-	{
-	  return 0;
-	}
-      if(c != beg && c != end)
-	{
-	  next = *(i+1);
-	  if(c == '-' && (!isdigit(prev) || !isdigit(next)))
-	    {
-	      return 0;	    
-	    }
-	}
-      if(!cb4d && c == '-')
-	{
-	  return 0;
+	  i++;
+	  if(i >= n || !isdigit((unsigned char)s[i])) return 0;
+	  while(i < n && isdigit((unsigned char)s[i])) i++;
 	}
 
-      if(c == '-') cb4d = 0;
-      if(c == ',') cb4d = 1;
-      prev = c;
+      if(i < n && !(isspace((unsigned char)s[i]) || s[i] == ',' || s[i] == '#'))
+	{
+	  return 0;
+	}
     }
-  return 1;
-}
 
+  return any;
+}
 
 bool ParamSet::a_label(string s)
 {
