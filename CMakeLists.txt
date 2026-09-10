@@ -84,8 +84,9 @@ if(BUILD_TESTING AND ADZE_REFERENCE)
   endif()
 endif()
 
-# The format suite needs no reference: it checks the STRUCTURE, VCF and
-# compressed-VCF readers against each other.
+# These two need no reference build: the format suite checks the readers
+# against each other, and the window suite checks the windowed statistics
+# against the layout they claim to cover.
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
@@ -93,5 +94,9 @@ if(BUILD_TESTING)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/formats.py
                      --candidate $<TARGET_FILE:adze>
                      --workdir ${CMAKE_CURRENT_BINARY_DIR}/formats)
+    add_test(NAME windows
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/windows.py
+                     --candidate $<TARGET_FILE:adze>
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/windows)
   endif()
 endif()

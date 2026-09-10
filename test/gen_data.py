@@ -83,16 +83,41 @@ def _genotypes(npops, nind, nloci, nall, missing=0.0, seed=1,
     return out, nind
 
 
-def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, **kw):
-    """Write the same genotypes as <prefix>.stru, <prefix>.vcf[.gz] and
-    <prefix>.samples, and return the metadata for the STRUCTURE file.
+def place_loci(nloci, chroms=1, spacing=1000):
+    """Coordinates for nloci loci, dealt out over `chroms` chromosomes.
+
+    chroms may be an int (split as evenly as possible) or a list of per-
+    chromosome locus counts. Positions start at `spacing` and step by it, so a
+    window of k*spacing basepairs holds exactly k loci and basepair and
+    locus-count windows can be predicted by hand.
+    """
+    if isinstance(chroms, int):
+        base, extra = divmod(nloci, chroms)
+        counts = [base + (1 if c < extra else 0) for c in range(chroms)]
+    else:
+        counts = list(chroms)
+        assert sum(counts) == nloci, "locus counts must sum to nloci"
+    out = []
+    for c, n in enumerate(counts):
+        for i in range(n):
+            out.append(("chr%d" % (c + 1), spacing * (i + 1)))
+    return out
+
+
+def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, chroms=1,
+               spacing=1000, **kw):
+    """Write the same genotypes as <prefix>.stru, <prefix>.vcf[.gz],
+    <prefix>.samples and <prefix>.map, and return the STRUCTURE metadata.
 
     Locus names match across the two encodings (the VCF carries them in ID), so
     the *_fulldata columns line up and the outputs can be compared directly.
+    The coordinates in the VCF and in the locus map are the same, so a windowed
+    run gives the same answer from either encoding.
     """
     geno, nind = _genotypes(nloci=nloci, allele_base=allele_base, **kw)
     names = ["L%d" % l for l in range(nloci)]
     ploidy = len(geno[0][0])
+    coords = place_loci(nloci, chroms, spacing)
 
     with open(prefix + ".stru", "w") as fh:
         fh.write(" ".join(names) + "\n")
@@ -107,6 +132,11 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, **kw):
         for p, inds in enumerate(geno):
             for i in range(len(inds)):
                 fh.write("ind%d_%d\tPOP%d\n" % (p, i, p))
+
+    with open(prefix + ".map", "w") as fh:
+        fh.write("# locus\tchromosome\tposition\n")
+        for nm, (c, pos) in zip(names, coords):
+            fh.write("%s\t%s\t%d\n" % (nm, c, pos))
 
     samples = ["ind%d_%d" % (p, i) for p, inds in enumerate(geno)
                for i in range(len(inds))]
@@ -126,7 +156,8 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, **kw):
                 calls.append("/".join(
                     "." if c[l] is None else str(c[l] - allele_base)
                     for c in copies))
-        lines.append("\t".join(["chr1", str(l + 1), names[l], "T", alt, ".",
+        chrom, pos = coords[l]
+        lines.append("\t".join([chrom, str(pos), names[l], "T", alt, ".",
                                  "PASS", ".", "GT"] + calls))
     text = "\n".join(lines) + "\n"
 
@@ -139,7 +170,9 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, **kw):
     return {"dlines": ploidy * sum(nind), "loci": nloci,
             "nd_rows": 1, "nd_cols": 2, "sort_by": 2,
             "file": os.path.basename(prefix) + ".stru",
-            "samples": os.path.basename(prefix) + ".samples"}
+            "samples": os.path.basename(prefix) + ".samples",
+            "map": os.path.basename(prefix) + ".map",
+            "coords": coords, "names": names}
 
 
 def write_paramfile(path, meta, dfile, prefix, g=6, comb=0, k="", tol=1,
