@@ -36,49 +36,68 @@ void Population::printDeleted(ostream& out)
 }
 
 
-void Population::deleteLocus(int l)
+/*
+ * Drop every locus flagged in del[] in a single pass.
+ *
+ * ADZE 1.0 deleted one locus at a time, shifting all higher-indexed loci down
+ * by one and copying every genotype string in them, so filtering D of L loci
+ * cost O(D*L*rows) string assignments -- quadratic in the locus count.
+ * Compacting once is O(L): each locus's row block is moved by swapping the
+ * column pointer, so no genotype is copied at all.  Swapping rather than
+ * assigning keeps every allocated block reachable from data[0..numLociOrig),
+ * so the destructor still frees each one exactly once.
+ *
+ * Deleted names are recorded from the highest index down, matching the order
+ * that 1.0's reverse-iterating delete loop wrote to the _deletedloci file.
+ */
+void Population::deleteLoci(const vector<char>& del)
 {
-  deletedLocus.push_back(locusName[l]);
-
-  for(l; l < numLoci-1; l++)
+  for(int l = numLoci-1; l >= 0; l--)
     {
-      locusName[l] = locusName[l+1];
-      for(int r = 0; r < rows; r++)
-	{
-	  data[l][r] = data[l+1][r];
-	}
+      if(del[l]) deletedLocus.push_back(locusName[l]);
     }
 
-  numLoci--;
+  int keep = 0;
+  for(int l = 0; l < numLoci; l++)
+    {
+      if(del[l]) continue;
+      if(keep != l)
+	{
+	  locusName[keep].swap(locusName[l]);
+	  string* tmp = data[keep];
+	  data[keep] = data[l];
+	  data[l] = tmp;
+	}
+      keep++;
+    }
+
+  numLoci = keep;
   return;
 }
 
-list<int> Population::recLociDelete(double tolerance, string miss)
+/*
+ * Flag loci whose missing-data fraction exceeds the tolerance in this grouping.
+ * Called once per grouping; del[] accumulates the union across groupings.
+ */
+void Population::recLociDelete(double tolerance, const string& miss,
+			       vector<char>& del)
 {
   tol = tolerance;
-  double* missing = new double[numLoci];
-  list<int> rec;
-  
-  //tally the number of missing at each locus
+
   for(int l = 0; l < numLoci; l++)
     {
-      missing[l] = 0;
+      if(del[l]) continue; //already condemned by another grouping
+
+      int missing = 0;
       for(int r = 0; r < rows; r++)
 	{
-	  if(data[l][r].compare(miss) == 0) missing[l]++;
+	  if(data[l][r].compare(miss) == 0) missing++;
 	}
+
+      if(double(missing)/double(rows) > tolerance) del[l] = 1;
     }
 
-  //change to a proportion of data missing and push to vector if > tolerance
-  for(int l = 0; l < numLoci; l++)
-    {
-      missing[l] /= double(rows);
-      if(missing[l] > tolerance) rec.push_back(l);
-    }
-  
-  delete [] missing;
-
-  return rec;  
+  return;
 }
 
 

@@ -38,7 +38,7 @@ class Population
   Population(string n, int numLoci, int rows);
   ~Population();
 
-  list<int> recLociDelete(double,string);
+  void recLociDelete(double tolerance, const string& missing, vector<char>& del);
 
   void setRowsLoci(int,int);
   void setName(string str) {name = str;};
@@ -59,7 +59,7 @@ class Population
   string getLocusName(int);
 
   void printDeleted(ostream&);
-  void deleteLocus(int);
+  void deleteLoci(const vector<char>& del);
 
   double calcAg(int,int);
   double calcQjig(int,int,int);

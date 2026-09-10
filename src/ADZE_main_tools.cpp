@@ -94,20 +94,21 @@ list<int> parseKVals(string str)
 void filterLoci(Population pop[],int numDivs, double tol, string file,
 		string missing, bool pp)
 {
-  list<int> toDelete;
+  vector<char> toDelete(pop[0].getNumLoci(),0);
 
   for(int n = 0; n < numDivs; n++)
     {
-      list<int> rec = pop[n].recLociDelete(tol,missing);
-      toDelete.merge(rec);
+      pop[n].recLociDelete(tol,missing,toDelete);
     }
-  
-  toDelete.unique();
-  int size;
-  int size1 = toDelete.size();
-  if(size1 == 0) size = 1;
-  else size = size1;
-  
+
+  int size1 = 0;
+  for(size_t l = 0; l < toDelete.size(); l++)
+    {
+      if(toDelete[l]) size1++;
+    }
+
+  int size = (size1 == 0) ? 1 : size1;
+
   ProgressBar bar(&cout,size*numDivs,BARLEN[0]);
   if(pp)
     {
@@ -116,16 +117,8 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
   
   for(int n = 0; n < numDivs; n++)
     {
-      for(list<int>::reverse_iterator i = toDelete.rbegin(); 
-	  i != toDelete.rend();
-	  i++)
-	{
-	  //cout << *i << " ";
-	  pop[n].deleteLocus(*i);
-	  if(pp) ++bar;
-	}
-      //cout << endl;
-      if(size1 == 0 && pp) bar.adv(1);
+      pop[n].deleteLoci(toDelete);
+      if(pp) bar.adv(size);
     }
   if(pp) bar.done();
   cout << endl;
