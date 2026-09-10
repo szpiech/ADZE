@@ -609,124 +609,82 @@ double calcPg(Population pop[],int j,int locus,int g,int numDivs)
  * Stores in Population objects
  *
  */
-void calcNji(Population pop[],int numDivs,string missing)
+void calcNji(Population pop[],int numDivs,const string& missing)
 {
-  int foundAt, count;
-  string data, current;
   int numLoci = pop[0].getNumLoci();
-  bool good, seen = 0;
-  int NjiColLength;
-  int** Nji = new int*[numDivs];
-  int tally = 0;
+  int emptyLoci = 0;
 
-  IntStrMap alleleName;
-  IntStrMap::iterator pos;
+  /*
+   * ADZE 1.0 kept a map<int,string> of index -> allele label and, to ask
+   * whether a label had been seen, walked the whole map (it could not even
+   * break early, because the same loop supplied the next free index).  It then
+   * walked the map again for every genotype to find the bin to increment, so
+   * binning cost O(loci * rows * alleles) string comparisons where O(loci *
+   * rows) suffices.  A hash index from label to dense bin does the same work
+   * in one pass; allele indices are still assigned in order of first
+   * appearance, scanning groupings then rows, so Nji column order -- and
+   * therefore the summation order of every downstream statistic -- is
+   * unchanged.
+   */
+  unordered_map<string,int> alleleIndex;
+  vector< vector<int> > Nji(numDivs);
 
-  //At each locus
   for(int locus = 0; locus < numLoci; locus++)
     {
+      alleleIndex.clear();
+      for(int j = 0; j < numDivs; j++) Nji[j].clear();
+
       for(int j = 0; j < numDivs; j++)
 	{
-	  for(int row = 0; row < pop[j].getNumRows(); row++)
+	  int numRows = pop[j].getNumRows();
+	  for(int row = 0; row < numRows; row++)
 	    {
-	      data = pop[j].getDataElement(row,locus);
-	      if(data.compare(missing) == 0)
+	      const string& allele = pop[j].getDataElement(row,locus);
+	      if(allele.compare(missing) == 0) continue; //missing data
+
+	      pair<unordered_map<string,int>::iterator,bool> found =
+		alleleIndex.insert(make_pair(allele,int(alleleIndex.size())));
+
+	      if(found.second) //first sighting of this allele at this locus
 		{
-		  //do nothing
+		  for(int jj = 0; jj < numDivs; jj++) Nji[jj].push_back(0);
 		}
-	      else if(alleleName.size() == 0)
-		{
-		  alleleName[1] = data;
-		}
-	      else
-		{
-		  for(pos = alleleName.begin(); pos != alleleName.end();pos++)
-		    {
-		      if(data.compare(pos->second) == 0)
-			{
-			  seen = 1;
-			}
-		      count = pos->first;
-		    }
-		  if(!seen)
-		    {
-		      alleleName[count+1] = data;
-		    }
-		  seen = 0;
-		}
+
+	      Nji[j][found.first->second]++;
 	    }
 	}
 
-      pos = alleleName.end();
-      pos--;
-      
-      NjiColLength = pos->first;
+      int NjiColLength = int(alleleIndex.size());
 
-      for (int j = 0; j < numDivs; j++)
+      /*
+       * A locus with no observed allele in any grouping is legal input (it
+       * happens in merged panels) and 1.0 crashed on it: it decremented the
+       * end() iterator of the empty allele map.  Record zero alleles instead.
+       * Nj then comes out 0, so the locus reports -9 like any locus whose
+       * sample size is smaller than g.
+       */
+      if(NjiColLength == 0) emptyLoci++;
+
+      for(int j = 0; j < numDivs; j++)
 	{
 	  pop[j].setNjiColLength(NjiColLength,locus);
-	}
-
-
-      for(int j = 0; j < numDivs; j++)
-	{
-	  Nji[j] = new int[NjiColLength];
-	  for(int i = 0; i < NjiColLength;i++)
+	  for(int i = 0; i < NjiColLength; i++)
 	    {
-	      Nji[j][i] = 0;
+	      pop[j].putNji(Nji[j][i],i,locus);
 	    }
 	}
-      
-      //Look in each division and bin up all the alleles
-      for(int j = 0; j < numDivs; j++)
-	{
-	  //look at each allele
-	  for(int row = 0; row < pop[j].getNumRows(); row++)
-	    {
-	      current = pop[j].getDataElement(row,locus);
-	      
-	      if(current.compare(missing) == 0)
-		{
-		  //Missing data, do nothing
-		}
-	      //Otherwise, we have to check the other bins
-	      else
-		{  
-		  //Look to see if current has been seen before and where
-		  for(pos=alleleName.begin(); pos!=alleleName.end();pos++)
-		    {
-		      count = pos->first;
-		      if(current.compare(pos->second) == 0)
-			{
-			  Nji[j][count-1]++;
-			}
-		    }	  
-		}
-	    }
-	}
-
-      //store Nji's in population objects
-      for (int j = 0; j < numDivs;j++)
-	{
-	  //good = pop[j].setNjiColLength(Nji[j].size(),locus);
-	  for(int i = 0; i < NjiColLength;i++)
-	    {
-	      good = pop[j].putNji(Nji[j][i],i,locus);
-	    }
-	}
-
-      //Clear out Nji for use at next locus
-      for (int j = 0; j < numDivs; j++)
-	{
-	  delete [] Nji[j];
-	}
-
-      //clear names for next locus
-      alleleName.clear();
     }
-  
-  delete [] Nji;
-  return;  
+
+  if(emptyLoci > 0)
+    {
+      cout << "WARNING: " << emptyLoci
+	   << ((emptyLoci == 1) ? " locus has" : " loci have")
+	   << " no observed alleles in any grouping.\n"
+	   << "         Such loci make every statistic undefined at every g; "
+	   << "set TOLERANCE < 1 to drop them.\n";
+    }
+
+  return;
 }
 
 /* CALCULATE Nj

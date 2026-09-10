@@ -1,5 +1,6 @@
 #include <fstream>
 #include <map>
+#include <unordered_map>
 #include <gsl/gsl_combination.h>
 #include <time.h>
 #include "ADZE_binom.h"
@@ -24,7 +25,7 @@ void readData(/*ifstream&,*/ Population[],vector<string>&,int,const ParamSet&);
 
 
 int calcG(vector<int>[],int);
-void calcNji(Population[],int, string missing);
+void calcNji(Population[],int,const string& missing);
 void calcNj(Population[],int);
 //void storeG(Population[],int,int,int);
 void calcAg(Population[],int,int);

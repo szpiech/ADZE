@@ -55,7 +55,7 @@ class Population
   string getName() {return name;};
   int getNumLoci() {return numLoci;};
   int getNumRows() {return rows;};
-  string getDataElement(int row, int col);
+  const string& getDataElement(int row, int col) const;
   string getLocusName(int);
 
   void printDeleted(ostream&);

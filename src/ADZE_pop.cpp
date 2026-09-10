@@ -388,23 +388,21 @@ void Population::setRowsLoci(int r, int l)
   return;
 }
 
-string Population::getDataElement(int line, int locus)
+/*
+ * Returns a reference, not a copy: this is called once per genotype per locus
+ * by the binning pass, and returning by value copied a std::string on every
+ * access.  Out-of-range indices used to `return 0`, i.e. construct a
+ * std::string from a null pointer; they now yield a reference to an empty
+ * string, which callers already treat as "no allele here".
+ */
+const string& Population::getDataElement(int line, int locus) const
 {
-  if (locus > numLoci-1 || locus < 0)
-    {
-      //error
-      return 0;
-    }
-  else if (line > rows-1 || line < 0)
-    {
-      //error
-      return 0;
-    }
-  else
-    {
-      //good vals
-      return data[locus][line];
-    }      
+  static const string outOfRange;
+
+  if (locus > numLoci-1 || locus < 0) return outOfRange;
+  if (line > rows-1 || line < 0) return outOfRange;
+
+  return data[locus][line];
 }
 
 bool Population::putDataElement(string dataElem, int line, int locus)
