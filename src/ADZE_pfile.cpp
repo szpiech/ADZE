@@ -27,6 +27,8 @@ const OptSpec OPTIONS[] = {
    "Input", "input format: auto, structure or vcf (default auto, by file extension)"},
   {SAMPLES,   "SAMPLE_FILE",    "--samples",        0,           OPT_STRING, "FILE",
    "Input", "sample-to-grouping map, required for VCF input (two columns: sample grouping)"},
+  {LOCI_MAP,  "LOCI_MAP",       "--loci-map",       0,           OPT_STRING, "FILE",
+   "Input", "locus coordinates for STRUCTURE input (three columns: locus chromosome position)"},
   {G,         "MAX_G",          "--max-g",          "-g",        OPT_INT,    "N",
    "Input", "largest standardized sample size (default: the largest the data supports)"},
   {ND_ROWS,   "NON_DATA_ROWS",  "--non-data-rows",  "-nr",       OPT_INT,    "N",
@@ -125,6 +127,7 @@ ParamSet::ParamSet()
   tuple_file.val = "";
   format.val = "auto";
   samples.val = "";
+  loci_map.val = "";
   tsv.val = 0;
   dry_run.val = 0;
   quiet.val = 0;
@@ -259,6 +262,7 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case TUPLE_FILE: SETP(tuple_file); tuple_file.val = val;             break;
     case FORMAT:     SETP(format);     format.val = val;                 break;
     case SAMPLES:    SETP(samples);    samples.val = val;                break;
+    case LOCI_MAP:   SETP(loci_map);   loci_map.val = val;               break;
     case PARAMS:     SETP(params);     params.val = val;                 break;
     case COMB:       SETP(comb);       comb.val = boolValue(val);        break;
     case FULL_R:     SETP(full_r);     full_r.val = boolValue(val);      break;
@@ -570,6 +574,7 @@ void ParamSet::echo(ostream& out)
   if(tuple_file.set) out << "TUPLE_FILE " << tuple_file.val << endl;
   if(format.set) out << "FORMAT " << format.val << endl;
   if(samples.set) out << "SAMPLE_FILE " << samples.val << endl;
+  if(loci_map.set) out << "LOCI_MAP " << loci_map.val << endl;
   out << "\n###-----------Advanced Options-----------###\n"
       << "MISSING " << miss.val << endl
       << "TOLERANCE " << tol.val << endl

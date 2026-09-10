@@ -151,10 +151,11 @@ int main(int argc, char* argv[])
   vector<string> divisionNames;
   int numDivs = 0;
   Population* pop = NULL;
+  LocusMap lmap;
 
   try
     {
-      pop = readDataset(p,divisionNames,numDivs);
+      pop = readDataset(p,divisionNames,numDivs,lmap);
     }
   catch(BAD_FILE x)
     {
@@ -276,7 +277,7 @@ int main(int argc, char* argv[])
   if(p.tol.val != 1)
     {
       adzelog() << "Applying the missing-data filter...\n";
-      filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val);
+      filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val,lmap);
 
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());

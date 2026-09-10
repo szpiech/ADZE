@@ -208,6 +208,58 @@ namespace {
 
 } //anonymous namespace
 
+/*
+ * ------------------------------------------------------------------------
+ * Locus coordinates
+ * ------------------------------------------------------------------------
+ */
+
+int LocusMap::chromIndex(const string& name)
+{
+  for(size_t i = 0; i < chromName.size(); i++)
+    {
+      if(chromName[i] == name) return int(i);
+    }
+  chromName.push_back(name);
+  return int(chromName.size()) - 1;
+}
+
+//Drop the flagged loci, keeping the table aligned with the surviving loci.
+void LocusMap::compact(const vector<char>& del)
+{
+  if(chrom.empty()) return;
+
+  size_t keep = 0;
+  for(size_t l = 0; l < chrom.size() && l < del.size(); l++)
+    {
+      if(del[l]) continue;
+      chrom[keep] = chrom[l];
+      pos[keep] = pos[l];
+      keep++;
+    }
+
+  chrom.resize(keep);
+  pos.resize(keep);
+  return;
+}
+
+/*
+ * A window is a contiguous run of loci, so the loci must already be in
+ * position order within each chromosome.  Returns the first locus that is not,
+ * so the caller can name it.
+ */
+bool LocusMap::ascending(int& badLocus) const
+{
+  for(size_t l = 1; l < chrom.size(); l++)
+    {
+      if(chrom[l] != chrom[l-1]) continue;
+      if(pos[l] < pos[l-1]) { badLocus = int(l); return false; }
+    }
+
+  badLocus = -1;
+  return true;
+}
+
 namespace {
 
   /*
@@ -544,6 +596,111 @@ static void readSampleMap(const string& file,
 }
 
 /*
+ * Read the locus-to-coordinate map that the STRUCTURE layout needs, since it
+ * carries locus names but no positions.  Three whitespace-separated columns,
+ * locus then chromosome then position; '#' starts a comment; further columns
+ * are ignored.
+ *
+ * Every locus in the data must appear: a windowed statistic over loci whose
+ * positions are unknown would be a window in name only, so a missing
+ * coordinate is an error rather than a warning.
+ */
+static void readLocusMap(const string& file, const vector<string>& locusName,
+			 LocusMap& lmap)
+{
+  LineSource in;
+  if(!in.open(file))
+    {
+      cerr << "ERROR: could not open locus map " << file << "\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  unordered_map<string,size_t> row;      //locus name -> line in the map
+  vector<string> chrom;
+  vector<long long> pos;
+
+  string line;
+  vector<Field> fields;
+  long long lineNo = 0;
+
+  while(in.next(line))
+    {
+      lineNo++;
+      const size_t hash = line.find('#');
+      if(hash != string::npos) line.erase(hash);
+      tokenize(line,fields);
+      if(fields.empty()) continue;
+
+      if(fields.size() < 3)
+	{
+	  ostringstream m;
+	  m << "line " << lineNo << " of " << file << " has "
+	    << fields.size() << (fields.size() == 1 ? " column" : " columns")
+	    << "; each line needs a locus name, a chromosome and a position.";
+	  badData(m.str());
+	}
+
+      const string name(fields[0].first,fields[0].second);
+      if(row.find(name) != row.end())
+	{
+	  badData("locus " + name + " appears twice in " + file + ".");
+	}
+
+      const string posText(fields[2].first,fields[2].second);
+      for(size_t i = 0; i < posText.size(); i++)
+	{
+	  if(!isdigit((unsigned char)posText[i]))
+	    {
+	      ostringstream m;
+	      m << "position \"" << posText << "\" for locus " << name
+		<< " in " << file << " is not a whole number.";
+	      badData(m.str());
+	    }
+	}
+
+      row.insert(make_pair(name,chrom.size()));
+      chrom.push_back(string(fields[1].first,fields[1].second));
+      pos.push_back(atoll(posText.c_str()));
+    }
+
+  //Every locus must be placed; name the first few that are not.
+  vector<string> unplaced;
+  for(size_t l = 0; l < locusName.size(); l++)
+    {
+      if(row.find(locusName[l]) == row.end()) unplaced.push_back(locusName[l]);
+    }
+
+  if(!unplaced.empty())
+    {
+      ostringstream m;
+      m << unplaced.size() << " of " << locusName.size()
+	<< " loci have no coordinate in " << file << ":";
+      for(size_t i = 0; i < unplaced.size() && i < 5; i++) m << " " << unplaced[i];
+      if(unplaced.size() > 5) m << " ...";
+      m << ".";
+      badData(m.str());
+    }
+
+  if(row.size() > locusName.size())
+    {
+      adzelog() << "WARNING: " << (row.size() - locusName.size())
+		<< " loci named in " << file << " are not in the data.\n";
+    }
+
+  lmap.chrom.resize(locusName.size());
+  lmap.pos.resize(locusName.size());
+  for(size_t l = 0; l < locusName.size(); l++)
+    {
+      const size_t r = row[locusName[l]];
+      lmap.chrom[l] = lmap.chromIndex(chrom[r]);
+      lmap.pos[l] = pos[r];
+    }
+
+  return;
+}
+
+/*
  * Read VCF (optionally gzip- or bgzip-compressed).
  *
  * Each record is one locus and each allele index is one allele type, so REF is
@@ -570,7 +727,7 @@ static void readSampleMap(const string& file,
 static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 			const vector<string>& keepList,
 			const vector<string>& dropList,
-			long long& geneCopies)
+			long long& geneCopies, LocusMap& lmap)
 {
   unordered_map<string,string> groupOfSample;
   vector<string> groupOrder;
@@ -691,6 +848,14 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 
       const int l = int(acc.locusName.size());
       acc.locusName.push_back(locusName);
+
+      //CHROM and POS give this format its coordinates for free.
+      {
+	const string chrom(fields[0].first,fields[0].second);
+	const string posText(fields[1].first,fields[1].second);
+	lmap.chrom.push_back(lmap.chromIndex(chrom));
+	lmap.pos.push_back(atoll(posText.c_str()));
+      }
       acc.locus.resize(acc.locusName.size());
       LocusTally& t = acc.locus[l];
       t.missing.assign(acc.groupName.size(),0);   //observed calls for now
@@ -824,7 +989,8 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
  * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if its shape is
  * internally inconsistent.
  */
-Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
+Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
+			LocusMap& lmap)
 {
   const bool vcf = wantsVCF(p.format.val,p.dfile.val);
 
@@ -854,10 +1020,20 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
   Accumulator acc;
   long long dataRows = 0, keptRows = 0;
 
-  if(vcf) readVCFInto(p,acc,in,keepList,dropList,dataRows);
+  if(vcf) readVCFInto(p,acc,in,keepList,dropList,dataRows,lmap);
   else readStructureInto(p,acc,in,keepList,dropList,dataRows,keptRows);
 
   in.close();
+
+  if(!vcf && p.loci_map.set)
+    {
+      readLocusMap(p.loci_map.val,acc.locusName,lmap);
+    }
+  else if(vcf && p.loci_map.set)
+    {
+      adzelog() << "WARNING: --loci-map applies to STRUCTURE input only; "
+		<< "ignoring it. VCF coordinates come from CHROM and POS.\n";
+    }
 
   const int declaredLoci = int(acc.locusName.size());
 
@@ -950,7 +1126,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 }
 
 void filterLoci(Population pop[],int numDivs, double tol, string file,
-		bool pp)
+		bool pp, LocusMap& lmap)
 {
   vector<char> toDelete(pop[0].getNumLoci(),0);
 
@@ -979,6 +1155,9 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
       if(pp) bar.adv(size);
     }
   if(pp) bar.done();
+
+  //Coordinates are indexed by locus, so they follow the same compaction.
+  lmap.compact(toDelete);
   cout << endl;
   
   file = nameCreate(file,"_deletedloci");
