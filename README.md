@@ -7,8 +7,9 @@ ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for c
 
 ## Building
 
-No external dependencies; a C++17 compiler is enough. OpenMP is used when the
-toolchain provides it.
+Nothing is required beyond a C++17 compiler. OpenMP (for `--threads`) and zlib
+(for compressed input) are used when the toolchain provides them, and the
+program builds and runs without either.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -19,18 +20,35 @@ cmake --install build --prefix ~/.local     # optional
 Or with plain make:
 
 ```sh
-make -C src                 # serial
-make -C src OPENMP=1        # GCC or Linux clang
-make -C src OPENMP=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
-                            # Apple clang, with libomp installed
+make -C src                        # serial, no compressed input
+make -C src OPENMP=1 ZLIB=1        # GCC or Linux clang
+make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
+                                   # Apple clang, with libomp installed
 ```
 
 ## Running
 
 ```sh
 adze --data mydata.stru --group-col 5 --out-prefix mypops
+adze --data cohort.vcf.gz --samples populations.tsv --out-prefix cohort
 adze --help
 ```
+
+### Input formats
+
+Two are read, chosen by `--format` or, by default, by the file name:
+
+- the STRUCTURE-like layout ADZE has always taken — one row per gene copy,
+  label columns then one allele code per locus;
+- VCF, plain or `gzip`/`bgzip` compressed. Each record is one locus and each
+  allele index one allele type; a sample contributes as many gene copies as its
+  `GT` field holds, so haploid and diploid records can mix, and only `GT` is
+  read. Because a VCF carries no population labels, `--samples FILE` is
+  required: two whitespace-separated columns, sample name then grouping name,
+  `#` for comments, further columns ignored.
+
+The same genotypes in either format give byte-identical results; `test/formats.py`
+checks that.
 
 `LOCI`, `DATA_LINES` and `NON_DATA_COLS` are measured from the input file, and
 `MAX_G` defaults to the largest standardized sample size the surviving loci
@@ -60,6 +78,8 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 | `--pops A,B,C` / `--exclude-pops X` | restrict the analysis to some groupings |
 | `--tuples FILE` | private alleles of the tuples named in FILE, one per line, instead of every k-subset |
 | `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) |
+| `--samples FILE` | sample-to-grouping map, required for VCF input |
+| `--format auto\|structure\|vcf` | input format; `auto` reads the file name |
 | `--tolerance X` | drop loci where any grouping exceeds fraction X missing |
 | `--tsv` | tab-separated output with a header row and `NA` for undefined values |
 | `--threads N` | parallelize the per-locus loops (OpenMP builds) |

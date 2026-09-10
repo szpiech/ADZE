@@ -22,7 +22,7 @@ const char* ADZE_VERSION = "2.0-dev";
  */
 const OptSpec OPTIONS[] = {
   {DFILE,     "DATA_FILE",      "--data",           "-f",        OPT_STRING, "FILE",
-   "Input", "STRUCTURE-format genotype file (required)"},
+   "Input", "genotype file: STRUCTURE layout or VCF, optionally gzipped (required)"},
   {FORMAT,    "FORMAT",         "--format",         0,           OPT_STRING, "FMT",
    "Input", "input format: auto, structure or vcf (default auto, by file extension)"},
   {SAMPLES,   "SAMPLE_FILE",    "--samples",        0,           OPT_STRING, "FILE",

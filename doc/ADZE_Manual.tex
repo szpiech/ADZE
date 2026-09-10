@@ -163,10 +163,11 @@ undefined and are reported as \texttt{nan}.
 
 \subsection{Obtaining \prog}
 
-Source is at \url{https://github.com/szpiech/ADZE}. Version 2.0 has no external
-dependencies: a C++17 compiler is sufficient. OpenMP is used for
-multi-threading when the toolchain provides it, and the program builds and runs
-without it.
+Source is at \url{https://github.com/szpiech/ADZE}. Version 2.0 requires
+nothing but a C++17 compiler. Two libraries are used when the toolchain
+provides them, and the program builds and runs without either: OpenMP for
+\flag{--threads}, and zlib for compressed input. Without zlib a \texttt{.gz}
+file is refused with a message rather than misread.
 
 \subsection{Building}
 
@@ -179,14 +180,15 @@ cmake --install build --prefix ~/.local      # optional
 
 \noindent Or with plain \texttt{make}:
 \begin{Verbatim}[xleftmargin=1em]
-make -C src                  # serial
-make -C src OPENMP=1         # GCC, or clang on Linux
-make -C src OPENMP=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
+make -C src                  # serial, no compressed input
+make -C src OPENMP=1 ZLIB=1  # GCC, or clang on Linux
+make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
                              # Apple clang, with libomp installed
 \end{Verbatim}
 
-\noindent CMake reports whether OpenMP was found at configure time. Without it,
-\flag{--threads} is accepted but warns that it is being ignored.
+\noindent CMake reports at configure time which of the two it found; the
+\texttt{make} build takes each as a flag. Without OpenMP, \flag{--threads} is
+accepted but warns that it is being ignored.
 
 \subsection{Running}
 \label{sec:running}
@@ -213,10 +215,26 @@ or is measured from the data (section~\ref{sec:autodetect}).
 
 \section{Input}
 
-\subsection{Data file format}
+\subsection{Choosing a format}
+
+Two input formats are read: the \structureprog-like layout that \prog\ has
+always taken (section~\ref{sec:format}), and VCF (section~\ref{sec:vcf}),
+optionally compressed with \texttt{gzip} or \texttt{bgzip}. \flag{--format}
+selects one; its default, \texttt{auto}, reads the file name --- anything
+ending \texttt{.vcf}, after an optional \texttt{.gz} or \texttt{.bgz}, is
+treated as VCF.
+
+The two paths converge immediately: both reduce each locus to per-grouping
+allele counts and missing-data tallies, which is all the estimators use, and
+both lay those counts out identically for the same genotypes. Results
+therefore do not depend on which format the data arrived in --- the same
+genotypes written both ways produce byte-identical output, which
+\texttt{test/formats.py} checks.
+
+\subsection{\structureprog\ format}
 \label{sec:format}
 
-The data file is expected in the same format used by \structureprog: one row
+This file is expected in the same format used by \structureprog: one row
 per gene copy, so a diploid individual occupies two consecutive rows, preceded
 by a header row of locus names. Each data row begins with one or more label
 columns and continues with one allele code per locus. Allele codes are
@@ -276,12 +294,60 @@ reports the detected layout, the per-grouping sample sizes, the largest
 feasible \texttt{MAX\_G} and the number of tuples an analysis would evaluate,
 then exits without computing anything.
 
+\subsection{VCF format}
+\label{sec:vcf}
+
+Each record is one locus and each allele index is one allele type, so the
+reference allele is allele 0 and the alternates follow. A sample contributes as
+many gene copies as its \texttt{GT} field holds, which lets haploid and diploid
+records sit in the same file, and a \texttt{.} is an uncalled copy. Ploidy is
+taken from the first record in which a sample has a \texttt{GT} field. Only
+\texttt{GT} is read: no other \texttt{FORMAT} field, and no \texttt{INFO},
+\texttt{QUAL} or \texttt{FILTER} value, affects the counts, so filtering must
+be done before \prog\ sees the file. Locus names come from the \texttt{ID}
+column, or from \texttt{CHROM:POS} where \texttt{ID} is \texttt{.}.
+
+A VCF names its samples but says nothing about which population each belongs
+to, so \flag{--samples} is required with VCF input. It takes a file of two
+whitespace-separated columns, sample name then grouping name:
+
+\begin{Verbatim}[xleftmargin=1em]
+# sample        grouping
+HG00096         GBR
+HG00097         GBR
+NA18939         JPT
+\end{Verbatim}
+
+\noindent Anything after \texttt{\#} is a comment and any further columns are
+ignored, so an existing sample sheet can usually be passed as it stands.
+Groupings are numbered in the order they first appear in this file, which is
+the order they appear in the output. A sample in the VCF that the map does not
+mention is skipped, and a sample the map names that the VCF does not contain is
+ignored; both are reported as warnings with a count.
+
+Because a sample's gene copies are what the missing-data fraction is measured
+against, \flag{--tolerance} means the same thing here as for
+\structureprog\ input: the fraction of a grouping's gene copies that are not
+called at that locus (section~\ref{sec:tolerance}).
+
+\begin{Verbatim}[xleftmargin=1em]
+adze --data cohort.vcf.gz --samples populations.tsv \
+     --tolerance 0.05 --out-prefix cohort
+\end{Verbatim}
+
+\noindent \texttt{NON\_DATA\_ROWS}, \texttt{NON\_DATA\_COLS} and
+\texttt{GROUP\_BY\_COL} describe the \structureprog\ layout and are ignored,
+with a warning, for VCF input.
+
 \subsection{Groupings}
 
-Rows are grouped by the value in the \flag{--group-col} label column;
-groupings appear in output in the order they are first seen in the file. Any
-label column can be used, so a file annotated with population, region and
-continent can be analysed at any of those levels without being rewritten.
+With \structureprog\ input, rows are grouped by the value in the
+\flag{--group-col} label column; with VCF input the grouping comes from
+\flag{--samples}. In both cases groupings appear in output in the order they
+are first seen;
+any label column can be used, so a file annotated with population, region and
+continent can be analysed at any of those levels without being rewritten, and
+the same VCF can be analysed at several levels by swapping the map file.
 \flag{--pops} restricts the analysis to a comma-separated list of groupings and
 \flag{--exclude-pops} removes them; both change $J$, and therefore change what
 ``private'' means, so they are a way of asking a different question rather than
@@ -547,6 +613,10 @@ The per-locus loops of all three statistics can be spread over threads with
 reduced in locus order, so the output does not depend on the thread count: the
 result files are bit-identical at any \flag{--threads} setting.
 
+Compressed input is decompressed as it streams, so a \texttt{.vcf.gz} costs
+more processor time to read than the same data uncompressed, and usually less
+wall-clock time on a busy filesystem, since there is far less to transfer.
+
 Table~\ref{tab:perf} gives the effect of the version 2.0 work on the phases
 that dominate large runs, measured against a version 1.0 build on the same
 inputs. The costs that grew fastest in version 1.0 were locus filtering
@@ -600,6 +670,9 @@ happens during the single read pass.
   (section~\ref{sec:autodetect}).
 \item Diagnostics and progress go to standard error; exit status distinguishes
   usage, I/O and data errors.
+\item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
+  \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
+  read only the uncompressed \structureprog\ layout.
 \item New: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
   \flag{--exclude-pops}, \flag{--tuples}, \flag{--tsv}, \flag{--dry-run},
   \flag{--threads}, \flag{--quiet}.
@@ -635,6 +708,13 @@ the distributed example. All 69 comparable cases are byte-identical; the
 remaining cases are those in which version 1.0 crashes or reports statistics
 over zero loci, and so has no output to compare. The test is in
 \texttt{test/regress.py} and needs a version 1.0 binary to compare against.
+
+VCF input has no version 1.0 counterpart, so it is checked differently:
+\texttt{test/formats.py} writes one set of genotypes as \structureprog, as
+VCF, and as compressed VCF, and requires the three runs to agree
+byte-for-byte. Because both readers order allele slots by the same rule, the
+comparison is exact rather than approximate --- any difference at all is a
+real one, not a change in the order of a floating-point sum.
 
 \section*{References}
 \addcontentsline{toc}{section}{References}
