@@ -11,6 +11,10 @@
 #include "ADZE_binom.h"
 #include "ADZE_stats.h"
 #include "ADZE_pfile.h"
+#ifdef ADZE_HAVE_ZLIB
+#include <zlib.h>
+#endif
+
 #include "ADZE_pop.h"
 #include "ADZE_pbar.h"
 
@@ -45,6 +49,7 @@ bool validK(int numDivs,list<int> k);
 void filterLoci(Population pop[],int numDivs,double tol,string private_out,
 		bool pp);
 Population* readDataset(ParamSet& p,vector<string>& groupNames,int& numDivs);
+bool wantsVCF(const string& format,const string& path);
 list<int> parseKVals(string str);
 
 

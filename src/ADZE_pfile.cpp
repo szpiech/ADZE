@@ -2,6 +2,9 @@
 #include <sstream>
 #include <cstring>
 
+//Defined in ADZE_main_tools.cpp; declared here to avoid an include cycle.
+bool wantsVCF(const string& format,const string& path);
+
 using namespace std;
 
 const char* ADZE_VERSION = "2.0-dev";
@@ -20,6 +23,10 @@ const char* ADZE_VERSION = "2.0-dev";
 const OptSpec OPTIONS[] = {
   {DFILE,     "DATA_FILE",      "--data",           "-f",        OPT_STRING, "FILE",
    "Input", "STRUCTURE-format genotype file (required)"},
+  {FORMAT,    "FORMAT",         "--format",         0,           OPT_STRING, "FMT",
+   "Input", "input format: auto, structure or vcf (default auto, by file extension)"},
+  {SAMPLES,   "SAMPLE_FILE",    "--samples",        0,           OPT_STRING, "FILE",
+   "Input", "sample-to-grouping map, required for VCF input (two columns: sample grouping)"},
   {G,         "MAX_G",          "--max-g",          "-g",        OPT_INT,    "N",
    "Input", "largest standardized sample size (default: the largest the data supports)"},
   {ND_ROWS,   "NON_DATA_ROWS",  "--non-data-rows",  "-nr",       OPT_INT,    "N",
@@ -116,6 +123,8 @@ ParamSet::ParamSet()
   pops.val = "";
   expops.val = "";
   tuple_file.val = "";
+  format.val = "auto";
+  samples.val = "";
   tsv.val = 0;
   dry_run.val = 0;
   quiet.val = 0;
@@ -248,6 +257,8 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case POPS:       SETP(pops);       pops.val = val;                   break;
     case EXPOPS:     SETP(expops);     expops.val = val;                 break;
     case TUPLE_FILE: SETP(tuple_file); tuple_file.val = val;             break;
+    case FORMAT:     SETP(format);     format.val = val;                 break;
+    case SAMPLES:    SETP(samples);    samples.val = val;                break;
     case PARAMS:     SETP(params);     params.val = val;                 break;
     case COMB:       SETP(comb);       comb.val = boolValue(val);        break;
     case FULL_R:     SETP(full_r);     full_r.val = boolValue(val);      break;
@@ -472,6 +483,42 @@ bool ParamSet::finish()
       ok = 0;
     }
 
+  if(format.set && format.val != "auto" && format.val != "structure" &&
+     format.val != "vcf")
+    {
+      cerr << "ERROR: --format must be auto, structure or vcf, not \""
+	   << format.val << "\".\n";
+      ok = 0;
+    }
+  else
+    {
+      /*
+       * A VCF names its samples but says nothing about which population each
+       * belongs to, so the map is required rather than optional.
+       */
+      const bool vcf = wantsVCF(format.val,dfile.val);
+
+      if(vcf && !samples.set)
+	{
+	  cerr << "ERROR: VCF input needs --samples FILE, a two-column map "
+	       << "from sample name to grouping.\n";
+	  ok = 0;
+	}
+
+      if(!vcf && samples.set)
+	{
+	  cerr << "WARNING: --samples applies to VCF input only; ignoring it. "
+	       << "Groupings come from GROUP_BY_COL.\n";
+	}
+
+      if(vcf && (nd_rows.set || nd_cols.set || sort_by.set))
+	{
+	  cerr << "WARNING: NON_DATA_ROWS, NON_DATA_COLS and GROUP_BY_COL "
+	       << "describe the STRUCTURE layout and are ignored for VCF "
+	       << "input.\n";
+	}
+    }
+
   if(comb.val && !tuple_file.set)
     {
       if(k.val.compare("none") == 0)
@@ -521,6 +568,8 @@ void ParamSet::echo(ostream& out)
       << "K_RANGE " << k.val << endl
       << "C_OUT " << c_out.val << endl;
   if(tuple_file.set) out << "TUPLE_FILE " << tuple_file.val << endl;
+  if(format.set) out << "FORMAT " << format.val << endl;
+  if(samples.set) out << "SAMPLE_FILE " << samples.val << endl;
   out << "\n###-----------Advanced Options-----------###\n"
       << "MISSING " << miss.val << endl
       << "TOLERANCE " << tol.val << endl

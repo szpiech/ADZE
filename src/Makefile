@@ -7,9 +7,11 @@
 #   make OPENMP=1             GCC or Linux clang
 #   make OPENMP=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
 #                             Apple clang (needs libomp installed)
+#   make ZLIB=1               compressed (.gz/.bgz) input, needs zlib
 #   make clean
 #
-# There is no external dependency: 1.0 needed GSL for one combination iterator.
+# Both are optional; nothing else is needed. 1.0 required GSL for one
+# combination iterator, which adze now generates itself.
 
 CXX      ?= g++
 CXXFLAGS ?= -O2 -std=c++17 -Wall
@@ -22,6 +24,13 @@ OMPLIBS  ?= -fopenmp
 ifdef OPENMP
 CXXFLAGS += $(OMPFLAGS)
 LDLIBS   += $(OMPLIBS)
+endif
+
+# zlib gives .vcf.gz and .stru.gz input; without it those files are refused
+# with a message rather than misparsed.
+ifdef ZLIB
+CXXFLAGS += -DADZE_HAVE_ZLIB
+LDLIBS   += -lz
 endif
 
 # Set I_PATH/L_PATH if headers or libraries live outside the default paths.

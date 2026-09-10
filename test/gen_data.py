@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Synthetic STRUCTURE-format datasets for the ADZE regression and benchmark suites.
+"""Synthetic datasets for the ADZE regression, format and benchmark suites.
 
-One row per haplotype (a diploid individual occupies two consecutive rows).
-Row 0 holds the locus names; each data row is  <ind_id> <pop_label> <allele>...
-Missing alleles are written as -9.
+STRUCTURE format: one row per haplotype (a diploid individual occupies two
+consecutive rows). Row 0 holds the locus names; each data row is
+<ind_id> <pop_label> <allele>... with missing alleles written as -9.
+
+write_pair() emits the same genotypes as both STRUCTURE and VCF, plus the
+sample-to-grouping map VCF input needs, which is what test/formats.py uses to
+check that the two readers agree.
 
 Uses only the standard library so it runs anywhere the compiler does.
 """
 import argparse
+import gzip
 import os
 import random
 
@@ -42,6 +47,99 @@ def write_dataset(path, npops, nind, nloci, nall, missing=0.0, seed=1,
                     fh.write("ind%d_%d POP%d %s\n" % (p, i, p, " ".join(row)))
     return {"dlines": ploidy * sum(nind), "loci": nloci,
             "nd_rows": 1, "nd_cols": 2, "sort_by": 2}
+
+
+def _genotypes(npops, nind, nloci, nall, missing=0.0, seed=1,
+                all_missing_loci=(), ploidy=2, allele_base=100):
+    """Genotype matrix as [pop][individual][locus] -> tuple of allele codes.
+
+    None is a missing gene copy. Allele codes are allele_base + index, so the
+    index is recoverable for the VCF encoding.
+    """
+    rng = random.Random(seed)
+    if isinstance(nind, int):
+        nind = [nind] * npops
+    assert len(nind) == npops
+    out = []
+    for p in range(npops):
+        # Population-specific allele pool, overlapping but not identical, so
+        # that private alleles and private alleles of k-tuples are non-zero.
+        pool = [allele_base + a for a in range(nall)]
+        rng.shuffle(pool)
+        pool = pool[: max(2, int(round(0.7 * nall)))] + pool[:1] * 2
+        inds = []
+        for _ in range(nind[p]):
+            copies = []
+            for _ in range(ploidy):
+                row = []
+                for l in range(nloci):
+                    if l in all_missing_loci or rng.random() < missing:
+                        row.append(None)
+                    else:
+                        row.append(rng.choice(pool))
+                copies.append(row)
+            inds.append(copies)
+        out.append(inds)
+    return out, nind
+
+
+def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, **kw):
+    """Write the same genotypes as <prefix>.stru, <prefix>.vcf[.gz] and
+    <prefix>.samples, and return the metadata for the STRUCTURE file.
+
+    Locus names match across the two encodings (the VCF carries them in ID), so
+    the *_fulldata columns line up and the outputs can be compared directly.
+    """
+    geno, nind = _genotypes(nloci=nloci, allele_base=allele_base, **kw)
+    names = ["L%d" % l for l in range(nloci)]
+    ploidy = len(geno[0][0])
+
+    with open(prefix + ".stru", "w") as fh:
+        fh.write(" ".join(names) + "\n")
+        for p, inds in enumerate(geno):
+            for i, copies in enumerate(inds):
+                for row in copies:
+                    fh.write("ind%d_%d POP%d %s\n" % (
+                        p, i, p, " ".join("-9" if a is None else str(a) for a in row)))
+
+    with open(prefix + ".samples", "w") as fh:
+        fh.write("# sample\tgrouping\n")
+        for p, inds in enumerate(geno):
+            for i in range(len(inds)):
+                fh.write("ind%d_%d\tPOP%d\n" % (p, i, p))
+
+    samples = ["ind%d_%d" % (p, i) for p, inds in enumerate(geno)
+               for i in range(len(inds))]
+    nalt = max(a for inds in geno for c in inds for row in c
+               for a in row if a is not None) - allele_base
+
+    lines = ["##fileformat=VCFv4.2",
+             '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+             "#" + "\t".join(["CHROM", "POS", "ID", "REF", "ALT", "QUAL",
+                              "FILTER", "INFO", "FORMAT"] + samples)]
+    for l in range(nloci):
+        # REF is allele index 0, so the ALT list covers indices 1..nalt.
+        alt = ",".join("A" * (i + 1) for i in range(nalt)) if nalt else "."
+        calls = []
+        for p, inds in enumerate(geno):
+            for copies in inds:
+                calls.append("/".join(
+                    "." if c[l] is None else str(c[l] - allele_base)
+                    for c in copies))
+        lines.append("\t".join(["chr1", str(l + 1), names[l], "T", alt, ".",
+                                 "PASS", ".", "GT"] + calls))
+    text = "\n".join(lines) + "\n"
+
+    with open(prefix + ".vcf", "w") as fh:
+        fh.write(text)
+    if gzip_vcf:
+        with gzip.open(prefix + ".vcf.gz", "wt") as fh:
+            fh.write(text)
+
+    return {"dlines": ploidy * sum(nind), "loci": nloci,
+            "nd_rows": 1, "nd_cols": 2, "sort_by": 2,
+            "file": os.path.basename(prefix) + ".stru",
+            "samples": os.path.basename(prefix) + ".samples"}
 
 
 def write_paramfile(path, meta, dfile, prefix, g=6, comb=0, k="", tol=1,

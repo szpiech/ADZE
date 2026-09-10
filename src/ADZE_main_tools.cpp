@@ -208,6 +208,112 @@ namespace {
 
 } //anonymous namespace
 
+namespace {
+
+  /*
+   * A line source that reads plain text or gzip-compressed text.
+   *
+   * When the build has zlib, everything goes through gzFile: zlib reads an
+   * uncompressed file transparently, so one path serves .stru, .vcf and
+   * .vcf.gz alike, and bgzip output is just gzip with extra block structure.
+   * Without zlib the plain path is used and a compressed file is refused with
+   * a message rather than misparsed.
+   */
+  class LineSource
+  {
+  public:
+    LineSource() : ok(false)
+#ifdef ADZE_HAVE_ZLIB
+      , gz(0)
+#endif
+    {}
+
+    ~LineSource() { close(); }
+
+    bool open(const string& path)
+    {
+      name = path;
+#ifdef ADZE_HAVE_ZLIB
+      gz = gzopen(path.c_str(),"rb");
+      ok = (gz != 0);
+      if(ok) gzbuffer(gz,1<<20);
+#else
+      plain.open(path.c_str());
+      ok = !plain.fail();
+#endif
+      return ok;
+    }
+
+    bool next(string& line)
+    {
+#ifdef ADZE_HAVE_ZLIB
+      line.clear();
+      char buf[65536];
+      while(gzgets(gz,buf,sizeof(buf)) != 0)
+	{
+	  line += buf;
+	  if(!line.empty() && line[line.size()-1] == '\n')
+	    {
+	      line.erase(line.size()-1);
+	      if(!line.empty() && line[line.size()-1] == '\r') line.erase(line.size()-1);
+	      return true;
+	    }
+	}
+      return !line.empty();
+#else
+      if(!getline(plain,line)) return false;
+      if(!line.empty() && line[line.size()-1] == '\r') line.erase(line.size()-1);
+      return true;
+#endif
+    }
+
+    void close()
+    {
+#ifdef ADZE_HAVE_ZLIB
+      if(gz) { gzclose(gz); gz = 0; }
+#else
+      if(plain.is_open()) plain.close();
+#endif
+      ok = false;
+    }
+
+  private:
+    string name;
+    bool ok;
+#ifdef ADZE_HAVE_ZLIB
+    gzFile gz;
+#else
+    ifstream plain;
+#endif
+  };
+
+} //anonymous namespace
+
+//True if the name ends in .gz or .bgz, case-insensitively.
+static bool looksCompressed(const string& path)
+{
+  string low = path;
+  for(size_t i = 0; i < low.size(); i++) low[i] = char(tolower((unsigned char)low[i]));
+  return (low.size() > 3 && low.compare(low.size()-3,3,".gz") == 0) ||
+         (low.size() > 4 && low.compare(low.size()-4,4,".bgz") == 0);
+}
+
+/*
+ * Resolve FORMAT.  "auto" looks at the file name: anything ending .vcf, after
+ * an optional compression suffix, is VCF; everything else is the
+ * STRUCTURE-like layout ADZE has always read.
+ */
+bool wantsVCF(const string& format, const string& path)
+{
+  if(format == "vcf") return true;
+  if(format == "structure") return false;
+
+  string low = path;
+  for(size_t i = 0; i < low.size(); i++) low[i] = char(tolower((unsigned char)low[i]));
+  if(looksCompressed(low)) low.erase(low.rfind('.'));
+  return low.size() > 4 && low.compare(low.size()-4,4,".vcf") == 0;
+}
+
 static void badData(const string& msg)
 {
   cerr << "ERROR: " << msg << "\n";
@@ -234,9 +340,8 @@ static void splitList(const string& text, vector<string>& out)
 }
 
 /*
- * Read the data file and return a freshly allocated array of numDivs
- * Population objects, one per grouping, with allele counts, sample sizes and
- * missing-data tallies already filled in.
+ * Read the STRUCTURE-like layout: a row of locus names, then one row per gene
+ * copy, each beginning with label columns.
  *
  * LOCI, NON_DATA_COLS and DATA_LINES are measured from the file rather than
  * demanded from the user: the locus-name row gives the locus count, the width
@@ -244,29 +349,17 @@ static void splitList(const string& text, vector<string>& out)
  * count themselves.  A value the user did declare is checked against what is
  * there, and a disagreement is reported as a warning against the measurement,
  * not as a fatal error about the declaration.
- *
- * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if the file's
- * shape is internally inconsistent.
  */
-Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
+static void readStructureInto(ParamSet& p, Accumulator& acc, LineSource& in,
+			      const vector<string>& keepList,
+			      const vector<string>& dropList,
+			      long long& dataRows, long long& keptRows)
 {
-  ifstream in(p.dfile.val.c_str());
-  if(in.fail())
-    {
-      cerr << "ERROR: could not open " << p.dfile.val << "\n";
-      BAD_FILE x;
-      throw x;
-    }
-
-  vector<string> keepList, dropList;
-  splitList(p.pops.val,keepList);
-  splitList(p.expops.val,dropList);
-
   string line;
   vector<Field> fields;
 
   //Row 1 of the non-data rows carries the locus names.
-  if(!getline(in,line)) badData("no locus-name row in " + p.dfile.val + ".");
+  if(!in.next(line)) badData("no locus-name row in " + p.dfile.val + ".");
   tokenize(line,fields);
 
   const int foundLoci = int(fields.size());
@@ -281,7 +374,6 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
   p.loci.val = foundLoci;
   const int declaredLoci = foundLoci;
 
-  Accumulator acc;
   acc.locusName.reserve(fields.size());
   for(size_t l = 0; l < fields.size(); l++)
     {
@@ -290,16 +382,18 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
   acc.locus.resize(acc.locusName.size());
 
   //Remaining non-data rows are ignored, exactly as in 1.0.
-  for(int skip = 1; skip < p.nd_rows.val; skip++) getline(in,line);
+  for(int skip = 1; skip < p.nd_rows.val; skip++) in.next(line);
 
   int ndCols = p.nd_cols.set ? p.nd_cols.val : 0;
   int groupCol = -1;
   int expected = 0;
 
   string token;
-  long long dataRows = 0, physicalRows = 0, keptRows = 0;
+  long long physicalRows = 0;
+  dataRows = 0;
+  keptRows = 0;
 
-  while(getline(in,line))
+  while(in.next(line))
     {
       physicalRows++;
       tokenize(line,fields);
@@ -388,18 +482,391 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 	  t.count[size_t(found.first->second)*acc.groupCap + g]++;
 	}
     }
+  return;
+}
+
+/*
+ * Read the sample-to-grouping map that VCF input needs, since a VCF carries
+ * sample names but no population labels.  Two whitespace-separated columns,
+ * sample then grouping; '#' starts a comment; further columns are ignored so
+ * a fuller sample sheet can be used as it stands.
+ *
+ * Groupings are numbered in the order they first appear in this file, which
+ * is therefore the order they appear in the output.
+ */
+static void readSampleMap(const string& file,
+			  unordered_map<string,string>& groupOf,
+			  vector<string>& order)
+{
+  LineSource in;
+  if(!in.open(file))
+    {
+      cerr << "ERROR: could not open sample file " << file << "\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  string line;
+  vector<Field> fields;
+  long long lineNo = 0;
+
+  while(in.next(line))
+    {
+      lineNo++;
+      const size_t hash = line.find('#');
+      if(hash != string::npos) line.erase(hash);
+      tokenize(line,fields);
+      if(fields.empty()) continue;
+
+      if(fields.size() < 2)
+	{
+	  ostringstream m;
+	  m << "line " << lineNo << " of " << file << " has one column; "
+	    << "each line needs a sample name and a grouping name.";
+	  badData(m.str());
+	}
+
+      const string sample(fields[0].first,fields[0].second);
+      const string group(fields[1].first,fields[1].second);
+
+      if(groupOf.find(sample) != groupOf.end())
+	{
+	  badData("sample " + sample + " appears twice in " + file + ".");
+	}
+
+      groupOf.insert(make_pair(sample,group));
+      if(find(order.begin(),order.end(),group) == order.end()) order.push_back(group);
+    }
+
+  if(groupOf.empty()) badData("no sample assignments in " + file + ".");
+
+  return;
+}
+
+/*
+ * Read VCF (optionally gzip- or bgzip-compressed).
+ *
+ * Each record is one locus and each allele index is one allele type, so REF is
+ * allele 0 and the ALT alleles follow.  A sample contributes as many gene
+ * copies as its GT field has alleles, which lets haploid and diploid records
+ * mix; '.' is an uncalled copy.  Ploidy is taken from the first record where a
+ * sample has a GT field.
+ *
+ * LocusTally::missing holds observed calls during the pass and is converted to
+ * missing counts at the end, once every sample's ploidy -- and therefore each
+ * grouping's total gene copies -- is known.
+ *
+ * Allele slots are keyed the same way as in the STRUCTURE reader: by grouping,
+ * then by position within the grouping, then by gene copy.  The two readers
+ * therefore lay out Nji identically for the same genotypes, so every statistic
+ * sums its terms in the same order and the results are bit-identical rather
+ * than merely equal to within rounding (test/formats.py checks this).
+ */
+static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
+			const vector<string>& keepList,
+			const vector<string>& dropList,
+			long long& geneCopies)
+{
+  unordered_map<string,string> groupOfSample;
+  vector<string> groupOrder;
+  readSampleMap(p.samples.val,groupOfSample,groupOrder);
+
+  //Groupings are registered up front, in sample-file order.
+  for(size_t i = 0; i < groupOrder.size(); i++)
+    {
+      const string& g = groupOrder[i];
+      if(!keepList.empty() &&
+	 find(keepList.begin(),keepList.end(),g) == keepList.end()) continue;
+      if(!dropList.empty() &&
+	 find(dropList.begin(),dropList.end(),g) != dropList.end()) continue;
+      acc.group(g);
+    }
+
+  if(acc.groupName.empty())
+    {
+      badData("no grouping in " + p.samples.val + " survived --pops/--exclude-pops.");
+    }
+
+  string line;
+  vector<Field> fields;
+  bool haveHeader = false;
+
+  vector<int> sampleGroup;    //per VCF sample column: grouping index, or -1
+  vector<int> samplePloidy;   //per VCF sample column: gene copies, 0 until seen
+  vector<int> sampleRank;     //per VCF sample column: position within grouping
+  int usedSamples = 0;
+
+  long long records = 0;
+  string token;
+
+  while(in.next(line))
+    {
+      if(line.empty()) continue;
+
+      if(line.compare(0,2,"##") == 0) continue;
+
+      if(!haveHeader)
+	{
+	  if(line[0] != '#')
+	    {
+	      badData("no #CHROM header line before the records in " + p.dfile.val + ".");
+	    }
+
+	  tokenize(line,fields);
+	  if(fields.size() < 10)
+	    {
+	      badData("the #CHROM line of " + p.dfile.val +
+		      " names no samples; there is nothing to count.");
+	    }
+
+	  sampleGroup.assign(fields.size()-9,-1);
+	  samplePloidy.assign(fields.size()-9,0);
+	  sampleRank.assign(fields.size()-9,0);
+	  vector<int> seenInGroup(acc.groupName.size(),0);
+
+	  int unmapped = 0;
+	  for(size_t c = 9; c < fields.size(); c++)
+	    {
+	      token.assign(fields[c].first,fields[c].second);
+	      unordered_map<string,string>::const_iterator it = groupOfSample.find(token);
+	      if(it == groupOfSample.end()) { unmapped++; continue; }
+
+	      unordered_map<string,int>::const_iterator gi = acc.groupOf.find(it->second);
+	      if(gi == acc.groupOf.end()) continue;   //grouping filtered out
+
+	      sampleGroup[c-9] = gi->second;
+	      sampleRank[c-9] = seenInGroup[gi->second]++;
+	      usedSamples++;
+	    }
+
+	  if(usedSamples == 0)
+	    {
+	      badData("none of the samples in " + p.dfile.val + " appears in " +
+		      p.samples.val + " under a grouping being analysed.");
+	    }
+
+	  if(unmapped > 0)
+	    {
+	      adzelog() << "WARNING: " << unmapped << " of " << (fields.size()-9)
+			<< " samples in " << p.dfile.val << " are absent from "
+			<< p.samples.val << " and were skipped.\n";
+	    }
+
+	  const int mapOnly = int(groupOfSample.size()) - (int(fields.size()-9) - unmapped);
+	  if(mapOnly > 0)
+	    {
+	      adzelog() << "WARNING: " << mapOnly << " samples named in "
+			<< p.samples.val << " are not in " << p.dfile.val << ".\n";
+	    }
+
+	  haveHeader = true;
+	  continue;
+	}
+
+      tokenize(line,fields);
+      if(fields.empty()) continue;
+
+      if(fields.size() != sampleGroup.size() + 9)
+	{
+	  ostringstream m;
+	  m << "record " << (records+1) << " of " << p.dfile.val << " has "
+	    << fields.size() << " columns but the header declares "
+	    << (sampleGroup.size() + 9) << ".";
+	  badData(m.str());
+	}
+
+      //Locus name: the ID column when it carries one, else CHROM:POS.
+      string locusName(fields[2].first,fields[2].second);
+      if(locusName == ".")
+	{
+	  locusName.assign(fields[0].first,fields[0].second);
+	  locusName += ":";
+	  locusName.append(fields[1].first,fields[1].second);
+	}
+
+      const int l = int(acc.locusName.size());
+      acc.locusName.push_back(locusName);
+      acc.locus.resize(acc.locusName.size());
+      LocusTally& t = acc.locus[l];
+      t.missing.assign(acc.groupName.size(),0);   //observed calls for now
+
+      //Where GT sits in the colon-separated FORMAT field.
+      int gtField = -1;
+      {
+	const char* f = fields[8].first;
+	const size_t n = fields[8].second;
+	int index = 0;
+	size_t i = 0;
+	while(i <= n)
+	  {
+	    size_t j = i;
+	    while(j < n && f[j] != ':') j++;
+	    if(j - i == 2 && f[i] == 'G' && f[i+1] == 'T') { gtField = index; break; }
+	    if(j >= n) break;
+	    i = j + 1;
+	    index++;
+	  }
+      }
+      if(gtField < 0)
+	{
+	  ostringstream m;
+	  m << "record " << (records+1) << " of " << p.dfile.val
+	    << " has no GT in its FORMAT column.";
+	  badData(m.str());
+	}
+
+      records++;
+
+      for(size_t c = 0; c < sampleGroup.size(); c++)
+	{
+	  const int g = sampleGroup[c];
+	  if(g < 0) continue;
+
+	  const char* f = fields[c+9].first;
+	  const size_t n = fields[c+9].second;
+
+	  //Walk to the GT subfield.
+	  size_t i = 0;
+	  for(int skip = 0; skip < gtField && i < n; skip++)
+	    {
+	      while(i < n && f[i] != ':') i++;
+	      if(i < n) i++;
+	    }
+	  size_t stop = i;
+	  while(stop < n && f[stop] != ':') stop++;
+
+	  if(i >= stop) continue;             //empty GT: no gene copies here
+	  if(stop - i == 1 && f[i] == '.') { if(samplePloidy[c] == 0) samplePloidy[c] = 1; continue; }
+
+	  int copies = 0;
+	  size_t a = i;
+	  const long long sampleKey =
+	    (long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
+	  while(a < stop)
+	    {
+	      size_t b = a;
+	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
+
+	      copies++;
+	      if(!(b - a == 1 && f[a] == '.'))
+		{
+		  token.assign(f + a, b - a);
+
+		  pair<unordered_map<string,int>::iterator,bool> found =
+		    t.slotOf.insert(make_pair(token,int(t.firstSeen.size())));
+
+		  if(found.second)
+		    {
+		      t.firstSeen.push_back(sampleKey + (copies - 1));
+		      t.count.resize(t.count.size() + acc.groupCap, 0);
+		    }
+
+		  t.count[size_t(found.first->second)*acc.groupCap + g]++;
+		  t.missing[g]++;               //observed for now
+		}
+
+	      a = (b < stop) ? b + 1 : stop;
+	    }
+
+	  if(samplePloidy[c] < copies) samplePloidy[c] = copies;
+	}
+    }
+
+  if(!haveHeader) badData("no #CHROM header line in " + p.dfile.val + ".");
+  if(records == 0) badData("no variant records in " + p.dfile.val + ".");
+
+  //Gene copies per grouping, and hence the missing-data denominator.
+  geneCopies = 0;
+  for(size_t c = 0; c < sampleGroup.size(); c++)
+    {
+      const int g = sampleGroup[c];
+      if(g < 0) continue;
+      const int ploidy = (samplePloidy[c] > 0) ? samplePloidy[c] : 2;
+      acc.groupRows[g] += ploidy;
+      geneCopies += ploidy;
+    }
+
+  //Convert observed calls into missing counts now that the totals are known.
+  for(size_t l = 0; l < acc.locus.size(); l++)
+    {
+      LocusTally& t = acc.locus[l];
+      for(size_t g = 0; g < acc.groupName.size(); g++)
+	{
+	  const int seen = t.missing[g];
+	  t.missing[g] = (acc.groupRows[g] > seen) ? acc.groupRows[g] - seen : 0;
+	}
+    }
+
+  if(p.loci.set && p.loci.val != int(records))
+    {
+      adzelog() << "WARNING: LOCI says " << p.loci.val << " but " << p.dfile.val
+		<< " has " << records << " records; using " << records << ".\n";
+    }
+  p.loci.val = int(records);
+
+  adzelog() << "Read " << records << (records == 1 ? " record" : " records")
+	    << " for " << usedSamples
+	    << (usedSamples == 1 ? " sample" : " samples") << ".\n";
+
+  return;
+}
+
+/*
+ * Read the data file and return a freshly allocated array of numDivs
+ * Population objects, one per grouping, with allele counts, sample sizes and
+ * missing-data tallies already filled in.
+ *
+ * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if its shape is
+ * internally inconsistent.
+ */
+Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
+{
+  const bool vcf = wantsVCF(p.format.val,p.dfile.val);
+
+#ifndef ADZE_HAVE_ZLIB
+  if(looksCompressed(p.dfile.val))
+    {
+      cerr << "ERROR: " << p.dfile.val << " looks compressed, but this build "
+	   << "has no zlib support.\n       Rebuild with zlib, or decompress "
+	   << "the file first.\n";
+      BAD_FILE x;
+      throw x;
+    }
+#endif
+
+  LineSource in;
+  if(!in.open(p.dfile.val))
+    {
+      cerr << "ERROR: could not open " << p.dfile.val << "\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  vector<string> keepList, dropList;
+  splitList(p.pops.val,keepList);
+  splitList(p.expops.val,dropList);
+
+  Accumulator acc;
+  long long dataRows = 0, keptRows = 0;
+
+  if(vcf) readVCFInto(p,acc,in,keepList,dropList,dataRows);
+  else readStructureInto(p,acc,in,keepList,dropList,dataRows,keptRows);
 
   in.close();
 
-  if(p.dlines.set && p.dlines.val != int(dataRows))
+  const int declaredLoci = int(acc.locusName.size());
+
+  if(!vcf)
     {
-      adzelog() << "WARNING: DATA_LINES says " << p.dlines.val << " but "
-		<< p.dfile.val << " has " << dataRows << " data rows; using "
-		<< dataRows << ".\n";
+      if(p.dlines.set && p.dlines.val != int(dataRows))
+	{
+	  adzelog() << "WARNING: DATA_LINES says " << p.dlines.val << " but "
+		    << p.dfile.val << " has " << dataRows << " data rows; using "
+		    << dataRows << ".\n";
+	}
+      if(dataRows == 0) badData("no data rows in " + p.dfile.val + ".");
     }
   p.dlines.val = int(dataRows);
-
-  if(dataRows == 0) badData("no data rows in " + p.dfile.val + ".");
 
   numDivs = int(acc.groupName.size());
   if(numDivs == 0)
@@ -407,7 +874,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
       badData("no grouping in " + p.dfile.val + " survived --pops/--exclude-pops.");
     }
 
-  if(keptRows != dataRows)
+  if(!vcf && keptRows != dataRows)
     {
       adzelog() << "Using " << keptRows << " of " << dataRows
 		<< " gene copies in " << numDivs
@@ -428,7 +895,12 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 	}
     }
 
-  //Renumber slots into 1.0's first-appearance order and publish the counts.
+  /*
+   * Publish the counts, ordering each locus's allele slots by where the allele
+   * was first seen -- grouping, then row (or sample) within it, then gene copy
+   * -- which reproduces 1.0's Nji column order for STRUCTURE input and gives
+   * VCF input the same layout for the same genotypes.
+   */
   vector<int> order;
   int emptyLoci = 0;
 

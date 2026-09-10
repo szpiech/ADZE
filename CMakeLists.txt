@@ -5,10 +5,11 @@
 #   ctest --test-dir build            # differential test vs. a 1.0 reference
 #   cmake --install build --prefix ~/.local
 #
-# OpenMP is used when the toolchain provides it (on Apple clang that means
-# libomp, e.g. `brew install libomp`), and the program builds and runs fine
-# without it. There are no other dependencies: ADZE 1.0 required GSL for a
-# single combination iterator, which adze now generates itself.
+# Two optional libraries are used when present, and the program builds and runs
+# fine without either: OpenMP for --threads (on Apple clang that means libomp,
+# e.g. `brew install libomp`), and zlib for gzip/bgzip-compressed input.
+# Nothing else is required: ADZE 1.0 needed GSL for a single combination
+# iterator, which adze now generates itself.
 
 cmake_minimum_required(VERSION 3.16)
 project(adze VERSION 2.0.0 LANGUAGES CXX)
@@ -40,6 +41,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(adze PRIVATE -Wall)
 endif()
 
+option(ADZE_USE_ZLIB "Read gzip/bgzip-compressed input if zlib is available" ON)
+
+if(ADZE_USE_ZLIB)
+  find_package(ZLIB)
+  if(ZLIB_FOUND)
+    target_link_libraries(adze PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(adze PRIVATE ADZE_HAVE_ZLIB)
+    message(STATUS "adze: zlib enabled (.vcf.gz and .stru.gz input)")
+  else()
+    message(STATUS "adze: no zlib found; compressed input unavailable")
+  endif()
+endif()
+
 option(ADZE_USE_OPENMP "Use OpenMP if available" ON)
 
 if(ADZE_USE_OPENMP)
@@ -67,5 +81,17 @@ if(BUILD_TESTING AND ADZE_REFERENCE)
                      --candidate $<TARGET_FILE:adze>
                      --reference ${ADZE_REFERENCE}
                      --workdir ${CMAKE_CURRENT_BINARY_DIR}/regress)
+  endif()
+endif()
+
+# The format suite needs no reference: it checks the STRUCTURE, VCF and
+# compressed-VCF readers against each other.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_FOUND)
+    add_test(NAME formats
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/formats.py
+                     --candidate $<TARGET_FILE:adze>
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/formats)
   endif()
 endif()

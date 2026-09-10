@@ -194,14 +194,26 @@ int main(int argc, char* argv[])
 
   if(p.dry_run.val)
     {
-      cout << "Data file:        " << p.dfile.val << "\n"
+      const bool vcf = wantsVCF(p.format.val,p.dfile.val);
+
+      cout << "Data file:        " << p.dfile.val
+	   << (vcf ? "  (VCF)\n" : "  (STRUCTURE)\n")
 	   << "Loci:             " << p.loci.val << "\n"
-	   << "Data rows:        " << p.dlines.val << "\n"
-	   << "Label columns:    " << p.nd_cols.val
-	   << " (grouping from column " << p.sort_by.val << ")\n"
-	   << "Header rows:      " << p.nd_rows.val << "\n"
-	   << "Missing code:     " << p.miss.val << "\n"
-	   << "Groupings:        " << numDivs << "\n";
+	   << "Gene copies:      " << p.dlines.val << "\n";
+
+      if(vcf)
+	{
+	  cout << "Sample map:       " << p.samples.val << "\n";
+	}
+      else
+	{
+	  cout << "Label columns:    " << p.nd_cols.val
+	       << " (grouping from column " << p.sort_by.val << ")\n"
+	       << "Header rows:      " << p.nd_rows.val << "\n"
+	       << "Missing code:     " << p.miss.val << "\n";
+	}
+
+      cout << "Groupings:        " << numDivs << "\n";
 
       for(int j = 0; j < numDivs; j++)
 	{
