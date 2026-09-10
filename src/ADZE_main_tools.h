@@ -39,7 +39,6 @@ int countCols(string);
 void checkDatafile(const ParamSet&);
 
 
-bool isIn(int, gsl_combination*);
 
 string nameCreate(string,string);
 double displayTime(ostream& out);

@@ -59,5 +59,4 @@ class Population
   void printDeleted(ostream&);
   void deleteLoci(const vector<char>& del);
 
-  double calcQjig(int,int,int);
 };

@@ -248,12 +248,8 @@ void buildQTable(Population pop[], int numDivs, int locus, int numAlleles,
 void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 		   bool full_comb, string comb_out)
 {
-  int maxG = param.g.val+1;
-  int numLoci = param.loci.val;
-  int tot_m = int(nCk(numDivs,k));
-  double* pgcomb;
-  string* names;
-  //bool gotNames;
+  const int numLoci = param.loci.val;
+  const int tot_m = int(nCk(numDivs,k));
 
   ofstream full_out, reg_out;
 
@@ -278,116 +274,113 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 
   reg_out.open(comb_out.c_str());
 
+  //Largest g the sweep reaches; see calcAllPgs for why this replaces breakG.
+  int minNjAll = 0;
+  for(int locus = 0; locus < numLoci; locus++)
+    {
+      for(int p = 0; p < numDivs; p++)
+	{
+	  int Nj = pop[p].getNj(locus);
+	  if((locus == 0 && p == 0) || Nj < minNjAll) minNjAll = Nj;
+	}
+    }
+
+  int gLast = param.g.val;
+  if(minNjAll < gLast) gLast = minNjAll;
+  if(gLast < 2) gLast = 2;
+  const int gStride = gLast + 1;
 
   gsl_combination* c = gsl_combination_calloc(numDivs,k);
   gsl_combination_init_first(c);
 
-  //for every instance of nCk
-  //for(int m = 0; m < tot_m; m++)
-
-  ProgressBar bar(&cout,tot_m*(maxG-2)*numLoci,BARLEN[min(k-1,3)]);
+  ProgressBar bar(&cout,double(tot_m)*(gLast-1)*numLoci,BARLEN[min(k-1,3)]);
   if(param.pp.val)
     {
       bar.init();
     }
-  
-  int m = 0;
+
+  vector<string> names(k);
+  vector<char> inComb(numDivs,0);
+  vector<double> pgcomb(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  vector<double> q;
+
   do
     {
-  
-      //array for the names
-      names = new string[k];
-      //gotNames = 0;
-
-      //for all g
-      for(int g = 2; g < maxG; g++)
+      /*
+       * Both of these are properties of the combination, not of a locus, an
+       * allele or a sample size.  1.0 rebuilt the name array inside the
+       * innermost allele loop -- one std::string copy per allele per g per
+       * locus -- and asked isIn() to rescan the combination for every
+       * non-member grouping at every allele.  Hoisting them out of three loop
+       * levels leaves a membership mask that answers in constant time.
+       */
+      for(int j = 0; j < numDivs; j++) inComb[j] = 0;
+      for(size_t j = 0; j < gsl_combination_k(c); j++)
 	{
-	  bool breakG = 0;
-	  //allocate 1-dim array
-	  pgcomb = new double[numLoci];
-	  
-	  for(int l = 0; l < numLoci; l++)
+	  int member = int(gsl_combination_get(c,j));
+	  names[j] = pop[member].getName();
+	  inComb[member] = 1;
+	}
+      const string all_names = combineNames(&names[0],k);
+
+      for(int locus = 0; locus < numLoci; locus++)
+	{
+	  const int numAlleles = pop[0].getNjiColLength(locus);
+	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
+
+	  for(int g = 2; g <= gLast; g++)
 	    {
 	      double pg = 0;
-	      int maxI = pop[0].getNjiColLength(l);
 
 	      //Sum over all alleles
-	      for(int i = 0; i < maxI; i++)
+	      for(int i = 0; i < numAlleles; i++)
 		{
 		  double P = 1, Q = 1;
-		  //Calc P's
+
+		  //Calc P's over the groupings in the combination
 		  for(size_t j = 0; j < gsl_combination_k(c); j++)
 		    {
-		      int c_kmj = int(gsl_combination_get(c,j));
-		      
-		      P *= (1-pop[c_kmj].calcQjig(i,g,l));
-		      
-		      names[int(j)] = pop[c_kmj].getName();
+		      int member = int(gsl_combination_get(c,j));
+		      P *= (1-q[(size_t(member)*numAlleles + i)*gStride + g]);
 		    }
-		  
-		  //Calc Q's
-		  for(size_t j_p = 0; j_p < size_t(numDivs); j_p++)
+
+		  //Calc Q's over the groupings outside it
+		  for(int j_p = 0; j_p < numDivs; j_p++)
 		    {
-		      if(!isIn(j_p,c))
+		      if(!inComb[j_p])
 			{
-			  Q *= pop[j_p].calcQjig(i,g,l);
+			  Q *= q[(size_t(j_p)*numAlleles + i)*gStride + g];
 			}
 		    }
-		  
+
 		  //Multiply together and add to total
 		  pg += (P*Q);
 		}
-	      //cout << "\npgtotal = " << pg << endl;
-	      pgcomb[l] = pg;
-	      
-	      //Good to go for next g?
-	      for(int p = 0; p < numDivs; p++)
-		{
-		  int Nj = pop[p].getNj(l);
-		  if(Nj < g+1) breakG = 1; 
-		} 
 
-	      if(param.pp.val) ++bar;
-
+	      pgcomb[size_t(g)*numLoci + locus] = pg;
 	    }
-	  
-	  Stats comb_stats;
-	  comb_stats.putData(pgcomb,numLoci);
 
-	  //Calc Avg
+	  if(param.pp.val) bar.adv(gLast-1);
+	}
+
+      for(int g = 2; g <= gLast; g++)
+	{
+	  Stats comb_stats;
+	  comb_stats.putData(&pgcomb[size_t(g)*numLoci],numLoci);
 	  comb_stats.calcAvg();
-	  
-	  //Calc Var
 	  comb_stats.calcVar();
-	  
-	  //Calc Std_err
 	  comb_stats.calcStdErr();
-	  
-	  //output
-	  string all_names = combineNames(names,k);
+
 	  comb_stats.printStats(reg_out,all_names,g);
 
 	  if(full_comb)
 	    {
 	      comb_stats.printData(full_out,all_names,g);
 	    }
-	  
-	  //de-allocate array
-	  delete [] pgcomb;
-	  
-	  if(breakG)
-	    {
-	      if(param.pp.val) bar.adv((maxG-g-1)*numLoci);
-	      break;
-	    }
 	}
-
-      delete [] names;
 
       reg_out << endl;
       full_out << endl;
-      
-      m++;
     }while(gsl_combination_next(c) == GSL_SUCCESS);
   
   if(param.pp.val) bar.done();
@@ -396,22 +389,6 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 
   return;
 }
-
-bool isIn(int j, gsl_combination* c)
-{
-  size_t size = gsl_combination_k(c);
-
-  for(size_t i = 0; i < size; i++)
-    {
-      if(size_t(j) == gsl_combination_get(c,i))
-	{
-	  return 1;
-	}
-    }
-  
-  return 0;
-}
-
 
 void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 		bool full_priv,string private_out)

@@ -116,33 +116,6 @@ int Population::getNjiColLength(int locus)
     }
 }
 
-//Calculated the probability of not finding allele i 
-//in a sample of size g from population j
-double Population::calcQjig(int i, int g, int locus)
-{
-  double Q = 1;
-  
-  
-  /* Calculate Qjig
-   *          / Nj - Nji \       g-1
-   *          \    g     /      ----    Nj - Nji - u
-   *  Qjig = --------------  =  |  | -----------------
-   *            /  Nj \         |  |      Nj - u
-   *            \  g  /         u = 0
-   *
-   */
-  for (int u = 0; u < g; u++)
-    {
-      Q *= double(Nj[locus]-Nji[locus][i]-u)/double(Nj[locus]-u);
-    }
-  
-  //Slower calculation...
-  //Q = nCk(Nj[locus]-Nji[locus][i],g)/nCk(Nj[locus],g);
-
-
-  return Q;
-}
-
 //Initializes Nj with specified number
 void Population::fillNj(int n)
 {
