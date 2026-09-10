@@ -549,8 +549,13 @@ static void readSampleMap(const string& file,
  * Each record is one locus and each allele index is one allele type, so REF is
  * allele 0 and the ALT alleles follow.  A sample contributes as many gene
  * copies as its GT field has alleles, which lets haploid and diploid records
- * mix; '.' is an uncalled copy.  Ploidy is taken from the first record where a
- * sample has a GT field.
+ * mix; '.' is an uncalled copy.
+ *
+ * A sample's ploidy is the largest number of alleles any of its GT fields
+ * holds, because that is how many gene copies it could have contributed.  A
+ * record where it carries fewer -- a haploid call in a file that is otherwise
+ * diploid -- therefore counts the difference as missing, which is what
+ * TOLERANCE is asked about.
  *
  * LocusTally::missing holds observed calls during the pass and is converted to
  * missing counts at the end, once every sample's ploidy -- and therefore each

@@ -300,8 +300,12 @@ then exits without computing anything.
 Each record is one locus and each allele index is one allele type, so the
 reference allele is allele 0 and the alternates follow. A sample contributes as
 many gene copies as its \texttt{GT} field holds, which lets haploid and diploid
-records sit in the same file, and a \texttt{.} is an uncalled copy. Ploidy is
-taken from the first record in which a sample has a \texttt{GT} field. Only
+records sit in the same file, and a \texttt{.} is an uncalled copy. A sample's
+ploidy is the largest number of alleles any of its \texttt{GT} fields holds,
+since that is how many gene copies it could have contributed; a record where it
+carries fewer --- a haploid call in an otherwise diploid file, say --- counts
+the difference as missing, and so tells against that locus under
+\flag{--tolerance}. Only
 \texttt{GT} is read: no other \texttt{FORMAT} field, and no \texttt{INFO},
 \texttt{QUAL} or \texttt{FILTER} value, affects the counts, so filtering must
 be done before \prog\ sees the file. Locus names come from the \texttt{ID}
