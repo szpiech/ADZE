@@ -48,6 +48,16 @@ const OptSpec OPTIONS[] = {
   {EXPOPS,    0,                "--exclude-pops",   0,           OPT_STRING, "LIST",
    "Input", "analyse everything except these groupings"},
 
+  {WIN_BP,    "WINDOW_BP",      "--window-bp",      0,           OPT_LONG,   "N",
+   "Analysis", "sliding windows N basepairs wide (needs locus coordinates)"},
+  {WIN_LOCI,  "WINDOW_LOCI",    "--window-loci",    0,           OPT_LONG,   "N",
+   "Analysis", "sliding windows N loci wide (surviving loci; needs coordinates for chromosomes)"},
+  {STEP_BP,   "STEP_BP",        "--step-bp",        0,           OPT_LONG,   "N",
+   "Analysis", "advance basepair windows by N (default: the window width, i.e. no overlap)"},
+  {STEP_LOCI, "STEP_LOCI",      "--step-loci",      0,           OPT_LONG,   "N",
+   "Analysis", "advance locus windows by N loci (default: the window width)"},
+  {MIN_WIN_LOCI,"MIN_WINDOW_LOCI","--min-window-loci",0,         OPT_INT,    "N",
+   "Analysis", "do not report a window holding fewer than N loci (default 1)"},
   {STAT,      0,                "--stat",           0,           OPT_STRING, "LIST",
    "Analysis", "which statistics to compute: richness,private,tuples (default: richness,private)"},
   {TOL,       "TOLERANCE",      "--tolerance",      "-t",        OPT_DOUBLE, "X",
@@ -128,6 +138,11 @@ ParamSet::ParamSet()
   format.val = "auto";
   samples.val = "";
   loci_map.val = "";
+  win_bp.val = 0;
+  win_loci.val = 0;
+  step_bp.val = 0;
+  step_loci.val = 0;
+  min_win_loci.val = 1;
   tsv.val = 0;
   dry_run.val = 0;
   quiet.val = 0;
@@ -213,6 +228,7 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
   switch(spec->type)
     {
     case OPT_INT:    bad = !isint(val);    break;
+    case OPT_LONG:   bad = !isint(val);    break;
     case OPT_DOUBLE: bad = !isdouble(val); break;
     case OPT_BOOL:   bad = !isbool(val);   break;
     case OPT_STRING: bad = val.empty();    break;
@@ -224,6 +240,7 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
       switch(spec->type)
 	{
 	case OPT_INT:    cerr << "an integer";             break;
+	case OPT_LONG:   cerr << "a whole number";         break;
 	case OPT_DOUBLE: cerr << "a number";               break;
 	case OPT_BOOL:   cerr << "0 or 1";                 break;
 	case OPT_STRING: cerr << "a value";                break;
@@ -263,6 +280,11 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case FORMAT:     SETP(format);     format.val = val;                 break;
     case SAMPLES:    SETP(samples);    samples.val = val;                break;
     case LOCI_MAP:   SETP(loci_map);   loci_map.val = val;               break;
+    case WIN_BP:     SETP(win_bp);     win_bp.val = atoll(val.c_str());   break;
+    case WIN_LOCI:   SETP(win_loci);   win_loci.val = atoll(val.c_str()); break;
+    case STEP_BP:    SETP(step_bp);    step_bp.val = atoll(val.c_str());  break;
+    case STEP_LOCI:  SETP(step_loci);  step_loci.val = atoll(val.c_str());break;
+    case MIN_WIN_LOCI: SETP(min_win_loci); min_win_loci.val = atoi(val.c_str()); break;
     case PARAMS:     SETP(params);     params.val = val;                 break;
     case COMB:       SETP(comb);       comb.val = boolValue(val);        break;
     case FULL_R:     SETP(full_r);     full_r.val = boolValue(val);      break;
@@ -487,6 +509,57 @@ bool ParamSet::finish()
       ok = 0;
     }
 
+  /*
+   * Windows are defined one way or the other, never both, and each step
+   * belongs to its own unit.  A step smaller than the window is the sliding
+   * case; the default step is the window itself, i.e. a plain tiling.
+   */
+  if(win_bp.set && win_loci.set)
+    {
+      cerr << "ERROR: --window-bp and --window-loci are mutually exclusive; "
+	   << "a window is measured one way or the other.\n";
+      ok = 0;
+    }
+
+  if((win_bp.set && win_bp.val < 1) || (win_loci.set && win_loci.val < 1))
+    {
+      cerr << "ERROR: the window width must be a positive number.\n";
+      ok = 0;
+    }
+
+  if(step_bp.set && !win_bp.set)
+    {
+      cerr << "ERROR: --step-bp needs --window-bp.\n";
+      ok = 0;
+    }
+
+  if(step_loci.set && !win_loci.set)
+    {
+      cerr << "ERROR: --step-loci needs --window-loci.\n";
+      ok = 0;
+    }
+
+  if((step_bp.set && step_bp.val < 1) || (step_loci.set && step_loci.val < 1))
+    {
+      cerr << "ERROR: the window step must be a positive number.\n";
+      ok = 0;
+    }
+
+  if(min_win_loci.val < 1)
+    {
+      cerr << "ERROR: --min-window-loci must be at least 1.\n";
+      ok = 0;
+    }
+
+  if(!step_bp.set) step_bp.val = win_bp.val;
+  if(!step_loci.set) step_loci.val = win_loci.val;
+
+  if(min_win_loci.set && !windowed())
+    {
+      cerr << "WARNING: --min-window-loci applies to a windowed run; "
+	   << "ignoring it.\n";
+    }
+
   if(format.set && format.val != "auto" && format.val != "structure" &&
      format.val != "vcf")
     {
@@ -506,6 +579,18 @@ bool ParamSet::finish()
 	{
 	  cerr << "ERROR: VCF input needs --samples FILE, a two-column map "
 	       << "from sample name to grouping.\n";
+	  ok = 0;
+	}
+
+      /*
+       * Windows are ranges of the genome, so every locus has to be placed on
+       * it.  VCF input always is; the STRUCTURE layout needs the map.
+       */
+      if(windowed() && !vcf && !loci_map.set)
+	{
+	  cerr << "ERROR: a windowed run needs locus coordinates. STRUCTURE "
+	       << "input carries none,\n       so supply --loci-map FILE "
+	       << "(locus, chromosome, position).\n";
 	  ok = 0;
 	}
 
@@ -575,6 +660,17 @@ void ParamSet::echo(ostream& out)
   if(format.set) out << "FORMAT " << format.val << endl;
   if(samples.set) out << "SAMPLE_FILE " << samples.val << endl;
   if(loci_map.set) out << "LOCI_MAP " << loci_map.val << endl;
+  if(win_bp.set)
+    {
+      out << "WINDOW_BP " << win_bp.val << endl
+	  << "STEP_BP " << step_bp.val << endl;
+    }
+  if(win_loci.set)
+    {
+      out << "WINDOW_LOCI " << win_loci.val << endl
+	  << "STEP_LOCI " << step_loci.val << endl;
+    }
+  if(windowed()) out << "MIN_WINDOW_LOCI " << min_win_loci.val << endl;
   out << "\n###-----------Advanced Options-----------###\n"
       << "MISSING " << miss.val << endl
       << "TOLERANCE " << tol.val << endl

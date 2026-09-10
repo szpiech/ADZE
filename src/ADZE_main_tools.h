@@ -40,8 +40,37 @@ struct LocusMap
 
   int chromIndex(const string& name);          //find or append
   void compact(const vector<char>& del);       //apply a keep-mask
-  bool ascending(int& badLocus) const;         //positions increase per chrom
+
+  /*
+   * Windows are runs of consecutive loci, so the loci must arrive grouped by
+   * chromosome and in increasing position.  Returns an empty string when they
+   * do and a description of the first violation when they do not.
+   */
+  string checkOrder(const vector<string>& locusName) const;
 };
+
+/*
+ * One window: a closed basepair interval on one chromosome, and the half-open
+ * range [first,last) of surviving loci inside it.
+ */
+struct Window
+{
+  int chrom;
+  long long start;
+  long long end;
+  int first;
+  int last;
+
+  int numLoci() const { return last - first; }
+};
+
+/*
+ * Lay out the windows over the surviving loci.  Returns the number of windows
+ * that held at least one locus but fewer than --min-window-loci, which the dry
+ * run reports.
+ */
+long long buildWindows(const LocusMap& lmap, const ParamSet& p,
+		       vector<Window>& out);
 
 typedef map<int,string> IntStrMap;
 const int BARLEN[] = {50,100,500,500};

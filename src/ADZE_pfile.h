@@ -20,9 +20,10 @@ enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
      OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,TSV,DRY_RUN,QUIET,THREADS,PARAMS,
      FORMAT,SAMPLES,LOCI_MAP,
+     WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,
      LABEL_SIZE};
 
-enum OptType{OPT_INT,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
+enum OptType{OPT_INT,OPT_LONG,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
 
 struct OptSpec
 {
@@ -103,6 +104,19 @@ class ParamSet
   Param<string> format;   //auto | structure | vcf
   Param<string> samples;  //sample -> grouping map, for VCF input
   Param<string> loci_map; //locus -> chromosome, position; STRUCTURE input
+
+  /*
+   * Sliding windows.  Size is given either in basepairs or in loci, never
+   * both; the matching step defaults to the size, so the default is a
+   * non-overlapping tiling.
+   */
+  Param<long long> win_bp;
+  Param<long long> win_loci;
+  Param<long long> step_bp;
+  Param<long long> step_loci;
+  Param<int> min_win_loci;
+
+  bool windowed() const { return win_bp.set || win_loci.set; }
   Param<bool> tsv;
   Param<bool> dry_run;
   Param<bool> quiet;

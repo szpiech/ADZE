@@ -25,8 +25,8 @@ ENTRY = re.compile(
     r'"((?:[^"\\]|\\.)*)"\s*\}',
     re.S)
 
-TYPE_NAME = {"OPT_INT": "int", "OPT_DOUBLE": "float", "OPT_STRING": "string",
-             "OPT_BOOL": "boolean"}
+TYPE_NAME = {"OPT_INT": "int", "OPT_LONG": "int", "OPT_DOUBLE": "float",
+             "OPT_STRING": "string", "OPT_BOOL": "boolean"}
 
 
 def unquote(tok):

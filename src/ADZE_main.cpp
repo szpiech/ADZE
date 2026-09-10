@@ -238,6 +238,82 @@ int main(int argc, char* argv[])
 	       << "which can raise both numbers)\n";
 	}
 
+      if(p.windowed())
+	{
+	  /*
+	   * Windows are laid over the loci that survive filtering, so work
+	   * out which those are -- without writing the report file, this
+	   * being a dry run -- and lay the windows over a copy.
+	   */
+	  vector<char> del(p.loci.val,0);
+	  for(int j = 0; j < numDivs; j++) pop[j].recLociDelete(p.tol.val,del);
+
+	  LocusMap trial = lmap;
+	  trial.compact(del);
+
+	  vector<Window> windows;
+	  const long long sparse = buildWindows(trial,p,windows);
+
+	  int lo = 0, hi = 0;
+	  for(size_t w = 0; w < windows.size(); w++)
+	    {
+	      const int n = windows[w].numLoci();
+	      if(w == 0 || n < lo) lo = n;
+	      if(w == 0 || n > hi) hi = n;
+	    }
+
+	  cout << "Windows:          " << windows.size();
+	  if(p.win_bp.set)
+	    {
+	      cout << " of " << p.win_bp.val << " bp, step " << p.step_bp.val;
+	    }
+	  else
+	    {
+	      cout << " of " << p.win_loci.val << " loci, step "
+		   << p.step_loci.val;
+	    }
+	  cout << "\n";
+
+	  if(!windows.empty())
+	    {
+	      cout << "  loci per window: " << lo << "-" << hi << "\n";
+	    }
+	  if(sparse > 0)
+	    {
+	      cout << "  " << sparse << " window" << (sparse == 1 ? "" : "s")
+		   << " below --min-window-loci " << p.min_win_loci.val
+		   << ", not reported\n";
+	    }
+
+	  /*
+	   * Windowed output is one row per window per g per grouping, and the
+	   * tuple statistics multiply that by the number of tuples, so say how
+	   * large the files will be before anyone waits for them.
+	   */
+	  const int gRange = (p.g.set ? p.g.val : feasibleG) - 1;
+	  if(gRange > 0)
+	    {
+	      long long rows = (long long)(windows.size()) * gRange;
+	      if(do_rich) cout << "  richness rows:   " << rows*numDivs << "\n";
+	      if(do_priv) cout << "  private rows:    " << rows*numDivs << "\n";
+	      if(do_tuple)
+		{
+		  double nTuples = double(tuples.size());
+		  if(!p.tuple_file.set)
+		    {
+		      nTuples = 0;
+		      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+			{
+			  nTuples += nCk(numDivs,*i);
+			}
+		    }
+		  cout << "  tuple rows:      " << long(double(rows)*nTuples)
+		       << " (over " << long(nTuples) << " tuple"
+		       << (nTuples == 1 ? "" : "s") << ")\n";
+		}
+	    }
+	}
+
       if(do_tuple)
 	{
 	  if(p.tuple_file.set) cout << "Named tuples:           " << tuples.size() << "\n";
@@ -278,6 +354,41 @@ int main(int argc, char* argv[])
     {
       adzelog() << "Applying the missing-data filter...\n";
       filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val,lmap);
+    }
+
+  /*
+   * Windows are laid out over the loci that survived, so this has to follow
+   * filtering.  A window is a run of consecutive loci, which only means
+   * anything if the loci arrive in genome order.
+   */
+  vector<Window> windows;
+
+  if(p.windowed())
+    {
+      vector<string> names(p.loci.val);
+      for(int l = 0; l < p.loci.val; l++) names[l] = pop[0].getLocusName(l);
+
+      const string bad = lmap.checkOrder(names);
+      if(!bad.empty())
+	{
+	  cerr << "ERROR: " << bad << "\n";
+	  delete [] pop;
+	  return EXIT_DATA;
+	}
+
+      buildWindows(lmap,p,windows);
+
+      if(windows.empty())
+	{
+	  cerr << "ERROR: no window holds at least --min-window-loci "
+	       << p.min_win_loci.val << " loci.\n";
+	  delete [] pop;
+	  return EXIT_DATA;
+	}
+
+      adzelog() << "Laid out " << windows.size() << " window"
+		<< (windows.size() == 1 ? "" : "s") << " over "
+		<< p.loci.val << " loci.\n";
 
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());

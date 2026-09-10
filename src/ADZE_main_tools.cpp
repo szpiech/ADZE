@@ -244,20 +244,129 @@ void LocusMap::compact(const vector<char>& del)
 }
 
 /*
- * A window is a contiguous run of loci, so the loci must already be in
- * position order within each chromosome.  Returns the first locus that is not,
- * so the caller can name it.
+ * Windows are runs of consecutive loci, so each chromosome's loci must form
+ * one block and positions must increase inside it.  Rather than sorting --
+ * which would mean holding the whole dataset to reorder it -- say what is
+ * wrong and let the caller sort the input, which is one bcftools call.
  */
-bool LocusMap::ascending(int& badLocus) const
+string LocusMap::checkOrder(const vector<string>& locusName) const
 {
-  for(size_t l = 1; l < chrom.size(); l++)
+  vector<char> seen(chromName.size(),0);
+  ostringstream m;
+
+  for(size_t l = 0; l < chrom.size(); l++)
     {
-      if(chrom[l] != chrom[l-1]) continue;
-      if(pos[l] < pos[l-1]) { badLocus = int(l); return false; }
+      const string name = (l < locusName.size()) ? locusName[l] : string("?");
+
+      if(l == 0 || chrom[l] != chrom[l-1])
+	{
+	  if(seen[chrom[l]])
+	    {
+	      m << "chromosome " << chromName[chrom[l]] << " appears in more "
+		<< "than one block, starting again at locus " << name
+		<< ". Sort the input by chromosome and position.";
+	      return m.str();
+	    }
+	  seen[chrom[l]] = 1;
+	  continue;
+	}
+
+      if(pos[l] < pos[l-1])
+	{
+	  m << "locus " << name << " is at " << chromName[chrom[l]] << ":"
+	    << pos[l] << ", behind the previous locus at " << pos[l-1]
+	    << ". Sort the input by chromosome and position.";
+	  return m.str();
+	}
     }
 
-  badLocus = -1;
-  return true;
+  return "";
+}
+
+/*
+ * Lay the windows out over the surviving loci, one chromosome at a time so no
+ * window spans a boundary.
+ *
+ * Basepair windows are anchored at position 1 and advance by the step
+ * regardless of where the loci fall, so the same region gives the same
+ * intervals in every run and two datasets can be compared window by window.
+ * Locus windows count surviving loci instead, so their width in basepairs
+ * varies with locus density; their reported interval is the span of the loci
+ * they hold.
+ */
+long long buildWindows(const LocusMap& lmap, const ParamSet& p,
+		       vector<Window>& out)
+{
+  out.clear();
+
+  const int n = int(lmap.size());
+  long long sparse = 0;
+  if(n == 0) return 0;
+
+  int b = 0;
+  while(b < n)
+    {
+      int e = b;
+      while(e < n && lmap.chrom[e] == lmap.chrom[b]) e++;   //[b,e) = one chromosome
+
+      if(p.win_bp.set)
+	{
+	  const long long width = p.win_bp.val;
+	  const long long step = p.step_bp.val;
+	  const long long firstPos = lmap.pos[b];
+	  const long long lastPos = lmap.pos[e-1];
+
+	  //First window that can reach the first locus, counting from 1.
+	  long long k = (firstPos - 1) / step;
+	  if(k < 0) k = 0;
+
+	  int lo = b;
+	  for(long long start = 1 + k*step; start <= lastPos; start += step)
+	    {
+	      const long long stop = start + width - 1;
+
+	      while(lo < e && lmap.pos[lo] < start) lo++;
+	      int hi = lo;
+	      while(hi < e && lmap.pos[hi] <= stop) hi++;
+
+	      if(hi == lo) continue;                //empty window: not reported
+	      if(hi - lo < p.min_win_loci.val) { sparse++; continue; }
+
+	      Window w;
+	      w.chrom = lmap.chrom[b];
+	      w.start = start;
+	      w.end = stop;
+	      w.first = lo;
+	      w.last = hi;
+	      out.push_back(w);
+	    }
+	}
+      else
+	{
+	  const int width = int(p.win_loci.val);
+	  const int step = int(p.step_loci.val);
+
+	  for(int i = b; i < e; i += step)
+	    {
+	      int hi = i + width;
+	      if(hi > e) hi = e;
+
+	      if(hi - i < p.min_win_loci.val) { sparse++; continue; }
+
+	      Window w;
+	      w.chrom = lmap.chrom[b];
+	      w.start = lmap.pos[i];
+	      w.end = lmap.pos[hi-1];
+	      w.first = i;
+	      w.last = hi;
+	      out.push_back(w);
+	    }
+	}
+
+      b = e;
+    }
+
+  return sparse;
 }
 
 namespace {
