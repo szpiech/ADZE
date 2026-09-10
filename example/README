@@ -1,35 +1,64 @@
-*******************************************************************************
+===============================================================================
 
-			Allelic Diversity Analyzer 1.0
+			Allelic Diversity Analyzer -- example
 
-Thank you for downloading ADZE. Comments, problems, or bugs may be sent to 
-Zachary Szpiech at szpiechz@umich.edu.
+===============================================================================
 
-*******************************************************************************
+This directory holds the worked example from section 6.1 of the manual
+(../ADZE_Manual.pdf). Questions, problems and bug reports belong on the issue
+tracker: https://github.com/szpiech/ADZE/issues
 
-First time users should read through the manual and may want to follow the 
-examples described in section 6 to become better aquainted with ADZE's features
-and options.
+Input files
+-----------
 
-In addition to this README, the archive contains the following files.
+small_data.stru		11 diploid individuals in 3 groupings, typed at 5
+			loci, in STRUCTURE format. Five label columns
+			precede the genotypes; column 5 names the grouping.
+small_paramfile.txt	a version 1.0 parameter file for this data set, kept
+			as a demonstration that such files still work
 
-ADZE 			- the program executable
-ADZE_Manual.pdf 	- the manual
-small_data.stru 	- the datafile used in the example in section 6.1
-			  of the manual
-small_paramfile.txt	- the paramfile used in the example in section 6.1 
-			  of the manual
+Running it
+----------
 
-The next files included are created as a result of following the example in 
-section 6.1 of the manual.
+The parameter file still works as it always did, and the command line can
+override any of its keywords:
 
-small_r			- an R_OUT file
-small_r_fulldata	- a FULL_R file
-small_r_summary		- a _summary file
-small_p			- a P_OUT file
-small_p_fulldata	- a FULL_P file
-small_p_deletedloci	- a _deletedloci file
-small_c_2		- a C_OUT file
-small_c_2_fulldata	- a FULL_C file
+	adze small_paramfile.txt
 
-For full documentation of these files, refer to section 5 of the manual.
+None of the four dimensions the parameter file declares is required any more.
+The same analysis without a parameter file is
+
+	adze --data small_data.stru --group-col 5 --tolerance 0.2 \
+	     --combinations --tuples-k 2 --out-prefix small \
+	     --full-richness --full-private --full-tuples
+
+except for MAX_G, which is then resolved from the data instead of declared as
+8. The two runs agree wherever they overlap, and the private allelic richness
+and pair files are identical, but the richness files are not: the default is
+the largest g every grouping supports, which is 6 here because EUROPE has six
+gene copies, whereas declaring MAX_G 8 additionally reports AMERICA and
+EAST_ASIA at g = 7 and 8, where their own sample sizes reach. Nothing is
+private at a g that some grouping cannot reach, so the private and pair
+statistics stop at 6 either way.
+
+Add --dry-run to either command to see the detected layout, the per-grouping
+sample sizes and the largest feasible MAX_G without computing anything.
+
+Expected output
+---------------
+
+The remaining files are the published results of this example, produced with
+version 1.0. Version 2.0 reproduces the four numerical ones byte-for-byte:
+
+small_r			allelic richness		(--out-richness)
+small_p			private allelic richness	(--out-private)
+small_c_2		private alleles of grouping pairs (--out-tuples)
+small_p_deletedloci	the loci dropped by TOLERANCE 0.2
+
+The three *_fulldata files carry the same statistics at every locus. They
+differ from a current run in one word of their header line: the distributed
+copies say AVG where the source says MEAN, so they were produced by a build
+that predates that rename. small_r_summary echoes the parameters and the
+timing of each phase, and so differs from run to run.
+
+Section 5 of the manual documents all of these formats.

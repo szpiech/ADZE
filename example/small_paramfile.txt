@@ -36,8 +36,11 @@ C_OUT small_c           #Name of the private allelic richness of
 ###----Advanced Options----###
 MISSING -9           #Missing data representation
 
-TOLERANCE 1          #Filter loci with a grouping having more
-                     #than this fraction of missing data
+TOLERANCE 0.2        #Filter loci with a grouping having more
+                     #than this fraction of missing data.
+                     #0.2 drops D9S1825 and D14S1007, and is the
+                     #value that produced the result files
+                     #distributed alongside this paramfile.
 
 FULL_R 1             #Output allelic richness results for
                      #all loci?
@@ -51,23 +54,29 @@ FULL_C 1             #Output private allelic richness for
 PRINT_PROGRESS 1     #Track calculation progress on screen?
 
 ###----Command line arguments----###
-# -g MAX_G
-# -d DATA_LINES
-# -l LOCI
-# -nr NON_DATA_ROWS
-# -nc NON_DATA_COLS
-# -s GROUP_BY_COL
-# -f DATA_FILE
-# -r R_OUT
-# -p P_OUT
-# -c COMB
-# -k K_RANGE
-# -o COUT
-# -m MISSING
-# -t TOLERANCE
-# -tnocalc
-# -fr FULL_R
-# -fp FULL_P
-# -fc FULL_C
-# -pp PRINT_PROGRESS
+# Any keyword above can be overridden on the command line. Each keyword has a
+# long option, and the version 1.0 short flags are still accepted:
+#
+#   -f  DATA_FILE       --data            -r  R_OUT      --out-richness
+#   -g  MAX_G           --max-g           -p  P_OUT      --out-private
+#   -l  LOCI            --loci            -o  C_OUT      --out-tuples
+#   -d  DATA_LINES      --data-lines      -c  COMB       --combinations
+#   -nr NON_DATA_ROWS   --non-data-rows   -k  K_RANGE    --tuples-k
+#   -nc NON_DATA_COLS   --non-data-cols   -fr FULL_R     --full-richness
+#   -s  GROUP_BY_COL    --group-col       -fp FULL_P     --full-private
+#   -m  MISSING         --missing         -fc FULL_C     --full-tuples
+#   -t  TOLERANCE       --tolerance       -pp PRINT_...  --progress
+#
+#   -tnocalc  --tolerance-only    apply the filter, then stop
+#   -skipchk  --no-check          accepted, but validation is now free
+#
+# Options with no version 1.0 equivalent: --out-prefix, --stat, --pops,
+# --exclude-pops, --tuples, --tsv, --dry-run, --threads, --quiet, --params.
+# Run "adze --help" for the current list with descriptions.
+#
+# None of the four dimensions above is required any more: LOCI, DATA_LINES and
+# NON_DATA_COLS are measured from the datafile, GROUP_BY_COL defaults to the
+# last label column, and MAX_G defaults to the largest value the surviving loci
+# support. They are kept here because this file doubles as a check that version
+# 1.0 paramfiles still work.
 ###----End of file----###
