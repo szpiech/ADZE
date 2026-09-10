@@ -1,7 +1,7 @@
 # Makefile for ADZE: Allelic Diversity Analyzer
 
 #G++FLAG = -g
-G++FLAG = -O2
+G++FLAG = -O2 -std=c++17
 I_PATH = /opt/local/include
 L_PATH = /opt/local/lib
 
