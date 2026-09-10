@@ -448,12 +448,19 @@ the two runs to prefer is a judgement about the data: the first uses all five
 loci but compares populations only at $g \leq 3$; the second compares them over
 a much wider range of $g$ using three loci.
 
-Running the same analysis from the distributed parameter file, which declares
-\texttt{MAX\_G 8} and all four dimensions explicitly, gives identical results
-for the loci and $g$ values that are defined:
+The parameter file distributed with the example, \texttt{small\_paramfile.txt},
+runs the same analysis in version 1.0's style, declaring all four dimensions
+along with \texttt{MAX\_G 8} and \texttt{TOLERANCE 0.2}:
 \begin{Verbatim}[xleftmargin=1em]
-adze example/small_paramfile.txt --tolerance 0.2
+adze small_paramfile.txt
 \end{Verbatim}
+\noindent Its results agree with the run above wherever the two overlap, and
+the private allelic richness files are identical. The richness files are not:
+declaring \texttt{MAX\_G 8} reports \texttt{AMERICA} and \texttt{EAST\_ASIA}
+at $g = 7$ and $8$, which their own sample sizes reach, whereas the default
+stops at the largest $g$ that \emph{every} grouping supports. Private allelic
+richness stops at 6 in both, because no allele can be private at a $g$ that
+some grouping cannot reach.
 
 \subsection{A larger data set}
 
