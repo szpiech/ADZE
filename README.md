@@ -69,6 +69,18 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 Results do not depend on `--threads`: loci are processed independently and
 reduced in locus order, so any thread count gives bit-identical output.
 
+## Documentation
+
+`ADZE_Manual.pdf` documents the estimators, the input format, every option, the
+output files, and what changed from version 1.0. Its sources are in `doc/`; the
+option reference is generated from the option table in the source, so it cannot
+drift from the parser:
+
+```sh
+make -C doc            # build doc/ADZE_Manual.pdf (needs pdflatex)
+make -C doc install    # refresh ADZE_Manual.pdf at the repository root
+```
+
 ## Testing
 
 `test/regress.py` is a differential test against a reference build: it runs
