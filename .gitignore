@@ -6,3 +6,7 @@
 /build/
 # test scratch
 /test/work/
+
+# python bytecode
+__pycache__/
+*.pyc
