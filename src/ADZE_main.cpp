@@ -94,6 +94,17 @@ int main(int argc, char* argv[])
 
   ADZE_QUIET = p.quiet.val;
 
+#ifdef _OPENMP
+  omp_set_num_threads(p.threads.val);
+#else
+  if(p.threads.set && p.threads.val > 1)
+    {
+      cerr << "WARNING: this build has no OpenMP support; --threads "
+	   << p.threads.val << " ignored.\n";
+      p.threads.val = 1;
+    }
+#endif
+
   //Progress bars are for a terminal; a redirected log gets none by default.
   if(!p.pp.set) p.pp.val = stderrIsTerminal() && !p.quiet.val;
   if(p.quiet.val) p.pp.val = 0;

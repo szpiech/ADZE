@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <map>
 #include <unordered_map>
-#include <gsl/gsl_combination.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include <chrono>
 #include <iomanip>
 #include "ADZE_binom.h"

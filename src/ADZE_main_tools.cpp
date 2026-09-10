@@ -656,22 +656,31 @@ void buildQTable(Population pop[], int numDivs, int locus, int numAlleles,
 /*
  * Every k-subset of the groupings, in lexicographic order -- the order 1.0's
  * gsl_combination walk produced.
+ *
+ * This is the only thing ADZE 1.0 used GSL for, so generating the subsets here
+ * removes the program's sole external dependency.
  */
 void buildKTuples(int numDivs, int k, vector< vector<int> >& out)
 {
   out.clear();
+  if(k < 1 || k > numDivs) return;
 
-  gsl_combination* c = gsl_combination_calloc(numDivs,k);
-  gsl_combination_init_first(c);
+  vector<int> c(k);
+  for(int i = 0; i < k; i++) c[i] = i;
 
-  do
+  while(1)
     {
-      vector<int> t(k);
-      for(int j = 0; j < k; j++) t[j] = int(gsl_combination_get(c,j));
-      out.push_back(t);
-    }while(gsl_combination_next(c) == GSL_SUCCESS);
+      out.push_back(c);
 
-  gsl_combination_free(c);
+      //Advance the rightmost index that has room, then repack those after it.
+      int i = k-1;
+      while(i >= 0 && c[i] == numDivs-k+i) i--;
+      if(i < 0) break;
+
+      c[i]++;
+      for(int j = i+1; j < k; j++) c[j] = c[j-1]+1;
+    }
+
   return;
 }
 
@@ -823,7 +832,6 @@ void calcPgTuples(Population pop[], int numDivs,
   vector<string> names(widest);
   vector<char> inTuple(numDivs,0);
   vector<double> pgcomb(size_t(gStride) * numLoci, 0.0); //[g][locus]
-  vector<double> q;
 
   for(int m = 0; m < tot_m; m++)
     {
@@ -843,6 +851,15 @@ void calcPgTuples(Population pop[], int numDivs,
       const string all_names =
 	combineNames(&names[0],k,param.tsv.val ? ',' : ' ');
 
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+      {
+      vector<double> q; //one per thread
+
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
       for(int locus = 0; locus < numLoci; locus++)
 	{
 	  const int numAlleles = pop[0].getNjiColLength(locus);
@@ -879,8 +896,15 @@ void calcPgTuples(Population pop[], int numDivs,
 	      pgcomb[size_t(g)*numLoci + locus] = pg;
 	    }
 
-	  if(param.pp.val) bar.adv(gLast-1);
+	  if(param.pp.val)
+	    {
+#ifdef _OPENMP
+#pragma omp critical(progress)
+#endif
+	      bar.adv(gLast-1);
+	    }
 	}
+      } //end parallel region
 
       for(int g = 2; g <= gLast; g++)
 	{
@@ -961,7 +985,6 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   const int gStride = gLast + 1;
 
   vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
-  vector<double> q;
 
   ProgressBar bar(&adzelog(),double(numDivs)*(gLast-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
@@ -980,6 +1003,17 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
    */
   for(int j = 0; j < numDivs; j++)
     {
+      //Independent per locus; see calcAllAgs on why threading cannot move a
+      //reported value.
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+      {
+      vector<double> q; //one per thread
+
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
       for(int locus = 0; locus < numLoci; locus++)
 	{
 	  const int numAlleles = pop[j].getNjiColLength(locus);
@@ -1009,8 +1043,15 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	      pg[size_t(g)*numLoci + locus] = total;
 	    }
 
-	  if(param.pp.val) bar.adv(gLast-1);
+	  if(param.pp.val)
+	    {
+#ifdef _OPENMP
+#pragma omp critical(progress)
+#endif
+	      bar.adv(gLast-1);
+	    }
 	}
+      } //end parallel region
 
       for(int g = 2; g <= gLast; g++)
 	{
@@ -1078,7 +1119,6 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   vector<double> ag(size_t(gStride) * numLoci, 0.0); //[g][locus]
-  vector<double> q;
 
   /*
    * Calculate the allelic richness
@@ -1095,6 +1135,20 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
    */
   for(int j = 0; j < numDivs; j++)
     {
+      /*
+       * Loci are independent, and each writes only its own column of ag, so
+       * the results do not depend on the thread count: the reductions over
+       * loci happen afterwards, in ascending locus order, inside Stats.
+       */
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
+      {
+      vector<double> q; //one per thread
+
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
       for(int locus = 0; locus < numLoci; locus++)
 	{
 	  const int numAlleles = pop[j].getNjiColLength(locus);
@@ -1119,8 +1173,15 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	      ag[size_t(g)*numLoci + locus] = total;
 	    }
 
-	  if(param.pp.val) bar.adv(gTop-1);
+	  if(param.pp.val)
+	    {
+#ifdef _OPENMP
+#pragma omp critical(progress)
+#endif
+	      bar.adv(gTop-1);
+	    }
 	}
+      } //end parallel region
 
       for(int g = 2; g <= gTop; g++)
 	{

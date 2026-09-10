@@ -1,48 +1,60 @@
-# Makefile for ADZE: Allelic Diversity Analyzer
+# adze build
+#
+# Plain make; see CMakeLists.txt for the CMake build, which detects OpenMP and
+# provides an install target.
+#
+#   make                      serial build
+#   make OPENMP=1             GCC or Linux clang
+#   make OPENMP=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
+#                             Apple clang (needs libomp installed)
+#   make clean
+#
+# There is no external dependency: 1.0 needed GSL for one combination iterator.
 
-#G++FLAG = -g
-G++FLAG = -O2 -std=c++17
-I_PATH = /opt/local/include
-L_PATH = /opt/local/lib
+CXX      ?= g++
+CXXFLAGS ?= -O2 -std=c++17 -Wall
+LDLIBS   ?= -lm
+PREFIX   ?= /usr/local
 
-#For static linking
-#LINK_OPTS = $(L_PATH)/libgsl.a $(L_PATH)/libgslcblas.a
+OMPFLAGS ?= -fopenmp
+OMPLIBS  ?= -fopenmp
 
-#For dynamic linking
-LINK_OPTS = -L$(L_PATH) -lgsl -lgslcblas
+ifdef OPENMP
+CXXFLAGS += $(OMPFLAGS)
+LDLIBS   += $(OMPLIBS)
+endif
 
-adze-1.0 : ADZE_main.o ADZE_pfile.o ADZE_pop.o ADZE_stats.o ADZE_binom.o\
-	ADZE_pbar.o ADZE_main_tools.o
-	g++ -o adze-1.0 ADZE_main.o ADZE_pfile.o\
-		ADZE_stats.o ADZE_pop.o ADZE_binom.o ADZE_pbar.o\
-		ADZE_main_tools.o -I$(I_PATH) $(LINK_OPTS) -lm
+# Set I_PATH/L_PATH if headers or libraries live outside the default paths.
+ifdef I_PATH
+CXXFLAGS += -I$(I_PATH)
+endif
+ifdef L_PATH
+LDFLAGS  += -L$(L_PATH)
+endif
 
-ADZE_main.o : ADZE_main.cpp ADZE_main_tools.cpp
-	g++ $(G++FLAG) -c ADZE_main.cpp -I$(I_PATH)
+TARGET  = adze
+SOURCES = ADZE_main.cpp ADZE_main_tools.cpp ADZE_pop.cpp ADZE_pfile.cpp \
+          ADZE_stats.cpp ADZE_pbar.cpp ADZE_binom.cpp
+OBJECTS = $(SOURCES:.cpp=.o)
+HEADERS = ADZE_main_tools.h ADZE_pop.h ADZE_pfile.h ADZE_stats.h \
+          ADZE_pbar.h ADZE_binom.h
 
-ADZE_pfile.o : ADZE_pfile.cpp
-	g++ $(G++FLAG) -c ADZE_pfile.cpp
+all: $(TARGET)
 
-ADZE_stats.o : ADZE_stats.cpp
-	g++ $(G++FLAG) -c ADZE_stats.cpp
+$(TARGET): $(OBJECTS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
 
-ADZE_pop.o : ADZE_pop.cpp
-	g++ $(G++FLAG) -c ADZE_pop.cpp
+# Every object depends on every header. The headers are small and few, and 1.0's
+# Makefile listed no header dependencies at all -- so editing a header left
+# stale objects linked against a different struct layout.
+%.o: %.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-ADZE_binom.o : ADZE_binom.cpp
-	g++ $(G++FLAG) -c ADZE_binom.cpp
+install: $(TARGET)
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp $(TARGET) $(DESTDIR)$(PREFIX)/bin/
 
-ADZE_pbar.o : ADZE_pbar.cpp
-	g++ $(G++FLAG) -c ADZE_pbar.cpp
+clean:
+	rm -f $(OBJECTS) $(TARGET)
 
-ADZE_main_tools.o : ADZE_main_tools.cpp
-	g++ $(G++FLAG) -c ADZE_main_tools.cpp -I$(I_PATH)
-
-clean :
-	rm ADZE_main.o
-	rm ADZE_pfile.o
-	rm ADZE_stats.o
-	rm ADZE_pop.o
-	rm ADZE_binom.o
-	rm ADZE_main_tools.o
-	rm ADZE_pbar.o
+.PHONY: all install clean
