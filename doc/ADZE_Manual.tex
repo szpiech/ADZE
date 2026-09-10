@@ -358,6 +358,7 @@ the same VCF can be analysed at several levels by swapping the map file.
 a way of subsetting output.
 
 \subsection{Missing data and locus filtering}
+\label{sec:filter}
 \label{sec:tolerance}
 
 An allele code equal to \flag{--missing} (default \texttt{-9}) is treated as
@@ -480,6 +481,115 @@ here'' from ``not run''.
 4 & data error: the file disagrees with itself or with the parameters \\
 \bottomrule
 \end{tabular}
+
+\section{Sliding windows}
+\label{sec:windows}
+
+Every statistic in section~\ref{sec:intro} can be reported window by window
+along the genome instead of, or as well as, once for the whole dataset.
+
+\subsection{What a windowed statistic is here}
+
+For each window, \prog\ takes the loci inside it and reports the same mean,
+variance and standard error over those loci that it would report over all of
+them. Nothing about the estimators changes: $\hat{\alpha}_{jg}$ and
+$\hat{\pi}_{jg}$ are expectations for a single locus, and a window is simply a
+different set to average over.
+
+Two consequences are worth stating plainly. The statistic has no haplotype or
+linkage component --- it does not know that the loci in a window are near each
+other, only that they were grouped together --- so a window here is a
+smoothing device, not a measure of local haplotype structure. And the
+variance and standard error are taken across the loci in the window, so with
+few loci they are noisy; with one locus the variance is undefined and
+\prog\ writes \texttt{nan}. Use \flag{--min-window-loci} to set a floor.
+
+\subsection{Coordinates}
+
+A window is a range of the genome, so every locus has to be placed on it.
+With VCF input the coordinates come from \texttt{CHROM} and \texttt{POS}. The
+\structureprog\ layout carries none, so \flag{--loci-map} supplies them:
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+# locus   chromosome   position
+L0        chr1         5000
+L1        chr1         10000
+L2        chr2         5000
+\end{Verbatim}
+
+\noindent Whitespace-separated, \texttt{\#} starts a comment, further columns
+are ignored. Every locus in the data must appear: a window over loci whose
+positions are unknown would be a window in name only, so a missing coordinate
+stops the run rather than producing a quietly meaningless scan. Loci must
+arrive in genome order --- positions increasing within a chromosome, and each
+chromosome in one block --- and \prog\ says which locus breaks the order
+rather than sorting a dataset it is streaming.
+
+\subsection{Defining the windows}
+
+A window is measured either in basepairs or in loci, never both:
+
+\begin{description}[leftmargin=2em,style=nextline]
+\item[\flag{--window-bp} \textit{N}] windows \textit{N} basepairs wide,
+  anchored at position~1 and advancing by \flag{--step-bp}. The intervals do
+  not depend on where the loci fall, so the same region gives the same windows
+  in every run and two datasets can be compared window by window. How many
+  loci a window holds varies with locus density.
+\item[\flag{--window-loci} \textit{N}] windows of \textit{N} surviving loci,
+  advancing by \flag{--step-loci}. Each window carries the same weight in the
+  averaging; its width in basepairs varies with density. The interval reported
+  is the span of the loci it holds.
+\end{description}
+
+\noindent Each step defaults to its window width, so the default is a
+non-overlapping tiling; a step smaller than the width is the sliding case. No
+window crosses a chromosome. Windows are laid out over the loci that survive
+the missing-data filter (section~\ref{sec:filter}), so a locus dropped there
+is absent from every window, and a locus-counted window of $N$ means $N$
+surviving loci.
+
+\flag{--min-window-loci} \textit{N} suppresses windows holding fewer than
+\textit{N} loci; the default of 1 reports every window that holds anything.
+Windows holding no loci at all are never reported.
+
+\subsection{\texorpdfstring{$g$}{g} is fixed across the scan}
+\label{sec:wing}
+
+\texttt{MAX\_G} is resolved genome-wide, as it is for the whole-dataset
+statistics: the largest standardized sample size every grouping supports at
+every surviving locus. It is not re-resolved per window. A window in a
+sample-rich region is therefore not reported at a larger $g$ than the rest of
+the scan, which is what makes windows comparable with each other --- the point
+of a scan. Since a set containing a locus that cannot reach $g$ is undefined
+at that $g$, this also means that under the default every window is defined
+at every reported $g$. If you raise \texttt{MAX\_G} past what some locus
+supports, the windows containing such loci are written as \texttt{NA} rather
+than dropped, so the file keeps one row per window per $g$.
+
+\subsection{Output}
+
+Each requested statistic writes an extra file named by appending
+\texttt{\_windows}: with \flag{--out-prefix scan}, \texttt{scan.richness}
+gains \texttt{scan.richness\_windows}. The whole-dataset files are written
+exactly as before; asking for windows never changes them.
+
+Window files always carry a header and are always tab-separated, whatever
+\flag{--tsv} says --- they are new output with no version 1.0 consumer to stay
+compatible with, and a scan is read by machine. The columns are
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+CHROM  START  END  POP_GROUPING  G  NUM_LOCI  MEAN  VAR  STD_ERR
+\end{Verbatim}
+
+\noindent with \texttt{TUPLE} in place of \texttt{POP\_GROUPING} in the tuple
+file, where the grouping names are joined with commas so the label stays one
+field. Rows are ordered by grouping, then by $g$, then along the genome, so
+the track for one grouping at one $g$ is a contiguous block.
+
+Windowed tuple output is large: one row per window per $g$ per tuple.
+\flag{--dry-run} reports the row count each statistic would write, along with
+the window count and how many windows fell below the threshold, before
+anything is computed.
 
 \section{Examples}
 
@@ -610,6 +720,59 @@ adze --data small_data.stru --group-col 5 --tuples tuples.txt \
 they appear in the data file; \texttt{\#} starts a comment. This computes only
 the tuples named, at any mixture of sizes.
 
+
+\subsection{A genome scan}
+\label{sec:scanexample}
+
+The generator that drives the test suite writes coordinates as well as
+genotypes, so a scan can be reproduced from the repository alone. This makes
+60 loci spaced 5\,kb apart over two chromosomes, in four groupings of twelve
+diploid individuals:
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+python3 -c "import sys; sys.path.insert(0,'test'); import gen_data
+gen_data.write_pair('scan', npops=4, nind=12, nloci=60, nall=6,
+                    missing=0.03, seed=3, chroms=2, spacing=5000)"
+\end{Verbatim}
+
+\noindent Ask what a 50\,kb window stepping 25\,kb would cover before running
+it:
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+adze --data scan.vcf --samples scan.samples \
+     --window-bp 50000 --step-bp 25000 --dry-run
+\end{Verbatim}
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+Largest feasible MAX_G: 20
+MAX_G to be used:       the largest feasible
+Windows:          12 of 50000 bp, step 25000
+  loci per window: 5-10
+  richness rows:   912
+  private rows:    912
+\end{Verbatim}
+
+\noindent Twelve windows, none thinner than five loci, and $g$ running to 20
+everywhere because every grouping has 24 gene copies and the sparsest locus
+still carries 20. Then run it, with a floor on how thin a window may be:
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+adze --data scan.vcf --samples scan.samples \
+     --window-bp 50000 --step-bp 25000 --min-window-loci 3 \
+     --out-prefix scan
+\end{Verbatim}
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+CHROM  START   END     POP_GROUPING  G  NUM_LOCI  MEAN     VAR         STD_ERR
+chr1   1       50000   POP0          2  10        1.64173  0.00827836  0.0287721
+chr1   25001   75000   POP0          2  10        1.66457  0.00638622  0.025271
+chr1   50001   100000  POP0          2  10        1.66175  0.0103564   0.0321814
+\end{Verbatim}
+
+\noindent The consecutive windows overlap by 25\,kb, so each interior locus
+contributes to two of them. \texttt{scan.richness} holds the whole-dataset
+figures unchanged alongside.
+
 \section{Performance and threading}
 
 The per-locus loops of all three statistics can be spread over threads with
@@ -677,6 +840,10 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
+\item Sliding-window statistics (section~\ref{sec:windows}): \flag{--window-bp}
+  or \flag{--window-loci} with a matching step, \flag{--min-window-loci}, and
+  \flag{--loci-map} to give \structureprog\ input the coordinates a window
+  needs. Version 1.0 reported each statistic once for the whole dataset.
 \item New: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
   \flag{--exclude-pops}, \flag{--tuples}, \flag{--tsv}, \flag{--dry-run},
   \flag{--threads}, \flag{--quiet}.
@@ -712,6 +879,14 @@ the distributed example. All 69 comparable cases are byte-identical; the
 remaining cases are those in which version 1.0 crashes or reports statistics
 over zero loci, and so has no output to compare. The test is in
 \texttt{test/regress.py} and needs a version 1.0 binary to compare against.
+
+The windowed statistics have no version 1.0 counterpart either, so
+\texttt{test/windows.py} checks them against the layout they claim to cover:
+one window over a single-chromosome dataset must reproduce the whole-dataset
+output exactly, every window's mean and variance must match a recomputation
+from the per-locus columns, the windows must tile as asked and stay inside a
+chromosome, basepair and locus windows must agree on evenly spaced loci, and
+the inputs a window cannot be defined over must be refused.
 
 VCF input has no version 1.0 counterpart, so it is checked differently:
 \texttt{test/formats.py} writes one set of genotypes as \structureprog, as

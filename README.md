@@ -31,6 +31,8 @@ make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
 ```sh
 adze --data mydata.stru --group-col 5 --out-prefix mypops
 adze --data cohort.vcf.gz --samples populations.tsv --out-prefix cohort
+adze --data cohort.vcf.gz --samples populations.tsv \
+     --window-bp 100000 --step-bp 25000 --out-prefix scan
 adze --help
 ```
 
@@ -49,6 +51,26 @@ Two are read, chosen by `--format` or, by default, by the file name:
 
 The same genotypes in either format give byte-identical results; `test/formats.py`
 checks that.
+
+### Sliding windows
+
+Any of the three statistics can be reported along the genome instead of once
+for the whole dataset. A window is measured either in basepairs (`--window-bp`,
+anchored at position 1 so the intervals do not depend on where the loci fall)
+or in surviving loci (`--window-loci`), never both; each `--step-*` defaults to
+its window width, so the default is a non-overlapping tiling. No window crosses
+a chromosome.
+
+Each statistic then writes an extra `*_windows` file — always with a header,
+always tab-separated — with columns `CHROM START END POP_GROUPING G NUM_LOCI
+MEAN VAR STD_ERR`. The whole-dataset files are unchanged.
+
+Windows need coordinates for every locus: VCF supplies them, STRUCTURE input
+needs `--loci-map`, and a locus with no coordinate is an error rather than a
+locus quietly left out. `MAX_G` stays resolved genome-wide so every window
+covers the same range of *g* and the scan is comparable end to end. Loci must
+be in genome order; ADZE says which locus breaks the order rather than sorting
+the file for you.
 
 `LOCI`, `DATA_LINES` and `NON_DATA_COLS` are measured from the input file, and
 `MAX_G` defaults to the largest standardized sample size the surviving loci
@@ -80,6 +102,10 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 | `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) |
 | `--samples FILE` | sample-to-grouping map, required for VCF input |
 | `--format auto\|structure\|vcf` | input format; `auto` reads the file name |
+| `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci |
+| `--step-bp N` / `--step-loci N` | how far a window advances (default: its own width, i.e. no overlap) |
+| `--min-window-loci N` | skip windows holding fewer than N loci |
+| `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input |
 | `--tolerance X` | drop loci where any grouping exceeds fraction X missing |
 | `--tsv` | tab-separated output with a header row and `NA` for undefined values |
 | `--threads N` | parallelize the per-locus loops (OpenMP builds) |
