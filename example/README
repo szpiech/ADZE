@@ -1,0 +1,35 @@
+*******************************************************************************
+
+			Allelic Diversity Analyzer 1.0
+
+Thank you for downloading ADZE. Comments, problems, or bugs may be sent to 
+Zachary Szpiech at szpiechz@umich.edu.
+
+*******************************************************************************
+
+First time users should read through the manual and may want to follow the 
+examples described in section 6 to become better aquainted with ADZE's features
+and options.
+
+In addition to this README, the archive contains the following files.
+
+ADZE 			- the program executable
+ADZE_Manual.pdf 	- the manual
+small_data.stru 	- the datafile used in the example in section 6.1
+			  of the manual
+small_paramfile.txt	- the paramfile used in the example in section 6.1 
+			  of the manual
+
+The next files included are created as a result of following the example in 
+section 6.1 of the manual.
+
+small_r			- an R_OUT file
+small_r_fulldata	- a FULL_R file
+small_r_summary		- a _summary file
+small_p			- a P_OUT file
+small_p_fulldata	- a FULL_P file
+small_p_deletedloci	- a _deletedloci file
+small_c_2		- a C_OUT file
+small_c_2_fulldata	- a FULL_C file
+
+For full documentation of these files, refer to section 5 of the manual.

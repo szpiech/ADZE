@@ -1,0 +1,73 @@
+# This is a parameter file for ADZE.
+# The entire line after a '#' will be ignored.
+
+###----Main Parameters----###
+MAX_G 8               #Max standardized sample size
+
+DATA_LINES 22          #Number of lines of data
+
+LOCI 5                #Number of loci
+
+NON_DATA_ROWS 1       #Number of rows preceeding data
+                     #including at least the locus names
+
+NON_DATA_COLS 5       #Number of classifier columns
+                     #at the beginning of each data line
+
+GROUP_BY_COL 5        #The column number by which to
+                     #group the data
+
+DATA_FILE small_data.stru       #Name of the datafile
+
+R_OUT small_r           #Name of the allelic richness output file
+
+P_OUT small_p           #Name of the private allelic richness
+                     #output file
+
+###----Combination Parameters----###
+COMB 1               #Calculate private allelic richness for
+                     #combinations of groupings?
+
+K_RANGE 2             #A listing of combinations to calculate
+
+C_OUT small_c           #Name of the private allelic richness of
+                     #combinations output file
+
+###----Advanced Options----###
+MISSING -9           #Missing data representation
+
+TOLERANCE 1          #Filter loci with a grouping having more
+                     #than this fraction of missing data
+
+FULL_R 1             #Output allelic richness results for
+                     #all loci?
+
+FULL_P 1             #Output private allelic richness results
+                     #for all loci?
+
+FULL_C 1             #Output private allelic richness for
+                     #combinations results for all loci?
+
+PRINT_PROGRESS 1     #Track calculation progress on screen?
+
+###----Command line arguments----###
+# -g MAX_G
+# -d DATA_LINES
+# -l LOCI
+# -nr NON_DATA_ROWS
+# -nc NON_DATA_COLS
+# -s GROUP_BY_COL
+# -f DATA_FILE
+# -r R_OUT
+# -p P_OUT
+# -c COMB
+# -k K_RANGE
+# -o COUT
+# -m MISSING
+# -t TOLERANCE
+# -tnocalc
+# -fr FULL_R
+# -fp FULL_P
+# -fc FULL_C
+# -pp PRINT_PROGRESS
+###----End of file----###

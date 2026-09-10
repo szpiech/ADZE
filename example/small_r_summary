@@ -1,0 +1,27 @@
+###----Main Parameters----###
+MAX_G 8
+DATA_LINES 22
+LOCI 5
+NON_DATA_ROWS 1
+NON_DATA_COLS 5
+GROUP_BY_COL 5
+DATA_FILE small_data.stru
+R_OUT small_r
+P_OUT small_p
+
+###----Combination Parameters----###
+COMB 1
+K_RANGE 2
+C_OUT small_c
+
+###-----------Advanced Options-----------###
+MISSING -9
+TOLERANCE 0.2
+FULL_R 1
+FULL_P 1
+FULL_C 1
+PRINT_PROGRESS 1
+Total alleles completed at (d:h:m:s) 0:0:0:0
+Private alleles completed at (d:h:m:s) 0:0:0:0
+All 2-tuples completed at (d:h:m:s) 0:0:0:0
+ADZE finished in (d:h:m:s) 0:0:0:0
