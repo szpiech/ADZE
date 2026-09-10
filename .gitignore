@@ -1,0 +1,8 @@
+# build output
+*.o
+*.a
+/src/adze
+/src/adze-1.0
+/build/
+# test scratch
+/test/work/
