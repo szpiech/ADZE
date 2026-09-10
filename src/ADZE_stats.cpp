@@ -117,19 +117,24 @@ void Stats::putData(double* d,int l)
   return;
 }
 
-void Stats::printStats(ostream& out,string name,int g)
+/*
+ * One result row.  In legacy format a row whose value is undefined at this g
+ * is omitted entirely, so a consumer cannot tell "not computable here" from
+ * "not run"; with tsv, the row is written with NA in the value columns and the
+ * fields are tab-separated under a header.
+ */
+void Stats::printStats(ostream& out,string name,int g,bool tsv)
 {
-  if(avg == -9 || var == -9 || std_err == -9)
-    {
-      return;
-    }
-  
-  out << name << " "
-      << g << " "
-      << numLoci << " "
-      << avg << " "
-      << var << " "
-      << std_err << endl;
+  const bool undefined = (avg == -9 || var == -9 || std_err == -9);
+
+  if(undefined && !tsv) return;
+
+  const char sep = tsv ? '\t' : ' ';
+
+  out << name << sep << g << sep << numLoci << sep;
+
+  if(undefined) out << "NA" << sep << "NA" << sep << "NA" << endl;
+  else out << avg << sep << var << sep << std_err << endl;
 
   return;
 }

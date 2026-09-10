@@ -19,7 +19,7 @@ private:
 
 public:
   //  void allocate(int,int);
-  void printStats(ostream&,string,int);
+  void printStats(ostream&,string,int,bool tsv = 0);
   void printData(ostream&,string,int);
   void calcAvg();
   void calcVar();

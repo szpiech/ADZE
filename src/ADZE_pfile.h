@@ -1,6 +1,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <string>
+#include <vector>
 #include <fstream>
 #include <iostream>
 
@@ -8,18 +9,41 @@ using namespace std;
 
 enum{FALSE,TRUE};
 
+/*
+ * Every parameter is described exactly once, in the table in ADZE_pfile.cpp:
+ * its paramfile keyword, its long option, the 1.0 short flag it replaces, its
+ * type, and its help text.  The parser, the --help text and the paramfile
+ * template are all generated from that one table, so they cannot drift apart
+ * the way 1.0's hand-written template drifted from its argv scanner.
+ */
 enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
-       MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK};
+     MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
+     OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,TSV,DRY_RUN,QUIET,THREADS,PARAMS,
+     LABEL_SIZE};
 
-const int LABEL_SIZE = 20;
-const string CMD_LABEL[] = {"-g","-l","-nr","-nc","-d","-s","-t","-k","-f",
-			    "-r","-p","-o","-m","-c","-fr","-fp","-fc","-pp",
-			    "-tnocalc","-skipchk"};
-const string LABEL[] = {"MAX_G","LOCI","NON_DATA_ROWS","NON_DATA_COLS",
-			"DATA_LINES","GROUP_BY_COL","TOLERANCE","K_RANGE",
-			"DATA_FILE","R_OUT","P_OUT","C_OUT","MISSING","COMB",
-			"FULL_R","FULL_P","FULL_C","PRINT_PROGRESS","TNC",
-			"SKIP_CHK"};
+enum OptType{OPT_INT,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
+
+struct OptSpec
+{
+  int id;
+  const char* key;     //paramfile keyword, 0 if command line only
+  const char* lng;     //long option
+  const char* legacy;  //1.0 short flag, 0 if none
+  OptType type;
+  const char* arg;     //argument placeholder, 0 for a switch
+  const char* section;
+  const char* help;
+};
+
+extern const char* ADZE_VERSION;
+extern const OptSpec OPTIONS[];
+extern const int NUM_OPTIONS;
+
+//Exit statuses, so a wrapper script can tell the failures apart.
+const int EXIT_OK = 0;
+const int EXIT_USAGE = 2;   //bad command line or paramfile
+const int EXIT_IO = 3;      //could not read or write a file
+const int EXIT_DATA = 4;    //the data file disagrees with itself or the params
 
 class BAD_FILE{}; //exception class
 class BAD_PARAM{}; 
@@ -29,58 +53,65 @@ class ParamSet
   template<class T> class Param
     {
       public:
-      bool cl;
+      bool cl;   //set on the command line (overrides the paramfile)
+      bool set;  //given at all (as opposed to defaulted)
       T val;
+      Param() : cl(0), set(0) {}
     };
 
-  ifstream pin;
-
-  bool SKIP_LABEL[LABEL_SIZE];
   bool LABEL_SEEN[LABEL_SIZE];
+  bool LABEL_CL[LABEL_SIZE];   //given on the command line
 
-  bool allWhiteSpace(string);
   bool isint(string);
   bool isdouble(string);
   bool isbool(string);
-  string replaceWhite(string);
   bool valid();
-  bool isgoodstr(string);
-  void storeVal(string,string,bool cmd = 0);
-  bool validCMD(string);
-  int strtoen(string);
-  bool a_label(string);
+  void storeVal(int id,const string& val,bool cmd);
   bool isvalidk(string);
-  string eraseWhite(string);
-  //string eraseBackWhite(string);
+  static string trim(const string& s);
+  const OptSpec* byKey(const string& key) const;
+  const OptSpec* byFlag(const string& flag) const;
 
  public:
   
-  /*0*/  Param<int> g;
-  /*1*/ Param<int> loci;
-  /*2*/  Param<int> nd_rows;
-  /*3*/ Param<int> nd_cols;
-  /*4*/ Param<int> dlines;
-  /*5*/ Param<int> sort_by;
-  /*6*/ Param<double> tol;
-  /*7*/ Param<string> k;
-  /*8*/ Param<string> dfile;
-  /*9*/ Param<string> r_out;
-  /*10*/ Param<string> p_out;
-  /*11*/ Param<string> c_out;
-  /*12*/ Param<string> miss;
-  /*13*/ Param<bool> comb;
-  /*14*/ Param<bool> full_r;
-  /*15*/ Param<bool> full_p;
-  /*16*/ Param<bool> full_c;
-  /*17*/ Param<bool> pp;
-  /*18*/ Param<bool> tnc;
-  /*19*/ Param<bool> skip_chk;
-  
+  Param<int> g;
+  Param<int> loci;
+  Param<int> nd_rows;
+  Param<int> nd_cols;
+  Param<int> dlines;
+  Param<int> sort_by;
+  Param<double> tol;
+  Param<string> k;
+  Param<string> dfile;
+  Param<string> r_out;
+  Param<string> p_out;
+  Param<string> c_out;
+  Param<string> miss;
+  Param<bool> comb;
+  Param<bool> full_r;
+  Param<bool> full_p;
+  Param<bool> full_c;
+  Param<bool> pp;
+  Param<bool> tnc;
+  Param<bool> skip_chk;
+  Param<string> out_prefix;
+  Param<string> stat;
+  Param<string> pops;
+  Param<string> expops;
+  Param<string> tuple_file;
+  Param<bool> tsv;
+  Param<bool> dry_run;
+  Param<bool> quiet;
+  Param<int> threads;
+  Param<string> params;
+
   ParamSet();
-  void read();
+  void read(const string& file);      //read a paramfile
   void echo(ostream& out);
-  void CMDread(int,char**);
-  void open(char*);
-  void close();
-  void makeParamFile();
+  void CMDread(int,char**);           //parse the command line
+  bool finish();                      //apply defaults, validate
+  void makeParamFile(const string& file);
+  string summaryName() const;
+  static void usage(ostream& out);
+  static void version(ostream& out);
 };

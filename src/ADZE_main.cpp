@@ -2,122 +2,139 @@
 
 using namespace std;
 
+//Smallest number of gene copies scored anywhere: the largest feasible MAX_G.
+static int smallestNj(Population pop[], int numDivs, int numLoci)
+{
+  int smallest = 0;
+  for(int j = 0; j < numDivs; j++)
+    {
+      for(int l = 0; l < numLoci; l++)
+	{
+	  const int Nj = pop[j].getNj(l);
+	  if((j == 0 && l == 0) || Nj < smallest) smallest = Nj;
+	}
+    }
+  return smallest;
+}
+
+/*
+ * Interface, in brief:
+ *
+ *   adze --data FILE [options]        run from flags alone
+ *   adze PARAMFILE [options]          1.0-style; flags override the file
+ *   adze --help                       every option, generated from one table
+ *
+ * 1.0 required a paramfile as argv[1], rejected anything starting with '-'
+ * there, offered no --help (it printed "A paramfile must be the first
+ * argument" and exited 255), and answered a bare invocation by writing
+ * paramfile.txt into the working directory. Flags could only override a
+ * paramfile, never stand on their own.
+ */
 int main(int argc, char* argv[])
 {
-  cout << "Allelic Diversity Analyzer v1.0\n";
+  /*
+   * Answered before anything else is parsed, so they work with no data file,
+   * no paramfile and no valid parameters.
+   */
+  for(int i = 1; i < argc; i++)
+    {
+      const string a = argv[i];
 
-  ParamSet p;
-  
+      if(a == "--help" || a == "-h")
+	{
+	  ParamSet::usage(cout);
+	  return EXIT_OK;
+	}
+
+      if(a == "--version" || a == "-V")
+	{
+	  ParamSet::version(cout);
+	  return EXIT_OK;
+	}
+
+      if(a == "--write-template")
+	{
+	  const string file = (i+1 < argc && argv[i+1][0] != '-')
+	    ? argv[i+1] : "paramfile.txt";
+	  ParamSet p;
+	  try
+	    {
+	      p.makeParamFile(file);
+	    }
+	  catch(BAD_FILE x)
+	    {
+	      return EXIT_IO;
+	    }
+	  cout << "Wrote a parameter-file template to " << file << "\n";
+	  return EXIT_OK;
+	}
+    }
+
   if(argc == 1)
     {
-      try
-	{
-	  p.open("paramfile.txt");
-	}
-      catch(BAD_FILE x)
-	{
-	  p.makeParamFile(); 
-	  cout << "\tA template has been created in paramfile.txt\n";
-	  cout << "Program terminated.\n";
-	  return -1;
-	}
+      ParamSet::usage(cerr);
+      return EXIT_USAGE;
     }
-  else if(argc == 2)
-    {
-      if(argv[1][0] == '-')
-	{
-	  cout << "ERROR: A paramfile must be the first argument and "
-	       << "must not begin with '-'.\n"
-	       << "Program terminated.\n";
-	  return -1;
-	}
 
-      try
-	{
-	  p.open(argv[1]);
-	}
-      catch(BAD_FILE x)
-	{
-	  cout << "Program terminated.\n";
-	  return -1;
-	}
-    }
-  else
-    {
-      if(argv[1][0] == '-')
-	{
-	  cout << "ERROR: A paramfile must be the first argument and "
-	       << "must not begin with '-'.\n"
-	       << "Program terminated.\n";
-	  return -1;
-	}
-
-      try
-	{
-	  p.open(argv[1]);
-	}
-      catch(BAD_FILE x)
-	{
-	  cout << "Program terminated.\n";
-	  return -1;
-	}
-      
-      try
-	{
-	  p.CMDread(argc,argv);
-	}
-      catch (BAD_PARAM x)
-	{
-	  cout << "Program terminated.\n";
-	  return -1;
-	}
-    }
+  ParamSet p;
 
   try
     {
-      p.read();
+      p.CMDread(argc,argv);
+      if(p.params.set) p.read(p.params.val);
     }
   catch(BAD_FILE x)
     {
-      cout << "Program terminated.\n";
-      return -1;
+      return EXIT_IO;
     }
-  catch (BAD_PARAM x)
+  catch(BAD_PARAM x)
     {
-      cout << "Program terminated.\n";
-      return -1;
+      return EXIT_USAGE;
     }
-  
-  p.close();
 
-  cout << "Parameters read at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
+  ADZE_QUIET = p.quiet.val;
 
-  /*-------------------------------------------------------------------------*/
-  ofstream summary;
-  string sum_out = nameCreate(p.r_out.val,"_summary");
-  summary.open(sum_out.c_str());
-  p.echo(summary);
-  summary << endl;
+  //Progress bars are for a terminal; a redirected log gets none by default.
+  if(!p.pp.set) p.pp.val = stderrIsTerminal() && !p.quiet.val;
+  if(p.quiet.val) p.pp.val = 0;
 
+  if(!p.finish()) return EXIT_USAGE;
+
+  adzelog() << "Allelic Diversity Analyzer v" << ADZE_VERSION << "\n";
+
+  //Which statistics to run: everything named, or 1.0's defaults.
+  bool do_rich = 1, do_priv = 1, do_tuple = p.comb.val;
+
+  if(p.stat.set)
+    {
+      do_rich = (p.stat.val.find("rich") != string::npos);
+      do_priv = (p.stat.val.find("priv") != string::npos);
+      do_tuple = (p.stat.val.find("tuple") != string::npos);
+
+      if(!do_rich && !do_priv && !do_tuple)
+	{
+	  cerr << "ERROR: --stat \"" << p.stat.val
+	       << "\" names no statistic; use richness, private and/or tuples.\n";
+	  return EXIT_USAGE;
+	}
+    }
 
   list<int> k;
   try
     {
-      if(p.comb.val) k = parseKVals(p.k.val);
+      if(do_tuple && !p.tuple_file.set) k = parseKVals(p.k.val);
     }
   catch (string err)
     {
-      cout << err << "Program terminated.\n";
-      return -1;
+      cerr << err;
+      return EXIT_USAGE;
     }
 
-  cout << "Reading " << p.dfile.val << "...\n";
+  adzelog() << "Reading " << p.dfile.val << "...\n";
 
   /*
    * One pass over the data file yields the groupings, the allele counts, the
-   * sample sizes and the missing-data tallies.  1.0 read the file three times
+   * sample sizes and the missing-data tallies. 1.0 read the file three times
    * (validate, discover groupings, load) and kept every genotype in memory.
    */
   vector<string> divisionNames;
@@ -130,140 +147,249 @@ int main(int argc, char* argv[])
     }
   catch(BAD_FILE x)
     {
-      cout << "Program terminated.\n";
-      return -1;
+      return EXIT_IO;
     }
   catch(BAD_PARAM x)
     {
-      cout << "Program terminated.\n";
-      return -1;
+      return EXIT_DATA;
     }
 
-  cout << "Done\n";
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
+  adzelog() << "Read " << p.dlines.val << " gene copies at " << p.loci.val
+	    << (p.loci.val == 1 ? " locus in " : " loci in ") << numDivs
+	    << (numDivs == 1 ? " grouping" : " groupings") << " (d:h:m:s ";
+  displayTime(adzelog());
+  adzelog() << ")\n";
 
-  if(p.comb.val)
-    if(!validK(numDivs,k))
-      {
-	delete [] pop;
-	return -1;
-      }
+  int feasibleG = smallestNj(pop,numDivs,p.loci.val);
+
+  vector< vector<int> > tuples;
+
+  if(do_tuple)
+    {
+      if(p.tuple_file.set)
+	{
+	  if(!readTupleFile(p.tuple_file.val,pop,numDivs,tuples))
+	    {
+	      delete [] pop;
+	      return EXIT_USAGE;
+	    }
+	}
+      else if(!validK(numDivs,k))
+	{
+	  delete [] pop;
+	  return EXIT_USAGE;
+	}
+    }
+
+  if(p.dry_run.val)
+    {
+      cout << "Data file:        " << p.dfile.val << "\n"
+	   << "Loci:             " << p.loci.val << "\n"
+	   << "Data rows:        " << p.dlines.val << "\n"
+	   << "Label columns:    " << p.nd_cols.val
+	   << " (grouping from column " << p.sort_by.val << ")\n"
+	   << "Header rows:      " << p.nd_rows.val << "\n"
+	   << "Missing code:     " << p.miss.val << "\n"
+	   << "Groupings:        " << numDivs << "\n";
+
+      for(int j = 0; j < numDivs; j++)
+	{
+	  int minNj = 0, maxNj = 0;
+	  for(int l = 0; l < p.loci.val; l++)
+	    {
+	      const int Nj = pop[j].getNj(l);
+	      if(l == 0 || Nj < minNj) minNj = Nj;
+	      if(l == 0 || Nj > maxNj) maxNj = Nj;
+	    }
+	  cout << "  " << pop[j].getName() << ": " << pop[j].getNumRows()
+	       << " gene copies, Nj per locus " << minNj << "-" << maxNj << "\n";
+	}
+
+      cout << "Largest feasible MAX_G: " << feasibleG << "\n";
+      if(p.g.set) cout << "MAX_G to be used:       " << p.g.val << "\n";
+      else cout << "MAX_G to be used:       " << "the largest feasible\n";
+      if(p.tol.val != 1)
+	{
+	  cout << "  (TOLERANCE " << p.tol.val << " will drop loci first, "
+	       << "which can raise both numbers)\n";
+	}
+
+      if(do_tuple)
+	{
+	  if(p.tuple_file.set) cout << "Named tuples:           " << tuples.size() << "\n";
+	  else
+	    {
+	      double total = 0;
+	      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+		{
+		  total += nCk(numDivs,*i);
+		}
+	      cout << "Tuples to evaluate:     " << long(total) << "\n";
+	    }
+	}
+
+      cout << "Statistics:            ";
+      if(do_rich) cout << " richness";
+      if(do_priv) cout << " private";
+      if(do_tuple) cout << " tuples";
+      cout << "\n";
+
+      delete [] pop;
+      return EXIT_OK;
+    }
+
+  ofstream summary;
+  const string sum_out = p.summaryName();
+  summary.open(sum_out.c_str());
+  if(summary.fail())
+    {
+      cerr << "ERROR: could not write " << sum_out << "\n";
+      delete [] pop;
+      return EXIT_IO;
+    }
+  p.echo(summary);
+  summary << endl;
 
   if(p.tol.val != 1)
     {
-      cout << "Throwing out bad loci...\n";
+      adzelog() << "Applying the missing-data filter...\n";
       filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val);
-      //cout << "Done\n";
-      
-      cout << "Completed at (d:h:m:s) ";
-      displayTime(cout);
-      cout << endl;
+
+      adzelog() << "Completed at (d:h:m:s) ";
+      displayTime(adzelog());
+      adzelog() << endl;
 
       if(p.tnc.val)
 	{
-	  if(pop) delete [] pop;
-	  return 0;
+	  summary.close();
+	  delete [] pop;
+	  return EXIT_OK;
 	} 
     }
+
   p.loci.val = pop[0].getNumLoci();
 
   /*
-   * With no surviving locus every statistic is undefined.  1.0 carried on and
+   * With no surviving locus every statistic is undefined. 1.0 carried on and
    * printed rows of "nan -0 nan"; say so and stop instead.
    */
   if(p.loci.val == 0)
     {
-      cout << "ERROR: no locus survived filtering at TOLERANCE " << p.tol.val
+      cerr << "ERROR: no locus survived filtering at TOLERANCE " << p.tol.val
 	   << ".\n       Every statistic would be undefined; "
-	   << "raise TOLERANCE or check MISSING.\n"
-	   << "Program terminated.\n";
+	   << "raise TOLERANCE or check MISSING.\n";
       summary << "ERROR: no locus survived filtering at TOLERANCE "
 	      << p.tol.val << ".\n";
       summary.close();
-      if(pop) delete [] pop;
-      return -1;
+      delete [] pop;
+      return EXIT_DATA;
     }
 
-  int numLoci = p.loci.val;
-  
+  /*
+   * MAX_G is resolved here, not before filtering: dropping loci with heavy
+   * missing data raises the smallest sample size, so the largest usable g is a
+   * property of the surviving loci.
+   */
+  feasibleG = smallestNj(pop,numDivs,p.loci.val);
 
-  cout << "Calculating total alleles...\n";
-  calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val);
-  if(p.pp.val) cout << endl;
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
-
-  summary << "Total alleles completed at (d:h:m:s) ";
-  displayTime(summary);
-  summary << endl;
-  
-  cout << "Calculating private alleles...\n";
-  calcAllPgs(pop,numDivs,p,p.full_p.val,p.p_out.val);
-  if(p.pp.val) cout << endl;
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  cout << endl;
-
-  summary << "Private alleles completed at (d:h:m:s) ";
-  displayTime(summary);
-  summary << endl;
-
-
-  /*----------------------------------------------------------------
-  
-  
-  ----------------------------------------------------------------*/
-
-
-  if (p.comb.val)
+  if(!p.g.set)
     {
-      for(list<int>::iterator i = k.begin();
-	  i != k.end(); i++)
+      p.g.val = (feasibleG < 2) ? 2 : feasibleG;
+      adzelog() << "MAX_G not given; using " << p.g.val << ", the largest the "
+		<< p.loci.val << " surviving loci support.\n";
+      summary << "MAX_G resolved to " << p.g.val << " over " << p.loci.val
+	      << (p.loci.val == 1 ? " locus\n" : " loci\n");
+    }
+  else if(p.g.val > feasibleG)
+    {
+      adzelog() << "WARNING: MAX_G " << p.g.val << " exceeds the smallest "
+		<< "sample size in the data (" << feasibleG << ").\n"
+		<< "         Rows above g = " << feasibleG
+		<< " will be undefined.\n";
+    }
+
+  if(do_rich)
+    {
+      adzelog() << "Calculating allelic richness...\n";
+      calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val);
+      if(p.pp.val) adzelog() << endl;
+      adzelog() << "Completed at (d:h:m:s) ";
+      displayTime(adzelog());
+      adzelog() << endl;
+
+      summary << "Total alleles completed at (d:h:m:s) ";
+      displayTime(summary);
+      summary << endl;
+    }
+
+  if(do_priv)
+    {
+      adzelog() << "Calculating private allelic richness...\n";
+      calcAllPgs(pop,numDivs,p,p.full_p.val,p.p_out.val);
+      if(p.pp.val) adzelog() << endl;
+      adzelog() << "Completed at (d:h:m:s) ";
+      displayTime(adzelog());
+      adzelog() << endl;
+
+      summary << "Private alleles completed at (d:h:m:s) ";
+      displayTime(summary);
+      summary << endl;
+    }
+
+  if(do_tuple)
+    {
+      if(p.tuple_file.set)
 	{
-	  cout << "Calculating private alleles for all possible " 
-	       << *i << "-tuples...\n";
-	  char suffix[50];
-	  int junk;
-	  junk = sprintf(suffix,"_%i",*i);
-	  string new_comb_out;
-	  new_comb_out = nameCreate(p.c_out.val,suffix);
-	  calcAllPgComb(pop,numDivs,*i,p,p.full_c.val,new_comb_out);
-	  if(p.pp.val) cout << endl;
-	  cout << "Completed at (d:h:m:s) ";
-	  displayTime(cout);
-	  cout << endl;
-	  /*
-	  estimate(eout,numDivs,*i,pop,p,time-off);
-	  off = time;
-	  */
-	  
-	  summary << "All " << *i << "-tuples completed at (d:h:m:s) ";
+	  adzelog() << "Calculating private alleles for " << tuples.size()
+		    << " named tuples...\n";
+	  calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,p.c_out.val,1);
+	  if(p.pp.val) adzelog() << endl;
+	  adzelog() << "Completed at (d:h:m:s) ";
+	  displayTime(adzelog());
+	  adzelog() << endl;
+
+	  summary << "Named tuples completed at (d:h:m:s) ";
 	  displayTime(summary);
 	  summary << endl;
 	}
+      else
+	{
+	  for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+	    {
+	      adzelog() << "Calculating private alleles for all possible "
+			<< *i << "-tuples...\n";
+
+	      ostringstream suffix;
+	      suffix << "_" << *i;
+	      const string new_comb_out = nameCreate(p.c_out.val,suffix.str());
+
+	      buildKTuples(numDivs,*i,tuples);
+	      calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,new_comb_out,0);
+
+	      if(p.pp.val) adzelog() << endl;
+	      adzelog() << "Completed at (d:h:m:s) ";
+	      displayTime(adzelog());
+	      adzelog() << endl;
+
+	      summary << *i << "-tuples completed at (d:h:m:s) ";
+	      displayTime(summary);
+	      summary << endl;
+	    }
+	}
     }
 
- 
-  summary.close();
-  /*
-  cout << "Cleaning up...\n";
-  //cout.flush();
-  if(pop) delete [] pop;
-  cout << "Completed at (d:h:m:s) ";
-  displayTime(cout);
-  */
+  delete [] pop;
 
-  if(pop) delete [] pop;
+  adzelog() << "\nadze finished in (d:h:m:s) ";
+  const double total = displayTime(adzelog());
+  adzelog() << endl;
 
-  cout << "\nADZE finished in (d:h:m:s) ";
-  summary << "\nADZE finished in (d:h:m:s) ";
-  displayTime(cout);
+  summary << "\nadze finished in (d:h:m:s) ";
   displayTime(summary);
-  cout << endl;
-   
-  return 0;
-}
+  summary << endl;
+  summary.close();
 
+  (void)total;
+
+  return EXIT_OK;
+}

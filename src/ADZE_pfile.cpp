@@ -1,6 +1,656 @@
 #include "ADZE_pfile.h"
+#include <sstream>
+#include <cstring>
 
 using namespace std;
+
+const char* ADZE_VERSION = "2.0-dev";
+
+/*
+ * The single description of every parameter.  The command-line parser, the
+ * paramfile parser, --help and the generated template all read this table, so
+ * a flag cannot exist in one and be missing (or take a different number of
+ * arguments) in another -- which is what happened in 1.0, whose template
+ * documented -tnocalc and -skipchk as valueless while the argv scanner walked
+ * strict pairs and rejected them without a value.
+ *
+ * legacy holds the 1.0 flag spelling, still accepted so existing scripts and
+ * paramfiles keep working.
+ */
+const OptSpec OPTIONS[] = {
+  {DFILE,     "DATA_FILE",      "--data",           "-f",        OPT_STRING, "FILE",
+   "Input", "STRUCTURE-format genotype file (required)"},
+  {G,         "MAX_G",          "--max-g",          "-g",        OPT_INT,    "N",
+   "Input", "largest standardized sample size (default: the largest the data supports)"},
+  {ND_ROWS,   "NON_DATA_ROWS",  "--non-data-rows",  "-nr",       OPT_INT,    "N",
+   "Input", "header rows before the genotypes (default 1)"},
+  {ND_COLS,   "NON_DATA_COLS",  "--non-data-cols",  "-nc",       OPT_INT,    "N",
+   "Input", "label columns before the genotypes (default: detected)"},
+  {LOCI,      "LOCI",           "--loci",           "-l",        OPT_INT,    "N",
+   "Input", "number of loci (default: detected from the header row)"},
+  {DLINES,    "DATA_LINES",     "--data-lines",     "-d",        OPT_INT,    "N",
+   "Input", "number of data rows (default: detected)"},
+  {SORT_BY,   "GROUP_BY_COL",   "--group-col",      "-s",        OPT_INT,    "N",
+   "Input", "which label column names the grouping (default: the last one)"},
+  {MISS,      "MISSING",        "--missing",        "-m",        OPT_STRING, "STR",
+   "Input", "code for a missing allele (default -9)"},
+  {POPS,      0,                "--pops",           0,           OPT_STRING, "LIST",
+   "Input", "analyse only these groupings (comma-separated)"},
+  {EXPOPS,    0,                "--exclude-pops",   0,           OPT_STRING, "LIST",
+   "Input", "analyse everything except these groupings"},
+
+  {STAT,      0,                "--stat",           0,           OPT_STRING, "LIST",
+   "Analysis", "which statistics to compute: richness,private,tuples (default: richness,private)"},
+  {TOL,       "TOLERANCE",      "--tolerance",      "-t",        OPT_DOUBLE, "X",
+   "Analysis", "drop a locus if any grouping exceeds this missing fraction (default 1 = keep all)"},
+  {COMB,      "COMB",           "--combinations",   "-c",        OPT_BOOL,   0,
+   "Analysis", "also compute private alleles of grouping tuples"},
+  {K,         "K_RANGE",        "--tuples-k",       "-k",        OPT_STRING, "LIST",
+   "Analysis", "tuple sizes for --combinations, e.g. 2 or 1-3 or 1,3,5-7"},
+  {TUPLE_FILE,0,                "--tuples",         0,           OPT_STRING, "FILE",
+   "Analysis", "compute only the named tuples in FILE (one per line) instead of every k-subset"},
+  {THREADS,   0,                "--threads",        0,           OPT_INT,    "N",
+   "Analysis", "worker threads (default 1; requires an OpenMP build)"},
+
+  {OUT_PREFIX,0,                "--out-prefix",     0,           OPT_STRING, "PREFIX",
+   "Output", "compose output names from PREFIX (default adze)"},
+  {R_OUT,     "R_OUT",          "--out-richness",   "-r",        OPT_STRING, "FILE",
+   "Output", "allelic richness output file"},
+  {P_OUT,     "P_OUT",          "--out-private",    "-p",        OPT_STRING, "FILE",
+   "Output", "private allelic richness output file"},
+  {C_OUT,     "C_OUT",          "--out-tuples",     "-o",        OPT_STRING, "FILE",
+   "Output", "tuple output file (one per tuple size, suffixed _k)"},
+  {FULL_R,    "FULL_R",         "--full-richness",  "-fr",       OPT_BOOL,   0,
+   "Output", "also write per-locus allelic richness"},
+  {FULL_P,    "FULL_P",         "--full-private",   "-fp",       OPT_BOOL,   0,
+   "Output", "also write per-locus private allelic richness"},
+  {FULL_C,    "FULL_C",         "--full-tuples",    "-fc",       OPT_BOOL,   0,
+   "Output", "also write per-locus tuple values"},
+  {TSV,       0,                "--tsv",            0,           OPT_BOOL,   0,
+   "Output", "tab-separated output with a header row and NA for undefined values"},
+
+  {PARAMS,    0,                "--params",         0,           OPT_STRING, "FILE",
+   "Other", "read parameters from FILE (also accepted as the first argument)"},
+  {DRY_RUN,   0,                "--dry-run",        0,           OPT_BOOL,   0,
+   "Other", "report the detected layout, groupings and feasible MAX_G, then stop"},
+  {PP,        "PRINT_PROGRESS", "--progress",       "-pp",       OPT_BOOL,   0,
+   "Other", "progress bars (default: on when stderr is a terminal)"},
+  {QUIET,     0,                "--quiet",          0,           OPT_BOOL,   0,
+   "Other", "suppress progress and informational messages"},
+  {TNC,       "TNC",            "--tolerance-only", "-tnocalc",  OPT_BOOL,   0,
+   "Other", "apply the missing-data filter, report it, and stop"},
+  {SKIP_CHK,  "SKIP_CHK",       "--no-check",       "-skipchk",  OPT_BOOL,   0,
+   "Other", "accepted for compatibility; validation is now free and always on"}
+};
+
+const int NUM_OPTIONS = int(sizeof(OPTIONS)/sizeof(OPTIONS[0]));
+
+/*----------------------------------------------------------------------------*/
+
+ParamSet::ParamSet()
+{
+  for(int i = 0; i < LABEL_SIZE; i++) { LABEL_SEEN[i] = 0; LABEL_CL[i] = 0; }
+
+  g.val = 0;              //0 => resolve from the data
+  loci.val = 0;           //0 => detect
+  nd_rows.val = 1;
+  nd_cols.val = 0;        //0 => detect
+  dlines.val = 0;         //0 => detect
+  sort_by.val = 0;        //0 => last label column
+  tol.val = 1;
+  k.val = "none";
+  dfile.val = "none";
+  r_out.val = "none";
+  p_out.val = "none";
+  c_out.val = "none";
+  miss.val = "-9";
+  comb.val = 0;
+  full_r.val = 0;
+  full_p.val = 0;
+  full_c.val = 0;
+  pp.val = 0;
+  tnc.val = 0;
+  skip_chk.val = 0;
+  out_prefix.val = "adze";
+  stat.val = "";
+  pops.val = "";
+  expops.val = "";
+  tuple_file.val = "";
+  tsv.val = 0;
+  dry_run.val = 0;
+  quiet.val = 0;
+  threads.val = 1;
+  params.val = "";
+}
+
+const OptSpec* ParamSet::byKey(const string& key) const
+{
+  for(int i = 0; i < NUM_OPTIONS; i++)
+    {
+      if(OPTIONS[i].key && key.compare(OPTIONS[i].key) == 0) return &OPTIONS[i];
+    }
+  return 0;
+}
+
+const OptSpec* ParamSet::byFlag(const string& flag) const
+{
+  for(int i = 0; i < NUM_OPTIONS; i++)
+    {
+      if(OPTIONS[i].lng && flag.compare(OPTIONS[i].lng) == 0) return &OPTIONS[i];
+      if(OPTIONS[i].legacy && flag.compare(OPTIONS[i].legacy) == 0) return &OPTIONS[i];
+    }
+  return 0;
+}
+
+string ParamSet::trim(const string& s)
+{
+  size_t a = 0, b = s.size();
+  while(a < b && isspace((unsigned char)s[a])) a++;
+  while(b > a && isspace((unsigned char)s[b-1])) b--;
+  return s.substr(a,b-a);
+}
+
+bool ParamSet::isint(string s)
+{
+  s = trim(s);
+  if(s.empty()) return 0;
+  size_t i = (s[0] == '+' || s[0] == '-') ? 1 : 0;
+  if(i >= s.size()) return 0;
+  for(; i < s.size(); i++) if(!isdigit((unsigned char)s[i])) return 0;
+  return 1;
+}
+
+bool ParamSet::isdouble(string s)
+{
+  s = trim(s);
+  if(s.empty()) return 0;
+  char* end = 0;
+  strtod(s.c_str(),&end);
+  return (end && *end == '\0');
+}
+
+bool ParamSet::isbool(string s)
+{
+  s = trim(s);
+  return (s == "0" || s == "1" || s == "true" || s == "false" ||
+	  s == "TRUE" || s == "FALSE" || s == "yes" || s == "no");
+}
+
+static bool boolValue(const string& s)
+{
+  return !(s == "0" || s == "false" || s == "FALSE" || s == "no");
+}
+
+/*
+ * Store one value.  cmd distinguishes the command line, which wins over the
+ * paramfile no matter which is read first.
+ */
+void ParamSet::storeVal(int id,const string& raw,bool cmd)
+{
+  const OptSpec* spec = 0;
+  for(int i = 0; i < NUM_OPTIONS; i++) if(OPTIONS[i].id == id) spec = &OPTIONS[i];
+  if(!spec) return;
+
+  const string val = trim(raw);
+  const string where = cmd ? string(spec->lng) : string(spec->key ? spec->key : spec->lng);
+
+  //The command line wins over the paramfile, whichever is parsed first.
+  if(!cmd && LABEL_CL[id]) return;
+
+  bool bad = 0;
+  switch(spec->type)
+    {
+    case OPT_INT:    bad = !isint(val);    break;
+    case OPT_DOUBLE: bad = !isdouble(val); break;
+    case OPT_BOOL:   bad = !isbool(val);   break;
+    case OPT_STRING: bad = val.empty();    break;
+    }
+
+  if(bad)
+    {
+      cerr << "ERROR: " << where << " needs ";
+      switch(spec->type)
+	{
+	case OPT_INT:    cerr << "an integer";             break;
+	case OPT_DOUBLE: cerr << "a number";               break;
+	case OPT_BOOL:   cerr << "0 or 1";                 break;
+	case OPT_STRING: cerr << "a value";                break;
+	}
+      cerr << ", got \"" << val << "\".\n";
+      BAD_PARAM x;
+      throw x;
+    }
+
+#define SETP(field)							\
+  do {									\
+    (field).cl = cmd;							\
+    (field).set = 1;							\
+  } while(0)
+
+  switch(id)
+    {
+    case G:          SETP(g);          g.val = atoi(val.c_str());        break;
+    case LOCI:       SETP(loci);       loci.val = atoi(val.c_str());     break;
+    case ND_ROWS:    SETP(nd_rows);    nd_rows.val = atoi(val.c_str());  break;
+    case ND_COLS:    SETP(nd_cols);    nd_cols.val = atoi(val.c_str());  break;
+    case DLINES:     SETP(dlines);     dlines.val = atoi(val.c_str());   break;
+    case SORT_BY:    SETP(sort_by);    sort_by.val = atoi(val.c_str());  break;
+    case THREADS:    SETP(threads);    threads.val = atoi(val.c_str());  break;
+    case TOL:        SETP(tol);        tol.val = atof(val.c_str());      break;
+    case K:          SETP(k);          k.val = val;                      break;
+    case DFILE:      SETP(dfile);      dfile.val = val;                  break;
+    case R_OUT:      SETP(r_out);      r_out.val = val;                  break;
+    case P_OUT:      SETP(p_out);      p_out.val = val;                  break;
+    case C_OUT:      SETP(c_out);      c_out.val = val;                  break;
+    case MISS:       SETP(miss);       miss.val = val;                   break;
+    case OUT_PREFIX: SETP(out_prefix); out_prefix.val = val;             break;
+    case STAT:       SETP(stat);       stat.val = val;                   break;
+    case POPS:       SETP(pops);       pops.val = val;                   break;
+    case EXPOPS:     SETP(expops);     expops.val = val;                 break;
+    case TUPLE_FILE: SETP(tuple_file); tuple_file.val = val;             break;
+    case PARAMS:     SETP(params);     params.val = val;                 break;
+    case COMB:       SETP(comb);       comb.val = boolValue(val);        break;
+    case FULL_R:     SETP(full_r);     full_r.val = boolValue(val);      break;
+    case FULL_P:     SETP(full_p);     full_p.val = boolValue(val);      break;
+    case FULL_C:     SETP(full_c);     full_c.val = boolValue(val);      break;
+    case PP:         SETP(pp);         pp.val = boolValue(val);          break;
+    case TNC:        SETP(tnc);        tnc.val = boolValue(val);         break;
+    case SKIP_CHK:   SETP(skip_chk);   skip_chk.val = boolValue(val);    break;
+    case TSV:        SETP(tsv);        tsv.val = boolValue(val);         break;
+    case DRY_RUN:    SETP(dry_run);    dry_run.val = boolValue(val);     break;
+    case QUIET:      SETP(quiet);      quiet.val = boolValue(val);       break;
+    default: break;
+    }
+
+#undef SETP
+
+  LABEL_SEEN[id] = 1;
+  if(cmd) LABEL_CL[id] = 1;
+  return;
+}
+
+/*
+ * Parse the command line.  Long options, the 1.0 short flags, and switches
+ * that take no value: --combinations and -c both work, and so does the 1.0
+ * spelling '-c 1'.  A value is consumed for a switch only when it looks like
+ * one, so '--progress --quiet' is not misread.
+ */
+void ParamSet::CMDread(int argc, char* argv[])
+{
+  int i = 1;
+
+  //A bare first argument is a paramfile, as in 1.0.
+  if(argc > 1 && argv[1][0] != '-')
+    {
+      params.val = argv[1];
+      params.set = 1;
+      params.cl = 1;
+      i = 2;
+    }
+
+  for(; i < argc; i++)
+    {
+      string flag = argv[i];
+
+      //--flag=value
+      string inlineVal;
+      bool hasInline = 0;
+      size_t eq = flag.find('=');
+      if(flag.size() > 2 && flag[0] == '-' && flag[1] == '-' && eq != string::npos)
+	{
+	  inlineVal = flag.substr(eq+1);
+	  flag = flag.substr(0,eq);
+	  hasInline = 1;
+	}
+
+      const OptSpec* spec = byFlag(flag);
+      if(!spec)
+	{
+	  cerr << "ERROR: unrecognized option \"" << flag << "\".\n"
+	       << "Try 'adze --help'.\n";
+	  BAD_PARAM x;
+	  throw x;
+	}
+
+      string val;
+      if(hasInline) val = inlineVal;
+      else if(spec->arg)                      //takes a value
+	{
+	  if(i+1 >= argc)
+	    {
+	      cerr << "ERROR: " << flag << " needs a value.\n";
+	      BAD_PARAM x;
+	      throw x;
+	    }
+	  val = argv[++i];
+	}
+      else                                    //switch
+	{
+	  if(i+1 < argc && isbool(argv[i+1])) val = argv[++i];
+	  else val = "1";
+	}
+
+      storeVal(spec->id,val,1);
+    }
+
+  return;
+}
+
+/*
+ * Read a paramfile.  Each line is a keyword followed by the rest of the line.
+ *
+ * 1.0 instead searched every line for any keyword as a substring, in enum
+ * order, and then assumed the keyword it found was the line's leading label:
+ * 'R_OUT out_LOCI_richness' matched LOCI first, sliced the first four
+ * characters as the label, and rejected a perfectly valid line.  It also
+ * deleted all whitespace from the line, so no value could contain a space.
+ */
+void ParamSet::read(const string& file)
+{
+  ifstream in(file.c_str());
+  if(in.fail())
+    {
+      cerr << "ERROR: Could not find paramfile \"" << file << "\"\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  string line;
+  long lineNo = 0;
+
+  while(getline(in,line))
+    {
+      lineNo++;
+
+      size_t hash = line.find('#');
+      if(hash != string::npos) line = line.substr(0,hash);
+
+      line = trim(line);
+      if(line.empty()) continue;
+
+      size_t sep = 0;
+      while(sep < line.size() && !isspace((unsigned char)line[sep])) sep++;
+
+      const string key = line.substr(0,sep);
+      const string val = trim(line.substr(sep));
+
+      const OptSpec* spec = byKey(key);
+      if(!spec)
+	{
+	  cerr << "ERROR: " << file << ":" << lineNo
+	       << ": unrecognized keyword \"" << key << "\".\n";
+	  BAD_PARAM x;
+	  throw x;
+	}
+
+      if(!spec->arg && val.empty()) storeVal(spec->id,"1",0);
+      else storeVal(spec->id,val,0);
+    }
+
+  in.close();
+  return;
+}
+
+/*
+ * Apply defaults that do not depend on the data file and check the parameters
+ * that can be checked before reading it.  Dimensions left unset are detected
+ * while the file is read; MAX_G is resolved from the sample sizes afterwards.
+ */
+bool ParamSet::finish()
+{
+  bool ok = 1;
+
+  if(!r_out.set) r_out.val = out_prefix.val + ".richness";
+  if(!p_out.set) p_out.val = out_prefix.val + ".private";
+  if(!c_out.set) c_out.val = out_prefix.val + ".tuples";
+
+  if(tuple_file.set) comb.val = 1;
+
+  if(stat.set)
+    {
+      //--stat tuples implies the tuple pass
+      if(stat.val.find("tuple") != string::npos) comb.val = 1;
+    }
+
+  if(dfile.val.compare("none") == 0)
+    {
+      cerr << "ERROR: no data file given (--data FILE).\n";
+      ok = 0;
+    }
+
+  if(g.set && g.val < 2)
+    {
+      cerr << "ERROR: --max-g must be an integer greater than 1.\n";
+      ok = 0;
+    }
+
+  if(nd_rows.val < 1)
+    {
+      cerr << "ERROR: --non-data-rows must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(loci.set && loci.val < 1)
+    {
+      cerr << "ERROR: --loci must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(nd_cols.set && nd_cols.val < 1)
+    {
+      cerr << "ERROR: --non-data-cols must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(dlines.set && dlines.val < 1)
+    {
+      cerr << "ERROR: --data-lines must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(sort_by.set && sort_by.val < 1)
+    {
+      cerr << "ERROR: --group-col must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(tol.val < 0 || tol.val > 1)
+    {
+      cerr << "ERROR: --tolerance must be between 0 and 1, inclusive.\n";
+      ok = 0;
+    }
+
+  if(threads.val < 1)
+    {
+      cerr << "ERROR: --threads must be a positive integer.\n";
+      ok = 0;
+    }
+
+  if(pops.set && expops.set)
+    {
+      cerr << "ERROR: --pops and --exclude-pops are mutually exclusive.\n";
+      ok = 0;
+    }
+
+  if(comb.val && !tuple_file.set)
+    {
+      if(k.val.compare("none") == 0)
+	{
+	  cerr << "ERROR: --combinations needs --tuples-k (or --tuples FILE).\n";
+	  ok = 0;
+	}
+      else if(!isvalidk(k.val))
+	{
+	  cerr << "ERROR: \"" << k.val << "\" not a valid K_RANGE definition.\n";
+	  ok = 0;
+	}
+    }
+
+  return ok;
+}
+
+/*
+ * 1.0 appended suffixes to the end of the given name, so "-r results.txt"
+ * produced results.txt, results.txt_summary and results.txt_fulldata. Explicit
+ * names keep that behaviour for compatibility; names composed from
+ * --out-prefix get the suffix before the extension.
+ */
+string ParamSet::summaryName() const
+{
+  if(r_out.set) return r_out.val + "_summary";
+  return out_prefix.val + ".summary.txt";
+}
+
+void ParamSet::echo(ostream& out)
+{
+  out << "###----Main Parameters----###\n"
+      << "MAX_G ";
+  if(g.set) out << g.val << endl;
+  else out << "auto" << endl;
+  out
+      << "DATA_LINES " << dlines.val << endl
+      << "LOCI " << loci.val << endl
+      << "NON_DATA_ROWS " << nd_rows.val << endl
+      << "NON_DATA_COLS " << nd_cols.val << endl
+      << "GROUP_BY_COL " << sort_by.val << endl
+      << "DATA_FILE " << dfile.val << endl
+      << "R_OUT " << r_out.val << endl
+      << "P_OUT " << p_out.val << endl
+      << "\n###----Combination Parameters----###\n"
+      << "COMB " << comb.val << endl
+      << "K_RANGE " << k.val << endl
+      << "C_OUT " << c_out.val << endl;
+  if(tuple_file.set) out << "TUPLE_FILE " << tuple_file.val << endl;
+  out << "\n###-----------Advanced Options-----------###\n"
+      << "MISSING " << miss.val << endl
+      << "TOLERANCE " << tol.val << endl
+      << "FULL_R " << full_r.val << endl
+      << "FULL_P " << full_p.val << endl
+      << "FULL_C " << full_c.val << endl
+      << "PRINT_PROGRESS " << pp.val;
+  if(pops.set)   out << endl << "POPS " << pops.val;
+  if(expops.set) out << endl << "EXCLUDE_POPS " << expops.val;
+  if(threads.val != 1) out << endl << "THREADS " << threads.val;
+}
+
+void ParamSet::version(ostream& out)
+{
+  out << "adze " << ADZE_VERSION << "\n"
+      << "Allelic Diversity Analyzer -- rarefaction estimators of allelic\n"
+      << "richness and private allelic richness.\n"
+      << "Method: Szpiech ZA, Jakobsson M, Rosenberg NA (2008) Bioinformatics\n"
+      << "24:2498-2504. doi:10.1093/bioinformatics/btn478\n";
+}
+
+void ParamSet::usage(ostream& out)
+{
+  out << "adze " << ADZE_VERSION
+      << " -- allelic richness and private allelic richness by rarefaction\n\n"
+      << "Usage:\n"
+      << "  adze --data FILE [options]\n"
+      << "  adze PARAMFILE [options]        (1.0-style; options override the file)\n"
+      << "  adze --write-template [FILE]    write a commented paramfile template\n\n";
+
+  const char* sections[] = {"Input","Analysis","Output","Other"};
+
+  for(int s = 0; s < 4; s++)
+    {
+      out << sections[s] << " options:\n";
+      for(int i = 0; i < NUM_OPTIONS; i++)
+	{
+	  const OptSpec& o = OPTIONS[i];
+	  if(strcmp(o.section,sections[s]) != 0) continue;
+
+	  ostringstream left;
+	  left << "  " << o.lng;
+	  if(o.arg) left << " " << o.arg;
+	  if(o.legacy) left << ", " << o.legacy;
+
+	  string col = left.str();
+	  out << col;
+	  if(col.size() < 34) out << string(34-col.size(),' ');
+	  else out << "\n" << string(34,' ');
+	  out << o.help << "\n";
+	}
+      out << "\n";
+    }
+
+  out << "Other:\n"
+      << "  --help, -h                        this message\n"
+      << "  --version, -V                     version and citation\n\n"
+      << "Exit status: 0 success, " << EXIT_USAGE << " bad usage, "
+      << EXIT_IO << " I/O error, " << EXIT_DATA << " data validation error.\n";
+}
+
+/*
+ * Write a paramfile template generated from the option table, so it can no
+ * longer disagree with what the parser accepts.
+ */
+void ParamSet::makeParamFile(const string& file)
+{
+  ofstream out(file.c_str());
+  if(out.fail())
+    {
+      cerr << "ERROR: could not write " << file << "\n";
+      BAD_FILE x;
+      throw x;
+    }
+
+  out << "# adze " << ADZE_VERSION << " parameter file\n"
+      << "#\n"
+      << "# One KEYWORD per line, followed by its value; blank lines and\n"
+      << "# text after # are ignored. Every keyword below has an equivalent\n"
+      << "# command-line option, which overrides the value set here.\n"
+      << "#\n";
+
+  const char* sections[] = {"Input","Analysis","Output","Other"};
+
+  for(int s = 0; s < 4; s++)
+    {
+      out << "\n###----" << sections[s] << "----###\n";
+      for(int i = 0; i < NUM_OPTIONS; i++)
+	{
+	  const OptSpec& o = OPTIONS[i];
+	  if(!o.key) continue;
+	  if(strcmp(o.section,sections[s]) != 0) continue;
+
+	  out << "# " << o.help << "\n"
+	      << "#   command line: " << o.lng;
+	  if(o.arg) out << " " << o.arg;
+	  out << "\n";
+
+	  /*
+	   * Keywords with a usable default are written with it, so a template
+	   * whose DATA_FILE has been filled in runs as it stands.  Keywords
+	   * that are detected from the data, or that have no default, are
+	   * written commented out with a placeholder.
+	   */
+	  switch(o.id)
+	    {
+	    case DFILE:    out << "DATA_FILE your_data.stru\n";     break;
+	    case ND_ROWS:  out << "NON_DATA_ROWS 1\n";              break;
+	    case MISS:     out << "MISSING -9\n";                   break;
+	    case TOL:      out << "TOLERANCE 1\n";                  break;
+	    case COMB:     out << "COMB 0\n";                       break;
+	    case R_OUT:    out << "#R_OUT richness.txt\n";          break;
+	    case P_OUT:    out << "#P_OUT private.txt\n";           break;
+	    case C_OUT:    out << "#C_OUT tuples.txt\n";            break;
+	    case K:        out << "#K_RANGE 2\n";                   break;
+	    case FULL_R:   out << "FULL_R 0\n";                     break;
+	    case FULL_P:   out << "FULL_P 0\n";                     break;
+	    case FULL_C:   out << "FULL_C 0\n";                     break;
+	    case TNC:      out << "TNC 0\n";                        break;
+	    case SKIP_CHK: out << "#SKIP_CHK 0\n";                  break;
+	    default:
+	      out << "#" << o.key << " " << (o.arg ? o.arg : "0") << "\n";
+	      break;
+	    }
+	}
+    }
+
+  out.close();
+  return;
+}
 
 /*
  * Syntax check for a K_RANGE value: comma- or space-separated tuple sizes and
@@ -41,813 +691,3 @@ bool ParamSet::isvalidk(string s)
   return any;
 }
 
-bool ParamSet::a_label(string s)
-{
-  for(int i = 0; i < LABEL_SIZE; i ++)
-    {
-      if(s.compare(LABEL[i]) == 0) return 1;
-    }
-
-  return 0;
-}
-
-
-void ParamSet::close()
-{
-  try
-    {
-      pin.close();
-    }
-  catch(...)
-    {
-      BAD_FILE x;
-      throw x;
-    }
-  return;
-}
-
-void ParamSet::makeParamFile()
-{
-  ofstream pout;
-  pout.open("paramfile.txt");
-
-  pout << "# This is a parameter file for ADZE.\n"
-       << "# The entire line after a \'#\' will be ignored.\n\n"
-       << "###----Main Parameters----###\n"
-       << "MAX_G                #Max standardized sample size\n\n"
-       << "DATA_LINES           #Number of lines of data\n\n"
-       << "LOCI                 #Number of loci\n\n"
-       << "NON_DATA_ROWS        #Number of rows preceeding data\n"
-       << "                     #including at least the locus names\n\n"
-       << "NON_DATA_COLS        #Number of classifier columns\n"
-       << "                     #at the beginning of each data line\n\n"
-       << "GROUP_BY_COL         #The column number by which to\n"
-       << "                     #group the data\n\n"
-       << "DATA_FILE none       #Name of the datafile\n\n"
-       << "R_OUT none           #Name of the allelic richness output file\n\n"
-       << "P_OUT none           #Name of the private allelic richness\n"
-       << "                     #output file\n\n"
-       << "###----Combination Parameters----###\n"
-       << "COMB 0               #Calculate private allelic richness for\n"
-       << "                     #combinations of groupings?\n\n"
-       << "K_RANGE              #A listing of combinations to calculate\n\n"
-       << "C_OUT none           #Name of the private allelic richness of\n"
-       << "                     #combinations output file\n\n"
-       << "###----Advanced Options----###\n"
-       << "MISSING -9           #Missing data representation\n\n"
-       << "TOLERANCE 1          #Filter loci with a grouping having more\n"
-       << "                     #than this fraction of missing data\n\n"
-       << "FULL_R 0             #Output allelic richness results for\n"
-       << "                     #all loci?\n\n"
-       << "FULL_P 0             #Output private allelic richness results\n"
-       << "                     #for all loci?\n\n"
-       << "FULL_C 0             #Output private allelic richness for\n"
-       << "                     #combinations results for all loci?\n\n"
-       << "PRINT_PROGRESS 1     #Track calculation progress on screen?\n\n"
-       << "###----Command line arguments----###\n"
-       << "# -g MAX_G" << endl
-       << "# -d DATA_LINES" << endl
-       << "# -l LOCI" << endl
-       << "# -nr NON_DATA_ROWS" << endl
-       << "# -nc NON_DATA_COLS" << endl
-       << "# -s GROUP_BY_COL" << endl
-       << "# -f DATA_FILE" << endl
-       << "# -r R_OUT" << endl
-       << "# -p P_OUT" << endl
-       << "# -c COMB" << endl
-       << "# -k K_RANGE" << endl
-       << "# -o COUT" << endl
-       << "# -m MISSING" << endl
-       << "# -t TOLERANCE" << endl
-       << "# -tnocalc" << endl
-       << "# -fr FULL_R" << endl
-       << "# -fp FULL_P" << endl
-       << "# -fc FULL_C" << endl
-       << "# -pp PRINT_PROGRESS" << endl
-       << "###----End of file----###\n";
-
-  pout.close();
-  return;
-}
-
-void ParamSet::open(char* s)
-{
-  pin.open(s);
-  if(pin.fail())
-    {
-      cout << "ERROR: Could not find paramfile \"" << s << "\"\n";
-      BAD_FILE x;
-      throw x;
-    }
-  return;
-}
-
-void ParamSet::CMDread(int argc, char* argv[])
-{
-  //cout << argc << endl;
-  bool CMD_READ[LABEL_SIZE];
-  for(int i = 0; i < LABEL_SIZE;i++)
-    {
-      CMD_READ[i] = FALSE;
-    }
-  
-  int index;
-  
-  for(int i = 2; i <= argc-1; i+=2)
-    {
-      if(validCMD(argv[i]) && i+1 <= argc-1)
-	{
-	  try
-	    {
-	      index = strtoen(argv[i]);
-	    }
-	  catch (BAD_PARAM x)
-	    {
-	      cout << "Undefined ERROR 1 in ParamSet::CMDread().\n";
-	      throw x;
-	    }
-	  
-	  if(validCMD(argv[i+1]))
-	    {		  
-	      cout << "ERROR: " << argv[i] << " needs a value.\n";
-	      BAD_PARAM x;
-	      throw x;
-	    }
-	  else if(CMD_READ[index])
-	    {
-	      string line = argv[i];
-	      line += ' ';
-	      line += argv[i+1];
-	      cout << "ERROR: Duplicate parameter definition:\n\t\"" 
-		   << line << "\"\n ";
-	      BAD_PARAM x;
-	      throw x;
-	    }
-	  else
-	    {
-	      try
-		{
-		  storeVal(argv[i+1],argv[i],TRUE);
-		  CMD_READ[index] = TRUE;
-		}
-	      catch(BAD_PARAM x)
-		{
-		  //cout << "Program terminated.\n";
-		  throw x;
-		}
-	    }
-	}
-      else if(validCMD(argv[i]) && i+1 > argc-1)
-	{
-	   try
-	    {
-	      index = strtoen(argv[i]);
-	    }
-	  catch (BAD_PARAM x)
-	    {
-	      cout << "Undefined ERROR 2 in ParamSet::CMDread().\n";
-	      throw x;
-	    }
-	  if(CMD_READ[index])
-	    {
-	      cout << "ERROR: Duplicate parameter definition:\n\t\"" 
-		   << argv[i] << "\"\n ";
-	    }
-	  else
-	    {
-	      cout << "ERROR: " << argv[i] << " needs a value.\n";
-	    }
-	  BAD_PARAM x;
-	  throw x;
-	}
-      else
-	{
-	  cout << "ERROR: " << argv[i] << " not a valid command line "
-	       << "argument.\n";
-	  BAD_PARAM x;
-	  throw x;
-	}
-    }
-  return;
-}
-
-bool ParamSet::validCMD(string cmd)
-{
-  for(int i = 0; i < LABEL_SIZE;i++)
-    {
-      if(cmd.compare(CMD_LABEL[i]) == 0) return 1;
-    }
-
-  return 0;
-}
-
-int ParamSet::strtoen(string s)
-{
-  for(int i = 0; i < LABEL_SIZE; i++)
-    {
-      if(s.compare(CMD_LABEL[i]) == 0) return i;
-    }
-  
-  BAD_PARAM x;
-  throw x;
-}
-
-bool ParamSet::isgoodstr(string s)
-{
-  char c;
-  string::iterator i;
-  for(i = s.begin(); i != s.end(); i++)
-    {
-      c = *i;
-      if(isgraph(c)) return 1;
-    }
-
-  return 0;
- }
-
-bool ParamSet::valid()
-{
-  bool passAll = 1;
-  
-  if(g.val < 2)
-    {
-      cout << "ERROR: Maximum g value must be an integer > 1.\n";
-      passAll = 0;
-    }
-  if(loci.val < 1)
-    {
-      cout << "ERROR: Number of loci must be an integer > 0.\n";
-      passAll = 0;
-    }
-  if(nd_rows.val < 1)
-    {
-      cout << "ERROR: Number of non-data rows must be an integer > 0.\n";
-      passAll = 0;
-    }
-  if(nd_cols.val < 1)
-    {
-      cout << "ERROR: Number of non-data cols must be an integer > 0.\n";
-      passAll = 0;
-    }
-  if(dlines.val < 1)
-    {
-      cout << "ERROR: Number of data lines must be an integer > 0.\n";
-      passAll = 0;
-    }
-  if(sort_by.val < 1 || sort_by.val > nd_cols.val)
-    {
-      cout << "ERROR: Must sort by a positive integer less than or\n"
-	   << "equal to the number of non-data columns.\n";
-      passAll = 0;
-    }
-  if(tol.val < 0 || tol.val > 1)
-    {
-      cout << "ERROR: Tolerance must be between 0 and 1, inclusive.\n";
-      passAll = 0;
-    }
-  if(r_out.val.compare("none") == 0)
-    {
-      cout << "ERROR: Must specify an allelic richness output file.\n";
-      passAll = 0;
-    }
-  if(p_out.val.compare("none") == 0)
-    {
-      cout << "ERROR: Must specify a private richness output file.\n";
-      passAll = 0;
-    }
-  if(dfile.val.compare("none") == 0)
-    {
-      cout << "ERROR: Must specify a data file.\n";
-      passAll = 0;
-    }
-  if(comb.val)
-    {
-      if(c_out.val.compare("none") == 0)
-	{
-	  cout << "ERROR: Must specify a combination output file.\n";
-	  passAll = 0;
-	}
-      if(k.val.compare("none") == 0)
-	{
-	  cout << "ERROR: Must specify a range of k values to " 
-	       << "calculate combinations.\n";
-	  passAll = 0;
-	}
-      else if(!isvalidk(k.val))
-	{
-	  cout << "Error: \"" << k.val 
-	       << "\" not a valid K_RANGE definition.\n";
-	  passAll = 0;
-	}
-      
-    }
-  return passAll;
-}
-
-void ParamSet::echo(ostream& out)
-{
-  out << "###----Main Parameters----###\n"
-      << LABEL[G] << " " << g.val << endl
-      << LABEL[DLINES] << " " << dlines.val << endl
-      << LABEL[LOCI] << " " << loci.val << endl
-      << LABEL[ND_ROWS] << " " << nd_rows.val << endl
-      << LABEL[ND_COLS] << " " << nd_cols.val << endl
-      << LABEL[SORT_BY] << " " << sort_by.val << endl
-      << LABEL[DFILE] << " " << dfile.val << endl
-      << LABEL[R_OUT] << " " << r_out.val << endl
-      << LABEL[P_OUT] << " " << p_out.val << endl
-      << "\n###----Combination Parameters----###\n"
-      << LABEL[COMB] << " " << comb.val << endl
-      << LABEL[K] << " " << k.val << endl
-      << LABEL[C_OUT] << " " << c_out.val << endl
-      << "\n###-----------Advanced Options-----------###\n"
-      << LABEL[MISS] << " " << miss.val << endl
-      << LABEL[TOL] << " " << tol.val << endl
-      << LABEL[FULL_R] << " " << full_r.val << endl
-      << LABEL[FULL_P] << " " << full_p.val << endl
-      << LABEL[FULL_C] << " " << full_c.val << endl
-      << LABEL[PP] << " " << pp.val;
-}
-
-bool ParamSet::isbool(string s)
-{
-  //  if(s.size() == 0) return 0;
-  string::iterator i;
-  char c;
-  for(i = s.begin();i != s.end(); i++)
-    {
-      c = *i;
-      if(!(c == '0' || c == '1')) return 0;
-    }
-  
-  int num = atoi(s.c_str());
-  
-  if(num < 0 || num > 1) return 0;
-  
-  return 1;
-}
-
-bool ParamSet::isdouble(string s)
-{
-  //  if(s.size() == 0) return 0;
-  string::iterator i;
-  char c;
-  for(i = s.begin();i != s.end();i++)
-    {
-      c = *i;
-      if(!(isdigit(c) || c == '.')) return 0;
-    }
-  return 1;
-}
-
-string ParamSet::replaceWhite(string s)
-{
-  string::iterator i;
-  char c;
-  for(i = s.begin();i != s.end();i++)
-    {
-      c = *i;
-      if(isspace(c)) *i = '#';
-    }
-  return s;
-}
-
-bool ParamSet::isint(string s)
-{
-  char c;
-  string::iterator i;
-  for(i = s.begin();i != s.end();i++)
-    {
-      c = *i;
-      
-      if(i == s.begin() && !(isdigit(c) || c == '-')) return 0;
-      if(!isdigit(c)) return 0;
-    }
-
-  return 1;
-}
-
-bool ParamSet::allWhiteSpace(string s)
-{
-  string::iterator i;
-  char c;
-  for(i = s.begin();i != s.end();i++)
-    {
-      c = *i;
-      if(!isspace(c)) return 0;
-    }
-
-  return 1;
-}
-
-void ParamSet::storeVal(string val, string label, bool cmd)
-{
-  string L[LABEL_SIZE];
-  bool err = 0;
-
-  if(cmd)
-    {
-      for(int i = 0; i < LABEL_SIZE; i++)
-	{
-	  L[i] = CMD_LABEL[i];
-	}
-    }
-  else
-    {
-      for(int i = 0; i < LABEL_SIZE; i++)
-	{
-	  L[i] = LABEL[i];
-	}
-    }
-
-  
-  if(label.compare(L[G]) == 0 ||
-     label.compare(L[LOCI]) == 0 ||
-     label.compare(L[ND_ROWS]) == 0 ||
-     label.compare(L[ND_COLS]) == 0 ||
-     label.compare(L[DLINES]) == 0 ||
-     label.compare(L[SORT_BY]) == 0)
-    {
-      if(label.compare(L[G]) == 0 && !g.cl) 
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      g.cl = cmd;
-	      g.val = i;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[LOCI]) == 0 && !loci.cl)
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      loci.cl = cmd;
-	      loci.val = i;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[ND_ROWS]) == 0 && !nd_rows.cl)
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      nd_rows.cl = cmd;
-	      nd_rows.val = i;
-	    }
-	   else err = 1;
-	}
-      if(label.compare(L[ND_COLS]) == 0 && !nd_cols.cl)
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      nd_cols.cl = cmd;
-	      nd_cols.val = i;
-	    }
-	   else err = 1;
-	}
-      if(label.compare(L[DLINES]) == 0 && !dlines.cl) 
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      dlines.cl = cmd;
-	      dlines.val = i;
-	    }
-	   else err = 1;
-	}
-      if(label.compare(L[SORT_BY]) == 0 && !sort_by.cl) 
-	{
-	  if(isint(val))
-	    {
-	      int i = atoi(val.c_str());
-	      sort_by.cl = cmd;
-	      sort_by.val = i;
-	    }
-	   else err = 1;
-	}
-    
-      if(err) 
-	{
-	  cout << "ERROR: " << label << " must specify a positive integer.\n";
-	  BAD_PARAM x;
-	  throw x;
-	}
-    }
-  else if(label.compare(L[TOL]) == 0)
-    {
-      if(!tol.cl && val.size() != 0)
-	{
-	  if(isdouble(val))
-	    {
-	      tol.cl = cmd;
-	      tol.val = atof(val.c_str());
-	    }
-	  else err = 1;
-	}
-	
-      if(err)
-	{
-	  cout << "ERROR: " << label << " must specify a double.\n";
-	  BAD_PARAM x;
-	  throw x;
-	}
-    }
-  else if(label.compare(L[K]) == 0 ||
-	  label.compare(L[DFILE]) == 0 ||
-	  label.compare(L[R_OUT]) == 0 ||
-	  label.compare(L[P_OUT]) == 0 ||
-	  label.compare(L[C_OUT]) == 0 ||
-	  label.compare(L[MISS]) == 0)
-    {     
-      if(isgoodstr(val))
-	{
-	  if(label.compare(L[K]) == 0 && !k.cl /*&& (isvalidk(val) || 
-						    val.compare("none") == 0)*/)
-	    {
-	      k.cl = cmd;
-	      k.val = val;
-	    }
-	  /*
-	  else if(label.compare(L[K]) == 0 && !k.cl && !isvalidk(val))
-	    {
-	      cout << "Error: \"" << val 
-		   << "\" not a valid K_RANGE definition.\n";
-	      BAD_PARAM x;
-	      throw x;
-	    }
-	  */
-	  if(label.compare(L[DFILE]) == 0 && !dfile.cl)
-	    {
-	      dfile.cl = cmd;
-	      dfile.val = val;
-	    }
-	  if(label.compare(L[R_OUT]) == 0 && !r_out.cl)
-	    {
-	      r_out.cl = cmd;
-	      r_out.val = val;
-	    }
-	  if(label.compare(L[P_OUT]) == 0 && !p_out.cl)
-	    {
-	      p_out.cl = cmd;
-	      p_out.val = val;
-	    }
-	  if(label.compare(L[C_OUT]) == 0 && !c_out.cl)
-	    {
-	      c_out.cl = cmd;
-	      c_out.val = val;
-	    }
-	  if(label.compare(L[MISS]) == 0 && !miss.cl)
-	    {
-	      miss.cl = cmd;
-	      miss.val = val;
-	    }
-	}
-    }
-  else if(label.compare(L[COMB]) == 0 ||
-	  label.compare(L[FULL_R]) == 0 ||
-	  label.compare(L[FULL_P]) == 0 ||
-	  label.compare(L[FULL_C]) == 0 ||
-	  label.compare(L[TNC]) == 0 ||
-	  label.compare(L[PP]) == 0 ||
-	  label.compare(L[SKIP_CHK]) == 0)
-    {
-      if(label.compare(L[COMB]) == 0 && !comb.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      comb.cl = cmd;
-	      comb.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[FULL_R]) == 0 && !full_r.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      full_r.cl = cmd;
-	      full_r.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[FULL_P]) == 0 && !full_p.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      full_p.cl = cmd;
-	      full_p.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[FULL_C]) == 0 && !full_c.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      full_c.cl = cmd;
-	      full_c.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[TNC]) == 0 && !tnc.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      tnc.cl = cmd;
-	      tnc.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[PP]) == 0 && !pp.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      pp.cl = cmd;
-	      pp.val = b;
-	    }
-	  else err = 1;
-	}
-      if(label.compare(L[SKIP_CHK]) == 0 && !skip_chk.cl)
-	{
-	  if(isbool(val))
-	    {
-	      bool b = atoi(val.c_str());
-	      skip_chk.cl = cmd;
-	      skip_chk.val = b;
-	    }
-	  else err = 1;
-	}
-
-      if(err)
-	{
-	  cout << "ERROR: " << label << " must equal 1 or 0.\n";
-	  BAD_PARAM x;
-	  throw x;
-	}
-    }
-  else
-    {
-      cout << "Undefined ERROR in ParamSet::storeVal().\n";
-      BAD_PARAM x;
-      throw x;
-    }
- 
-  return;
-}
-
-
-string ParamSet::eraseWhite(string s)
-{
-  char c;
-  string::iterator i;
-  i = s.begin();
-  c = *i;
-  while(i != s.end())
-    {
-      if(!isgraph(c)) i = s.erase(i);
-      else i++;
-      c = *i;
-    }
-  return s;
-}
-
-void ParamSet::read()
-{
-  string line1, line, candidate;
-  int found;
-  
-  if(!pin)
-    {
-      cout << "ERROR: ifstream not open.\n";
-      BAD_FILE x;
-      throw x;
-    }
-
-  while(!pin.eof())
-    {
-      getline(pin,line1);
-   
-      found = line1.find_first_of('#');
-      if(found != string::npos) line = line1.erase(found);
-      
-      line = eraseWhite(line1);
-
-      for(int i=0;i<LABEL_SIZE;i++)
-	{
-	  string find_this = LABEL[i];
-	  //find_this += ' ';
-	  
-	  found = line.find(find_this);
-	  if(found != string::npos)
-	    {
-	      //line = eraseLeadWhite(line);
-	      candidate = line.substr(0,LABEL[i].size());
-
-	      if(!a_label(candidate))
-		{
-		  cout << "Line not recognized:\n\t\"" << line1 << "\"\n";
-		  BAD_PARAM x;
-		  throw x;
-		}
-
-	      line = line.erase(0,LABEL[i].size());
-	      
-	      if(SKIP_LABEL[i])
-		{
-		  cout << "Duplicate parameter definition:\n\t\"" 
-		       << line1 << "\"\n";
-		  BAD_PARAM x;
-		  throw x;
-		}
-	      else
-		{
-		  SKIP_LABEL[i] = TRUE;
-		  try
-		    {
-		      storeVal(line,/*LABEL[i]*/candidate);
-		    }
-		  catch(BAD_PARAM x)
-		    {
-		      throw x;
-		    }
-		  break;
-		}
-	    }
-	  else if(i == LABEL_SIZE-1 && !allWhiteSpace(line) && !a_label(line))
-	    {
-	      cout << "Line not recognized:\n\t\"" << line1 << "\"\n";
-	      BAD_PARAM x;
-	      throw x;
-	    }
-	}      
-    }
-
-  if(!valid())
-    {
-      BAD_PARAM x;
-      throw x;
-    }
-
-  return;
-}
-
-
-
-
-ParamSet::ParamSet()
-{
-  for(int i = 0; i < LABEL_SIZE; i++)
-    {
-      SKIP_LABEL[i] = FALSE;
-      LABEL_SEEN[i] = FALSE;
-    }
-  
-  g.cl = FALSE;
-  loci.cl = FALSE;
-  nd_rows.cl = FALSE;
-  nd_cols.cl = FALSE;
-  dlines.cl = FALSE;
-  sort_by.cl = FALSE;
-  tol.cl = FALSE;
-  k.cl = FALSE;
-  dfile.cl = FALSE;
-  r_out.cl = FALSE;
-  p_out.cl = FALSE;
-  c_out.cl = FALSE;
-  miss.cl = FALSE;
-  comb.cl = FALSE;
-  full_r.cl = FALSE;
-  full_p.cl = FALSE;
-  full_c.cl = FALSE;
-  tnc.cl = FALSE;
-  pp.cl = FALSE;
-  skip_chk.cl = FALSE;
-
-  g.val = -9;
-  loci.val = -9;
-  nd_rows.val = -9;
-  nd_cols.val = -9;
-  dlines.val = -9;
-  sort_by.val = -9;
-  tol.val = 1;
-  k.val = "none";
-  dfile.val = "none";
-  r_out.val = "none";
-  p_out.val = "none";
-  c_out.val = "none";
-  miss.val = "-9";
-  comb.val = FALSE;
-  full_r.val = FALSE;
-  full_p.val = FALSE;
-  full_c.val = FALSE;
-  tnc.val = FALSE;
-  pp.val = TRUE;
-  skip_chk.val = FALSE;
-}

@@ -1,4 +1,25 @@
 #include "ADZE_main_tools.h"
+#include <unistd.h>
+
+/*
+ * Progress and informational messages go to stderr, so that redirecting
+ * stdout captures results only.  1.0 wrote errors, the progress bar and the
+ * results to the same stream, which made "adze ... > log" put error text into
+ * the log and the backspace-driven progress bar into it as binary noise.
+ */
+bool ADZE_QUIET = false;
+
+ostream& adzelog()
+{
+  static ofstream sink; //never opened: writes are discarded
+  return ADZE_QUIET ? static_cast<ostream&>(sink) : cerr;
+}
+
+bool stderrIsTerminal()
+{
+  return isatty(fileno(stderr)) ? true : false;
+}
+
 
 using namespace std;
 
@@ -189,9 +210,27 @@ namespace {
 
 static void badData(const string& msg)
 {
-  cout << "ERROR: " << msg << "\n";
+  cerr << "ERROR: " << msg << "\n";
   BAD_PARAM x;
   throw x;
+}
+
+//Split a comma/space-separated list into names.
+static void splitList(const string& text, vector<string>& out)
+{
+  out.clear();
+  string cur;
+  for(size_t i = 0; i < text.size(); i++)
+    {
+      const char c = text[i];
+      if(c == ',' || isspace((unsigned char)c))
+	{
+	  if(!cur.empty()) { out.push_back(cur); cur.clear(); }
+	}
+      else cur += c;
+    }
+  if(!cur.empty()) out.push_back(cur);
+  return;
 }
 
 /*
@@ -199,23 +238,29 @@ static void badData(const string& msg)
  * Population objects, one per grouping, with allele counts, sample sizes and
  * missing-data tallies already filled in.
  *
- * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if its shape
- * disagrees with the declared LOCI, DATA_LINES or NON_DATA_COLS.
+ * LOCI, NON_DATA_COLS and DATA_LINES are measured from the file rather than
+ * demanded from the user: the locus-name row gives the locus count, the width
+ * of the first data row gives the number of label columns, and the data rows
+ * count themselves.  A value the user did declare is checked against what is
+ * there, and a disagreement is reported as a warning against the measurement,
+ * not as a fatal error about the declaration.
+ *
+ * Throws BAD_FILE if the file cannot be opened and BAD_PARAM if the file's
+ * shape is internally inconsistent.
  */
 Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 {
   ifstream in(p.dfile.val.c_str());
   if(in.fail())
     {
-      cout << "ERROR: Could not open " << p.dfile.val << "\n";
+      cerr << "ERROR: could not open " << p.dfile.val << "\n";
       BAD_FILE x;
       throw x;
     }
 
-  const int declaredLoci = p.loci.val;
-  const int ndCols = p.nd_cols.val;
-  const int groupCol = p.sort_by.val - 1;
-  const string& missingLabel = p.miss.val;
+  vector<string> keepList, dropList;
+  splitList(p.pops.val,keepList);
+  splitList(p.expops.val,dropList);
 
   string line;
   vector<Field> fields;
@@ -224,13 +269,17 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
   if(!getline(in,line)) badData("no locus-name row in " + p.dfile.val + ".");
   tokenize(line,fields);
 
-  if(int(fields.size()) != declaredLoci)
+  const int foundLoci = int(fields.size());
+  if(foundLoci < 1) badData("no locus names in the first row of " + p.dfile.val + ".");
+
+  if(p.loci.set && p.loci.val != foundLoci)
     {
-      ostringstream m;
-      m << "Expected " << declaredLoci << (declaredLoci == 1 ? " locus " : " loci ")
-	<< "in " << p.dfile.val << " but found " << fields.size() << ".";
-      badData(m.str());
+      adzelog() << "WARNING: LOCI says " << p.loci.val << " but "
+		<< p.dfile.val << " has " << foundLoci
+		<< " locus names; using " << foundLoci << ".\n";
     }
+  p.loci.val = foundLoci;
+  const int declaredLoci = foundLoci;
 
   Accumulator acc;
   acc.locusName.reserve(fields.size());
@@ -243,9 +292,12 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
   //Remaining non-data rows are ignored, exactly as in 1.0.
   for(int skip = 1; skip < p.nd_rows.val; skip++) getline(in,line);
 
-  const int expected = ndCols + declaredLoci;
+  int ndCols = p.nd_cols.set ? p.nd_cols.val : 0;
+  int groupCol = -1;
+  int expected = 0;
+
   string token;
-  long long dataRows = 0, physicalRows = 0;
+  long long dataRows = 0, physicalRows = 0, keptRows = 0;
 
   while(getline(in,line))
     {
@@ -253,28 +305,64 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
       tokenize(line,fields);
       if(fields.empty()) continue; //blank separator line
 
+      if(expected == 0)
+	{
+	  //First data row fixes the layout.
+	  const int found = int(fields.size()) - declaredLoci;
+	  if(found < 1)
+	    {
+	      ostringstream m;
+	      m << "the first data row of " << p.dfile.val << " has "
+		<< fields.size() << " columns, which leaves no room for "
+		<< declaredLoci << " loci plus at least one label column.";
+	      badData(m.str());
+	    }
+
+	  if(p.nd_cols.set && ndCols != found)
+	    {
+	      adzelog() << "WARNING: NON_DATA_COLS says " << ndCols
+			<< " but the data rows leave room for " << found
+			<< "; using " << found << ".\n";
+	    }
+	  ndCols = found;
+	  p.nd_cols.val = ndCols;
+
+	  if(!p.sort_by.set) p.sort_by.val = ndCols;
+	  groupCol = p.sort_by.val - 1;
+
+	  if(groupCol < 0 || groupCol >= ndCols)
+	    {
+	      ostringstream m;
+	      m << "GROUP_BY_COL " << p.sort_by.val << " is not one of the "
+		<< ndCols << " label columns in " << p.dfile.val << ".";
+	      badData(m.str());
+	    }
+
+	  expected = ndCols + declaredLoci;
+	}
+
       if(int(fields.size()) != expected)
 	{
 	  ostringstream m;
-	  m << "Expected " << expected << " columns at data line " << physicalRows
+	  m << "expected " << expected << " columns at data line " << physicalRows
 	    << " in " << p.dfile.val << " but found " << fields.size()
-	    << ". Possible bad NON_DATA_COLS, NON_DATA_ROWS, or LOCI value.";
+	    << ". Check NON_DATA_ROWS, or whether the row is truncated.";
 	  badData(m.str());
 	}
 
-      if(dataRows >= p.dlines.val)
-	{
-	  ostringstream m;
-	  m << "Expected " << p.dlines.val << " data lines in " << p.dfile.val
-	    << " but found at least " << dataRows+1 << ".";
-	  badData(m.str());
-	}
+      dataRows++;
 
       token.assign(fields[groupCol].first,fields[groupCol].second);
+
+      if(!keepList.empty() &&
+	 find(keepList.begin(),keepList.end(),token) == keepList.end()) continue;
+      if(!dropList.empty() &&
+	 find(dropList.begin(),dropList.end(),token) != dropList.end()) continue;
+
+      keptRows++;
       const int g = acc.group(token);
       const int rowInGroup = acc.groupRows[g]++;
       const long long firstKey = (long long)(g) * 4294967296LL + rowInGroup;
-      dataRows++;
 
       for(int l = 0; l < declaredLoci; l++)
 	{
@@ -282,7 +370,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 	  const Field& f = fields[ndCols + l];
 
 	  token.assign(f.first,f.second);
-	  if(token.compare(missingLabel) == 0)
+	  if(token.compare(p.miss.val) == 0)
 	    {
 	      t.missing[g]++;
 	      continue;
@@ -303,15 +391,29 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 
   in.close();
 
-  if(dataRows != p.dlines.val)
+  if(p.dlines.set && p.dlines.val != int(dataRows))
     {
-      ostringstream m;
-      m << "Expected " << p.dlines.val << " data lines in " << p.dfile.val
-	<< " but found " << dataRows << ".";
-      badData(m.str());
+      adzelog() << "WARNING: DATA_LINES says " << p.dlines.val << " but "
+		<< p.dfile.val << " has " << dataRows << " data rows; using "
+		<< dataRows << ".\n";
     }
+  p.dlines.val = int(dataRows);
+
+  if(dataRows == 0) badData("no data rows in " + p.dfile.val + ".");
 
   numDivs = int(acc.groupName.size());
+  if(numDivs == 0)
+    {
+      badData("no grouping in " + p.dfile.val + " survived --pops/--exclude-pops.");
+    }
+
+  if(keptRows != dataRows)
+    {
+      adzelog() << "Using " << keptRows << " of " << dataRows
+		<< " gene copies in " << numDivs
+		<< (numDivs == 1 ? " grouping.\n" : " groupings.\n");
+    }
+
   groupNames = acc.groupName;
 
   Population* pop = new Population[numDivs];
@@ -360,11 +462,11 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs)
 
   if(emptyLoci > 0)
     {
-      cout << "WARNING: " << emptyLoci
-	   << ((emptyLoci == 1) ? " locus has" : " loci have")
-	   << " no observed alleles in any grouping.\n"
-	   << "         Such loci make every statistic undefined at every g; "
-	   << "set TOLERANCE < 1 to drop them.\n";
+      adzelog() << "WARNING: " << emptyLoci
+		<< ((emptyLoci == 1) ? " locus has" : " loci have")
+		<< " no observed alleles in any grouping.\n"
+		<< "         Such loci make every statistic undefined at "
+		<< "every g; set TOLERANCE < 1 to drop them.\n";
     }
 
   return pop;
@@ -388,7 +490,7 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
 
   int size = (size1 == 0) ? 1 : size1;
 
-  ProgressBar bar(&cout,size*numDivs,BARLEN[0]);
+  ProgressBar bar(&adzelog(),size*numDivs,BARLEN[0]);
   if(pp)
     {
       bar.init();
@@ -408,7 +510,7 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
   lout.open(file.c_str());
 
   const string report = pop[0].deletedSummary();
-  cout << report;
+  adzelog() << report;
   lout << report;
   pop[0].printDeleted(lout);
 
@@ -474,14 +576,20 @@ bool validK(int n, list<int> k)
 }
 
 
-string combineNames(string names[],int k)
+/*
+ * Label for a tuple of groupings.  1.0 joined the names with a space, which
+ * makes the label indistinguishable from the surrounding space-separated
+ * fields; in tab-separated output the names are joined with a comma so the
+ * label stays one field.
+ */
+string combineNames(string names[],int k,char sep)
 {
   string tmp = "";
 
   for(int i = 0; i < k; i++)
     {
       tmp += names[i];
-      if(i != k-1) tmp += ' ';
+      if(i != k-1) tmp += sep;
     }
 
   return tmp;
@@ -545,11 +653,120 @@ void buildQTable(Population pop[], int numDivs, int locus, int numAlleles,
   return;
 }
 
-void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
-		   bool full_comb, string comb_out)
+/*
+ * Every k-subset of the groupings, in lexicographic order -- the order 1.0's
+ * gsl_combination walk produced.
+ */
+void buildKTuples(int numDivs, int k, vector< vector<int> >& out)
+{
+  out.clear();
+
+  gsl_combination* c = gsl_combination_calloc(numDivs,k);
+  gsl_combination_init_first(c);
+
+  do
+    {
+      vector<int> t(k);
+      for(int j = 0; j < k; j++) t[j] = int(gsl_combination_get(c,j));
+      out.push_back(t);
+    }while(gsl_combination_next(c) == GSL_SUCCESS);
+
+  gsl_combination_free(c);
+  return;
+}
+
+/*
+ * Read named tuples: one tuple per line, grouping names separated by commas or
+ * whitespace.  Lets an analysis ask for the handful of groupings it cares
+ * about instead of enumerating all 2^J subsets to read three of them.
+ */
+bool readTupleFile(const string& file, Population pop[], int numDivs,
+		   vector< vector<int> >& out)
+{
+  ifstream in(file.c_str());
+  if(in.fail())
+    {
+      cerr << "ERROR: could not open tuple file " << file << "\n";
+      return 0;
+    }
+
+  out.clear();
+  string line;
+  long lineNo = 0;
+  bool ok = 1;
+
+  while(getline(in,line))
+    {
+      lineNo++;
+      size_t hash = line.find('#');
+      if(hash != string::npos) line = line.substr(0,hash);
+
+      vector<string> names;
+      splitList(line,names);
+      if(names.empty()) continue;
+
+      vector<int> tuple;
+      for(size_t i = 0; i < names.size(); i++)
+	{
+	  int found = -1;
+	  for(int j = 0; j < numDivs; j++)
+	    {
+	      if(pop[j].getName().compare(names[i]) == 0) found = j;
+	    }
+
+	  if(found < 0)
+	    {
+	      cerr << "ERROR: " << file << ":" << lineNo << ": no grouping named \""
+		   << names[i] << "\" in the data.\n";
+	      ok = 0;
+	    }
+	  else tuple.push_back(found);
+	}
+
+      sort(tuple.begin(),tuple.end());
+      tuple.erase(unique(tuple.begin(),tuple.end()),tuple.end());
+      if(!tuple.empty()) out.push_back(tuple);
+    }
+
+  in.close();
+
+  if(out.empty())
+    {
+      cerr << "ERROR: no tuples found in " << file << "\n";
+      ok = 0;
+    }
+
+  return ok;
+}
+
+/*
+ * Private allelic richness of grouping tuples.
+ *
+ *  __(T)      m /                          \
+ *  ||        __ |  | |                | |  |
+ *    g   =   \  |  | | Pijg  *  | |   Qij'g |
+ *            /_ |  |j in T      |  |j' not  |
+ *           i=1 \                          /
+ *
+ * 1.0 recomputed every Qjig from scratch for each of the C(J,k) combinations,
+ * rebuilt the grouping-name array inside the innermost allele loop, and
+ * rescanned the combination to test membership for every non-member grouping
+ * at every allele.  The Qjig table is now built once per locus per tuple, and
+ * the names and a constant-time membership mask once per tuple.
+ */
+void calcPgTuples(Population pop[], int numDivs,
+		  const vector< vector<int> >& tuples, const ParamSet &param,
+		  bool full_comb, string comb_out, bool namedTuples)
 {
   const int numLoci = param.loci.val;
-  const int tot_m = int(nCk(numDivs,k));
+  const int tot_m = int(tuples.size());
+  if(tot_m == 0) return;
+
+  size_t widest = 0;
+  for(size_t t = 0; t < tuples.size(); t++)
+    {
+      if(tuples[t].size() > widest) widest = tuples[t].size();
+    }
 
   ofstream full_out, reg_out;
 
@@ -558,11 +775,13 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
       string name;
       name = nameCreate(comb_out,"_fulldata");
       full_out.open(name.c_str());
-      
-      for(int i = 1; i <= k; i++)
+
+      if(namedTuples) full_out << "TUPLE ";
+      else
 	{
-	  full_out << "POP_GROUPING" << i << " ";
+	  for(size_t i = 1; i <= widest; i++) full_out << "POP_GROUPING" << i << " ";
 	}
+
       full_out << "G NUM_LOCI ";
       for(int l = 0; l < numLoci; l++)
 	{
@@ -573,6 +792,10 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
     }
 
   reg_out.open(comb_out.c_str());
+  if(param.tsv.val)
+    {
+      reg_out << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+    }
 
   //Largest g the sweep reaches; see calcAllPgs for why this replaces breakG.
   int minNjAll = 0;
@@ -590,38 +813,35 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
   if(gLast < 2) gLast = 2;
   const int gStride = gLast + 1;
 
-  gsl_combination* c = gsl_combination_calloc(numDivs,k);
-  gsl_combination_init_first(c);
-
-  ProgressBar bar(&cout,double(tot_m)*(gLast-1)*numLoci,BARLEN[min(k-1,3)]);
+  ProgressBar bar(&adzelog(),double(tot_m)*(gLast-1)*numLoci,
+		  BARLEN[min(int(widest)-1,3)]);
   if(param.pp.val)
     {
       bar.init();
     }
 
-  vector<string> names(k);
-  vector<char> inComb(numDivs,0);
+  vector<string> names(widest);
+  vector<char> inTuple(numDivs,0);
   vector<double> pgcomb(size_t(gStride) * numLoci, 0.0); //[g][locus]
   vector<double> q;
 
-  do
+  for(int m = 0; m < tot_m; m++)
     {
+      const vector<int>& tuple = tuples[m];
+      const int k = int(tuple.size());
+
       /*
-       * Both of these are properties of the combination, not of a locus, an
-       * allele or a sample size.  1.0 rebuilt the name array inside the
-       * innermost allele loop -- one std::string copy per allele per g per
-       * locus -- and asked isIn() to rescan the combination for every
-       * non-member grouping at every allele.  Hoisting them out of three loop
-       * levels leaves a membership mask that answers in constant time.
+       * Properties of the tuple, not of a locus, an allele or a sample size:
+       * hoisted out of three loop levels.
        */
-      for(int j = 0; j < numDivs; j++) inComb[j] = 0;
-      for(size_t j = 0; j < gsl_combination_k(c); j++)
+      for(int j = 0; j < numDivs; j++) inTuple[j] = 0;
+      for(int j = 0; j < k; j++)
 	{
-	  int member = int(gsl_combination_get(c,j));
-	  names[j] = pop[member].getName();
-	  inComb[member] = 1;
+	  names[j] = pop[tuple[j]].getName();
+	  inTuple[tuple[j]] = 1;
 	}
-      const string all_names = combineNames(&names[0],k);
+      const string all_names =
+	combineNames(&names[0],k,param.tsv.val ? ',' : ' ');
 
       for(int locus = 0; locus < numLoci; locus++)
 	{
@@ -637,17 +857,16 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 		{
 		  double P = 1, Q = 1;
 
-		  //Calc P's over the groupings in the combination
-		  for(size_t j = 0; j < gsl_combination_k(c); j++)
+		  //Calc P's over the groupings in the tuple
+		  for(int j = 0; j < k; j++)
 		    {
-		      int member = int(gsl_combination_get(c,j));
-		      P *= (1-q[(size_t(member)*numAlleles + i)*gStride + g]);
+		      P *= (1-q[(size_t(tuple[j])*numAlleles + i)*gStride + g]);
 		    }
 
 		  //Calc Q's over the groupings outside it
 		  for(int j_p = 0; j_p < numDivs; j_p++)
 		    {
-		      if(!inComb[j_p])
+		      if(!inTuple[j_p])
 			{
 			  Q *= q[(size_t(j_p)*numAlleles + i)*gStride + g];
 			}
@@ -671,7 +890,7 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 	  comb_stats.calcVar();
 	  comb_stats.calcStdErr();
 
-	  comb_stats.printStats(reg_out,all_names,g);
+	  comb_stats.printStats(reg_out,all_names,g,param.tsv.val);
 
 	  if(full_comb)
 	    {
@@ -679,13 +898,11 @@ void calcAllPgComb(Population pop[], int numDivs, int k, const ParamSet &param,
 	    }
 	}
 
-      reg_out << endl;
+      if(!param.tsv.val) reg_out << endl;
       full_out << endl;
-    }while(gsl_combination_next(c) == GSL_SUCCESS);
-  
-  if(param.pp.val) bar.done();
+    }
 
-  gsl_combination_free(c);
+  if(param.pp.val) bar.done();
 
   return;
 }
@@ -712,6 +929,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   pg_out.open(private_out.c_str());
+  if(param.tsv.val) pg_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
 
   /*
    * Smallest Nj per locus (for the -9 sentinel) and over the whole dataset.
@@ -745,7 +963,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
   vector<double> q;
 
-  ProgressBar bar(&cout,double(numDivs)*(gLast-1)*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*(gLast-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -802,7 +1020,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  pg_stats.calcVar();
 	  pg_stats.calcStdErr();
 
-	  pg_stats.printStats(pg_out,pop[j].getName(),g);
+	  pg_stats.printStats(pg_out,pop[j].getName(),g,param.tsv.val);
 
 	  if(full_priv)
 	    {
@@ -810,7 +1028,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	    }
 	}
 
-      pg_out << endl;
+      if(!param.tsv.val) pg_out << endl;
       pg_full_out << endl;
     }
 
@@ -851,8 +1069,9 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   ag_out.open(richness_out.c_str());
+  if(param.tsv.val) ag_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
 
-  ProgressBar bar(&cout,double(numDivs)*(gTop-1)*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*(gTop-1)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -911,7 +1130,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	  ag_stats.calcVar();
 	  ag_stats.calcStdErr();
 
-	  ag_stats.printStats(ag_out,pop[j].getName(),g);
+	  ag_stats.printStats(ag_out,pop[j].getName(),g,param.tsv.val);
 
 	  if(full_rich)
 	    {
@@ -919,7 +1138,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	    }
 	}
 
-      ag_out << endl;
+      if(!param.tsv.val) ag_out << endl;
       ag_full_out << endl;
     }
 

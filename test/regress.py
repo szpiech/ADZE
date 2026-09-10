@@ -65,13 +65,35 @@ def outputs(workdir, dataset_file):
 
 
 def masked(path):
+    """File contents with the parts that legitimately differ removed.
+
+    Timing lines differ between any two runs. In the run summary, blank lines
+    are dropped too, so that a build reporting extra phases (e.g. a total
+    runtime line the reference never wrote) still compares on the parameters
+    it echoes.
+    """
     with open(path, "rb") as fh:
         raw = fh.read()
     try:
         text = raw.decode()
     except UnicodeDecodeError:
         return raw
-    return "\n".join(l for l in text.splitlines() if not TIME_LINE.search(l)).encode()
+    lines = [l for l in text.splitlines() if not TIME_LINE.search(l)]
+    if path.endswith("_summary") or path.endswith(".summary.txt"):
+        lines = [l for l in lines if l.strip()]
+    return "\n".join(lines).encode()
+
+
+# ADZE 1.0 returned -1 (exit status 255) for every failure. The candidate
+# distinguishes usage, I/O and data-validation errors, so a 255 from the
+# reference matches any of those.
+CANDIDATE_FAILURE_CODES = (2, 3, 4, 255)
+
+
+def comparable_status(ref_rc, cnd_rc):
+    if ref_rc == cnd_rc:
+        return True
+    return ref_rc == 255 and cnd_rc in CANDIDATE_FAILURE_CODES
 
 
 def reference_has_no_loci(directory, files):
@@ -177,8 +199,13 @@ def main():
                 status, detail = "FIXED", (
                     "reference reported statistics over 0 loci, candidate "
                     "exited %d with a diagnostic" % cnd.returncode)
-        elif ref.returncode != cnd.returncode:
+        elif not comparable_status(ref.returncode, cnd.returncode):
             status, detail = "FAIL", "exit status %d vs %d" % (ref.returncode, cnd.returncode)
+        elif ref.returncode != 0:
+            # Both refused the input. What a failed run leaves behind is not a
+            # contract, so only the refusal itself is compared.
+            status, detail = "PASS", "both rejected the input (%d / %d)" % (
+                ref.returncode, cnd.returncode)
         else:
             ref_files, cnd_files = outputs(ref_dir, dfile), outputs(cnd_dir, dfile)
             if ref_files != cnd_files:
