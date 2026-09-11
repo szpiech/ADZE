@@ -6,6 +6,13 @@ are compared byte-for-byte.  A case passes only if the two builds produce the
 same file set with the same bytes (after masking the wall-clock lines that are
 expected to differ between runs) and the same exit status.
 
+One qualification since 2.0 sweeps from g = 1: ADZE 1.0 started at g = 2 and
+cannot produce a g = 1 row, so whole files no longer match.  The comparison is
+over the rows both builds compute -- every row at g >= 2, byte-for-byte -- and
+the g = 1 rows are accounted for separately: each results file must carry
+exactly one per label.  Report it that way rather than as a file-level
+identity.
+
     ./test/regress.py --candidate src/adze --reference /path/to/adze-1.0
 
 Cases where the reference build dies on a signal are not comparable: ADZE 1.0
@@ -64,13 +71,35 @@ def outputs(workdir, dataset_file):
     return sorted(f for f in os.listdir(workdir) if f not in skip)
 
 
-def masked(path):
+def stat_g(fields):
+    """The g a results row reports, or None if the row has no g.
+
+    The label ahead of g is one field for a grouping and k fields for a tuple,
+    so g is the first field that parses as an integer. Grouping names in the
+    generated fixtures and in the distributed example are never purely
+    numeric, which is what makes that unambiguous here; it is a convenience
+    for the harness, not a rule the program imposes on labels.
+    """
+    for i, f in enumerate(fields):
+        try:
+            return int(f)
+        except ValueError:
+            continue
+    return None
+
+
+def masked(path, drop_g1=False):
     """File contents with the parts that legitimately differ removed.
 
     Timing lines differ between any two runs. In the run summary, blank lines
     are dropped too, so that a build reporting extra phases (e.g. a total
     runtime line the reference never wrote) still compares on the parameters
     it echoes.
+
+    drop_g1 removes the g = 1 rows, which ADZE 1.0 never computed: its sweeps
+    started at g = 2. Passing it for the candidate only is what keeps this a
+    comparison of the rows both builds produce, rather than a looser one. The
+    g = 1 rows are accounted for separately, in g1_rows below.
     """
     with open(path, "rb") as fh:
         raw = fh.read()
@@ -81,7 +110,29 @@ def masked(path):
     lines = [l for l in text.splitlines() if not TIME_LINE.search(l)]
     if path.endswith("_summary") or path.endswith(".summary.txt"):
         lines = [l for l in lines if l.strip()]
+    elif drop_g1:
+        lines = [l for l in lines if stat_g(l.split()) != 1]
     return "\n".join(lines).encode()
+
+
+def g1_rows(path):
+    """(g = 1 rows, distinct labels) in a results file.
+
+    A statistics file carries one row per label per g, so a build sweeping
+    from g = 1 must add exactly one row per label -- no more, and not none.
+    """
+    labels = set()
+    n = 0
+    for line in open(path):
+        fields = line.split()
+        g = stat_g(fields)
+        if g is None:
+            continue
+        label = " ".join(fields[:fields.index(str(g))])
+        labels.add(label)
+        if g == 1:
+            n += 1
+    return n, labels
 
 
 # ADZE 1.0 returned -1 (exit status 255) for every failure. The candidate
@@ -119,16 +170,34 @@ def reference_has_no_loci(directory, files):
     return False
 
 
-def compare(dir_a, dir_b, files):
-    diffs = []
+# Files that carry statistics rows, and so gain a g = 1 row in the candidate.
+def is_results_file(name):
+    return not (name.endswith("_summary") or name.endswith(".summary.txt")
+                or name.endswith("deletedloci"))
+
+
+def compare(ref_dir, cnd_dir, files):
+    """Files that differ beyond what is expected, and missing g = 1 rows.
+
+    The candidate sweeps from g = 1 and the reference from g = 2, so the
+    comparison is over the g >= 2 rows; the extra rows are checked for
+    separately, since a build that quietly stopped writing them would
+    otherwise pass.
+    """
+    diffs, missing = [], []
     for f in files:
-        a, b = os.path.join(dir_a, f), os.path.join(dir_b, f)
-        if filecmp.cmp(a, b, shallow=False):
+        a, b = os.path.join(ref_dir, f), os.path.join(cnd_dir, f)
+
+        if masked(a) != masked(b, drop_g1=is_results_file(f)):
+            diffs.append(f)
             continue
-        if masked(a) == masked(b):
-            continue                       # differs only in wall-clock lines
-        diffs.append(f)
-    return diffs
+
+        if is_results_file(f):
+            n, labels = g1_rows(b)
+            if n != len(labels):
+                missing.append("%s: %d g=1 rows for %d labels"
+                               % (f, n, len(labels)))
+    return diffs, missing
 
 
 def main():
@@ -212,11 +281,15 @@ def main():
                 status, detail = "FAIL", "output file set differs: %s vs %s" % (
                     ref_files, cnd_files)
             else:
-                diffs = compare(ref_dir, cnd_dir, ref_files)
+                diffs, missing = compare(ref_dir, cnd_dir, ref_files)
                 if diffs:
                     status, detail = "FAIL", "byte differences in %s" % ", ".join(diffs)
+                elif missing:
+                    status, detail = "FAIL", "g=1 rows wrong: %s" % "; ".join(missing)
                 else:
-                    status, detail = "PASS", "%d files identical" % len(ref_files)
+                    status, detail = "PASS", (
+                        "%d files identical over g>=2, g=1 rows present"
+                        % len(ref_files))
 
         if status == "FAIL":
             nfail += 1

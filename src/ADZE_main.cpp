@@ -429,7 +429,7 @@ int main(int argc, char* argv[])
 
   if(!p.g.set)
     {
-      p.g.val = (feasibleG < 2) ? 2 : feasibleG;
+      p.g.val = (feasibleG < 1) ? 1 : feasibleG;
       adzelog() << "MAX_G not given; using " << p.g.val << ", the largest the "
 		<< p.loci.val << " surviving loci support.\n";
       summary << "MAX_G resolved to " << p.g.val << " over " << p.loci.val

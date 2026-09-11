@@ -17,6 +17,9 @@ invariant that must hold whatever the numbers are:
   formats          the same genotypes windowed from VCF and from
                    STRUCTURE-plus-map give identical output
   threads          window output does not depend on --threads
+  g1              at one gene copy the estimators have closed forms in the
+                   allele frequencies; every per-locus value must match, and
+                   richness must be exactly 1
   refusals         unsorted positions, a chromosome in two blocks, a locus
                    with no coordinate, and STRUCTURE without a map are all
                    refused
@@ -45,6 +48,16 @@ RTOL = 2e-5
 # here. The check still catches a wrong locus set or a wrong divisor, both of
 # which are off by percents, not parts per million.
 VAR_RTOL = 1e-3
+
+# At g = 1 every locus gives a richness of exactly 1, so the variance across a
+# window is the square of the rounding in that sum (around 1e-33) and its
+# standard error the square root of that (around 1e-17), where double
+# precision on values of order 1 carries about 1e-16. Both are numerically
+# zero, and a relative test on them compares noise with noise. The floor sits
+# far above that noise and far below anything real: the smallest non-zero
+# standard error anywhere in these fixtures is of order 1e-3, and a window
+# whose loci genuinely agree reports exactly 0, which compares equal anyway.
+ATOL = 1e-12
 
 
 def run(binary, workdir, args, expect=0):
@@ -81,6 +94,8 @@ def read_fulldata(path):
 def close(a, b, rtol=RTOL):
     if a == b:
         return True
+    if abs(a) < ATOL and abs(b) < ATOL:
+        return True                      # both numerically zero
     scale = max(abs(a), abs(b), 1e-300)
     return abs(a - b) / scale <= rtol
 
@@ -292,6 +307,115 @@ def case_threads(s, adze, w):
             "1 and 4 threads differ")
 
 
+def case_g1_closed_forms(s, adze, w):
+    """g = 1 is the one place the estimators have closed forms in the allele
+    frequencies, so the output can be checked against an exact expectation
+    rather than an invariant.
+
+    With p for an allele's frequency in a grouping at a locus:
+      richness       sum of p over the alleles binned there, hence exactly 1
+                     wherever the grouping scored a gene copy
+      private        sum over alleles of p times the product of (1 - p) over
+                     every other grouping -- an allele merely rare elsewhere
+                     still contributes, so this is not the frequency of
+                     strictly private alleles
+      tuple          sum over alleles of the product of p over the tuple's
+                     members times the product of (1 - p) over the rest
+
+    Richness being an identity makes it a probe on the allele binning and on
+    the recurrence's base case: a locus that does not give 1 means one of
+    those is wrong.
+    """
+    meta = gen_data.write_pair(os.path.join(w, "cf"), npops=3, nind=8,
+                               nloci=12, nall=5, missing=0.1, seed=21)
+    run(adze, w, ["--data", "cf.stru", "--group-col", "2", "--out-prefix", "cf",
+                  "--full-richness", "--full-private", "--full-tuples",
+                  "--combinations", "--tuples-k", "1-3"])
+
+    # Allele counts per grouping per locus, read back from the input.
+    rows = [l.split() for l in open(os.path.join(w, "cf.stru")) if l.strip()]
+    nloci = len(rows[0])
+    counts = {}
+    for r in rows[1:]:
+        for l, a in enumerate(r[2:]):
+            if a != "-9":
+                counts.setdefault((r[1], l), {})
+                counts[(r[1], l)][a] = counts[(r[1], l)].get(a, 0) + 1
+    pops = sorted({r[1] for r in rows[1:]})
+
+    def freq(pop, l):
+        c = counts.get((pop, l), {})
+        n = sum(c.values())
+        return {a: v / n for a, v in c.items()} if n else {}
+
+    def alleles(l):
+        out = set()
+        for q in pops:
+            out |= set(counts.get((q, l), {}))
+        return out
+
+    def expect(members):
+        """Closed form per locus for a tuple of groupings (one member = the
+        private-richness case)."""
+        vals = []
+        for l in range(nloci):
+            f = {q: freq(q, l) for q in pops}
+            tot = 0.0
+            for a in alleles(l):
+                term = 1.0
+                for q in pops:
+                    p = f[q].get(a, 0.0)
+                    term *= p if q in members else (1.0 - p)
+                tot += term
+            vals.append(tot)
+        return vals
+
+    def per_locus(path, label_size):
+        """{label: [per-locus values]} for the g = 1 rows of a *_fulldata file."""
+        out = {}
+        for line in open(path):
+            f = line.split()
+            if not f or not f[label_size].isdigit() or int(f[label_size]) != 1:
+                continue
+            n = int(f[label_size + 1])
+            out[" ".join(f[:label_size])] = [float(x) for x in
+                                             f[label_size + 2:label_size + 2 + n]]
+        return out
+
+    # Richness: exactly 1 everywhere.
+    rich = per_locus(os.path.join(w, "cf.richness_fulldata"), 1)
+    s.check("g1.richness.labels", len(rich) == len(pops),
+            "%d groupings in the g=1 rows, expected %d" % (len(rich), len(pops)))
+    for pop, vals in rich.items():
+        s.check("g1.richness.%s" % pop, all(v == 1.0 for v in vals),
+                "not all 1: %s" % sorted(set(vals))[:4])
+
+    # Private richness: the product form above.
+    priv = per_locus(os.path.join(w, "cf.private_fulldata"), 1)
+    for pop, vals in priv.items():
+        want = expect({pop})
+        worst = max(abs(a - b) for a, b in zip(vals, want))
+        s.check("g1.private.%s" % pop, worst <= 1e-6,
+                "max deviation %.3g from the closed form" % worst)
+
+    # Tuples: same form over each tuple's members.
+    for k in (1, 2, 3):
+        path = os.path.join(w, "cf.tuples_k%d_fulldata" % k)
+        if not os.path.exists(path):
+            cand = [f for f in os.listdir(w)
+                    if f.startswith("cf.tuples") and "fulldata" in f and str(k) in f]
+            if not cand:
+                continue
+            path = os.path.join(w, cand[0])
+        got = per_locus(path, k)
+        s.check("g1.tuples_k%d.rows" % k, len(got) > 0, "no g=1 rows")
+        for label, vals in got.items():
+            want = expect(set(label.split()))
+            worst = max(abs(a - b) for a, b in zip(vals, want))
+            s.check("g1.tuple.%s" % label.replace(" ", "+"), worst <= 1e-6,
+                    "max deviation %.3g from the closed form" % worst)
+
+
 def case_refusals(s, adze, w):
     """Inputs a window cannot be defined over are refused, not guessed at."""
     meta = gen_data.write_pair(os.path.join(w, "rf"), npops=3, nind=5,
@@ -353,7 +477,8 @@ def main():
 
     s = Suite(args.verbose)
     for case in (case_whole, case_recompute, case_layout, case_units,
-                 case_minloci, case_formats, case_threads, case_refusals):
+                 case_minloci, case_formats, case_threads,
+                 case_g1_closed_forms, case_refusals):
         case(s, args.candidate, args.workdir)
 
     if not s.failures and not args.keep:

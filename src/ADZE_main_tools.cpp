@@ -1585,10 +1585,10 @@ void calcPgTuples(Population pop[], int numDivs,
 
   int gLast = param.g.val;
   if(minNjAll < gLast) gLast = minNjAll;
-  if(gLast < 2) gLast = 2;
+  if(gLast < 1) gLast = 1;
   const int gStride = gLast + 1;
 
-  ProgressBar bar(&adzelog(),double(tot_m)*(gLast-1)*numLoci,
+  ProgressBar bar(&adzelog(),double(tot_m)*gLast*numLoci,
 		  BARLEN[min(int(widest)-1,3)]);
   if(param.pp.val)
     {
@@ -1639,7 +1639,7 @@ void calcPgTuples(Population pop[], int numDivs,
 	  const int numAlleles = pop[0].getNjiColLength(locus);
 	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
 
-	  for(int g = 2; g <= gLast; g++)
+	  for(int g = 1; g <= gLast; g++)
 	    {
 	      double pg = 0;
 
@@ -1675,12 +1675,12 @@ void calcPgTuples(Population pop[], int numDivs,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gLast-1);
+	      bar.adv(gLast);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 2; g <= gLast; g++)
+      for(int g = 1; g <= gLast; g++)
 	{
 	  Stats comb_stats;
 	  comb_stats.putData(&pgcomb[size_t(g)*numLoci],numLoci);
@@ -1705,7 +1705,7 @@ void calcPgTuples(Population pop[], int numDivs,
 	   */
 	  const string win_names = combineNames(&names[0],k,',');
 	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
-			   win_names,2,gLast);
+			   win_names,1,gLast);
 	}
 
       if(!param.tsv.val) reg_out << endl;
@@ -1830,12 +1830,12 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
   int gLast = param.g.val;
   if(minNjAll < gLast) gLast = minNjAll;
-  if(gLast < 2) gLast = 2; //1.0 always evaluated g = 2 at least once
+  if(gLast < 1) gLast = 1;
   const int gStride = gLast + 1;
 
   vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
 
-  ProgressBar bar(&adzelog(),double(numDivs)*(gLast-1)*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*gLast*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -1868,7 +1868,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  const int numAlleles = pop[j].getNjiColLength(locus);
 	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
 
-	  for(int g = 2; g <= gLast; g++)
+	  for(int g = 1; g <= gLast; g++)
 	    {
 	      if(minNjLocus[locus] < g)
 		{
@@ -1897,12 +1897,12 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gLast-1);
+	      bar.adv(gLast);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 2; g <= gLast; g++)
+      for(int g = 1; g <= gLast; g++)
 	{
 	  Stats pg_stats;
 	  pg_stats.putData(&pg[size_t(g)*numLoci],numLoci);
@@ -1921,7 +1921,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
       if(!windows.empty())
 	{
 	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
-			   pop[j].getName(),2,gLast);
+			   pop[j].getName(),1,gLast);
 	}
 
       if(!param.tsv.val) pg_out << endl;
@@ -1977,7 +1977,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       writeWindowHeader(ag_win_out,"POP_GROUPING");
     }
 
-  ProgressBar bar(&adzelog(),double(numDivs)*(gTop-1)*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*gTop*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -2021,7 +2021,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  buildQTable(&pop[j],1,locus,numAlleles,gTop,gStride,q);
 
-	  for(int g = 2; g <= gTop; g++)
+	  for(int g = 1; g <= gTop; g++)
 	    {
 	      if(g > Nj)
 		{
@@ -2043,12 +2043,12 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gTop-1);
+	      bar.adv(gTop);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 2; g <= gTop; g++)
+      for(int g = 1; g <= gTop; g++)
 	{
 	  Stats ag_stats;
 	  ag_stats.putData(&ag[size_t(g)*numLoci],numLoci);
@@ -2067,7 +2067,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       if(!windows.empty())
 	{
 	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
-			   pop[j].getName(),2,gTop);
+			   pop[j].getName(),1,gTop);
 	}
 
       if(!param.tsv.val) ag_out << endl;
