@@ -72,6 +72,23 @@ covers the same range of *g* and the scan is comparable end to end. Loci must
 be in genome order; ADZE says which locus breaks the order rather than sorting
 the file for you.
 
+### Standardized sample sizes
+
+Every statistic is reported at each g from 1 to `MAX_G`. At g = 1 allelic
+richness is exactly 1 by construction (one gene copy carries one allele), which
+makes that row a check on the allele binning rather than a measurement; private
+allelic richness at g = 1 is the chance that a single copy drawn from the
+grouping carries an allele that single draws from every other grouping all
+miss.
+
+`--at-g N` reports one g instead, and `--at-g max` reports at whatever `MAX_G`
+resolves to without needing to know the number. A request above the reachable
+ceiling — `MAX_G`, or the smallest number of gene copies scored anywhere — is
+met at that ceiling with a warning. Since the recurrence in g is sequential the
+sweep still climbs to the requested g, so the saving scales with how low it is:
+on 20k loci in 12 groupings with all 66 pairwise tuples and `MAX_G` 33,
+`--at-g 2` took 0.58s against 6.72s for the full ladder.
+
 `LOCI`, `DATA_LINES` and `NON_DATA_COLS` are measured from the input file, and
 `MAX_G` defaults to the largest standardized sample size the surviving loci
 support, so the minimum invocation is a data file and (for multi-column
@@ -102,6 +119,7 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 | `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) |
 | `--samples FILE` | sample-to-grouping map, required for VCF input |
 | `--format auto\|structure\|vcf` | input format; `auto` reads the file name |
+| `--at-g N` / `--at-g max` | report a single g instead of every g from 1 to `MAX_G` |
 | `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci |
 | `--step-bp N` / `--step-loci N` | how far a window advances (default: its own width, i.e. no overlap) |
 | `--min-window-loci N` | skip windows holding fewer than N loci |

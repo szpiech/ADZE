@@ -159,6 +159,30 @@ every locus used, which requires $g \leq N_j$ at each locus for the grouping
 concerned. With a single locus ($L = 1$) the variance and standard error are
 undefined and are reported as \texttt{nan}.
 
+\subsection{One gene copy}
+\label{sec:gone}
+
+The sweep starts at $g = 1$, which is worth reading once because each
+statistic means something different there and one of them is a constant.
+
+Allelic richness at $g = 1$ is exactly 1 at every locus: with
+$Q_{ji1} = (N_j - N_{ji})/N_j$ each allele contributes its own frequency
+$p_{ji}$, and the frequencies sum to 1. Drawing a single gene copy always
+yields one distinct allele, so the row is the estimator agreeing with a
+certainty rather than reporting anything about the data. It is still useful as
+a check: a locus that does not give 1 means the allele binning or the
+recurrence is wrong. Its variance across loci comes out as a number around
+$10^{-33}$, the square of the rounding in a sum of ones, which is numerically
+zero.
+
+Private allelic richness at $g = 1$ is
+$\sum_i p_{ji} \prod_{j' \neq j} (1 - p_{j'i})$: the chance that a single gene
+copy drawn from $j$ carries an allele that single draws from every other
+grouping all miss. Note that every allele present in $j$ contributes, weighted
+by how likely it is to be missed elsewhere --- this is not the summed frequency
+of the alleles strictly private to $j$. The tuple statistic at $g = 1$ is the
+same form with the product of $p$ taken over the tuple's members.
+
 \section{Getting started}
 
 \subsection{Obtaining \prog}
@@ -396,6 +420,41 @@ line with surrounding whitespace removed, so values may contain spaces and may
 contain other keywords as substrings. Boolean parameters take \texttt{0} or
 \texttt{1}.
 
+\subsection{Reporting a single \texorpdfstring{$g$}{g}}
+\label{sec:atg}
+
+By default every $g$ from 1 to \texttt{MAX\_G} is reported. \flag{--at-g}
+asks for one instead:
+
+\begin{description}[leftmargin=2em,style=nextline]
+\item[\flag{--at-g} \textit{N}] report only $g = N$.
+\item[\flag{--at-g max}] report only at whatever \texttt{MAX\_G} resolves to,
+  without having to know the number in advance.
+\end{description}
+
+\noindent One flag governs every output: the three statistics, their
+per-locus companions and their window files all carry the single $g$, with the
+same columns as a full run --- including the $g$ column --- so a consumer reads
+either the same way.
+
+Two ceilings bind the request: \texttt{MAX\_G}, which is what the run was
+asked to sweep, and the smallest number of gene copies scored anywhere, which
+is the largest $g$ with defined values. A request above the lower of the two is
+met at that ceiling, with a warning naming the value asked for, the value used
+and which bound applied. This differs deliberately from an over-large
+\texttt{MAX\_G}, which keeps its shape and reports the unreachable rows as
+undefined: a ladder with \texttt{NA} at the top is still a ladder, whereas a
+single-$g$ report of nothing but \texttt{NA} would be no answer at all. A
+value below 1 is refused rather than rounded up, $g$ being a sample size.
+
+Because the recurrence in $g$ is sequential, the sweep still has to climb to
+the $g$ being reported --- but no further, and the buffers hold no more than
+that. The saving therefore scales with how far below \texttt{MAX\_G} the
+request sits: on 20\,000 loci in 12 groupings with all 66 pairwise tuples and
+\texttt{MAX\_G} at 33, \flag{--at-g 2} ran in 0.58\,s against 6.72\,s for the
+full ladder, while \flag{--at-g 33} saved 3\%, the climb being the whole
+ladder anyway.
+
 \subsection{Option reference}
 \label{sec:options}
 
@@ -586,6 +645,11 @@ file, where the grouping names are joined with commas so the label stays one
 field. Rows are ordered by grouping, then by $g$, then along the genome, so
 the track for one grouping at one $g$ is a contiguous block.
 
+A scan is usually read at one $g$, and \flag{--at-g}
+(section~\ref{sec:atg}) is the economical way to ask for it: the file holds one
+row per window per grouping instead of one per window per grouping per $g$. On
+the scan below that is the difference between 912 rows and 48.
+
 Windowed tuple output is large: one row per window per $g$ per tuple.
 \flag{--dry-run} reports the row count each statistic would write, along with
 the window count and how many windows fell below the threshold, before
@@ -748,13 +812,14 @@ Largest feasible MAX_G: 20
 MAX_G to be used:       the largest feasible
 Windows:          12 of 50000 bp, step 25000
   loci per window: 5-10
-  richness rows:   912
-  private rows:    912
+  richness rows:   960
+  private rows:    960
 \end{Verbatim}
 
-\noindent Twelve windows, none thinner than five loci, and $g$ running to 20
-everywhere because every grouping has 24 gene copies and the sparsest locus
-still carries 20. Then run it, with a floor on how thin a window may be:
+\noindent Twelve windows, none thinner than five loci, and $g$ running from 1
+to 20 everywhere because every grouping has 24 gene copies and the sparsest
+locus still carries 20 --- twelve windows times twenty values of $g$ times four
+groupings. Then run it, with a floor on how thin a window may be:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 adze --data scan.vcf --samples scan.samples \
@@ -762,16 +827,20 @@ adze --data scan.vcf --samples scan.samples \
      --out-prefix scan
 \end{Verbatim}
 
+\noindent Nine hundred and sixty rows is more than a scan is usually read at.
+Adding \flag{--at-g 10} asks for one $g$ and gives 48 --- one row per window
+per grouping:
+
 \begin{Verbatim}[frame=single,fontsize=\small]
-CHROM  START   END     POP_GROUPING  G  NUM_LOCI  MEAN     VAR         STD_ERR
-chr1   1       50000   POP0          2  10        1.64173  0.00827836  0.0287721
-chr1   25001   75000   POP0          2  10        1.66457  0.00638622  0.025271
-chr1   50001   100000  POP0          2  10        1.66175  0.0103564   0.0321814
+CHROM  START   END     POP_GROUPING  G   NUM_LOCI  MEAN     VAR        STD_ERR
+chr1   1       50000   POP0          10  10        3.43492  0.0673694  0.0820789
+chr1   25001   75000   POP0          10  10        3.55669  0.0546877  0.0739512
 \end{Verbatim}
 
 \noindent The consecutive windows overlap by 25\,kb, so each interior locus
 contributes to two of them. \texttt{scan.richness} holds the whole-dataset
-figures unchanged alongside.
+figures unchanged alongside, and the rows here are the same bytes the full
+ladder gives at $g = 10$.
 
 \section{Performance and threading}
 
@@ -840,6 +909,13 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
+\item Every statistic is now also reported at $g = 1$
+  (section~\ref{sec:gone}); version 1.0's sweeps started at $g = 2$. The
+  default output therefore carries one extra row per grouping, which is the one
+  respect in which it is not what 1.0 wrote.
+\item \flag{--at-g} reports a single $g$ instead of the whole ladder
+  (section~\ref{sec:atg}), clamping an over-large request to the largest
+  reachable $g$ with a warning.
 \item Sliding-window statistics (section~\ref{sec:windows}): \flag{--window-bp}
   or \flag{--window-loci} with a matching step, \flag{--min-window-loci}, and
   \flag{--loci-map} to give \structureprog\ input the coordinates a window
@@ -879,6 +955,13 @@ the distributed example. All 69 comparable cases are byte-identical; the
 remaining cases are those in which version 1.0 crashes or reports statistics
 over zero loci, and so has no output to compare. The test is in
 \texttt{test/regress.py} and needs a version 1.0 binary to compare against.
+
+Since $g = 1$ was added, that comparison is stated more precisely: 1.0 cannot
+produce a $g = 1$ row, so whole files no longer match. Every row at
+$g \geq 2$ is compared byte-for-byte, which is the guarantee that matters, and
+the $g = 1$ rows are accounted for separately --- each results file must carry
+exactly one per grouping or tuple, so a build that quietly stopped writing
+them fails.
 
 The windowed statistics have no version 1.0 counterpart either, so
 \texttt{test/windows.py} checks them against the layout they claim to cover:
