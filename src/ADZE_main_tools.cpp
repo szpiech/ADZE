@@ -1586,9 +1586,16 @@ void calcPgTuples(Population pop[], int numDivs,
   int gLast = param.g.val;
   if(minNjAll < gLast) gLast = minNjAll;
   if(gLast < 1) gLast = 1;
-  const int gStride = gLast + 1;
+  /*
+   * --at-g: the recurrence in g is sequential, so it still has to climb to the
+   * g being reported -- but no higher, and the buffer need hold no more than
+   * that. Asking for g = 2 where MAX_G is 33 therefore builds a table of 3
+   * rows instead of 34 and stops the climb 31 steps early.
+   */
+  const int gCeil = param.at_g_val ? param.at_g_val : gLast;
+  const int gStride = gCeil + 1;
 
-  ProgressBar bar(&adzelog(),double(tot_m)*gLast*numLoci,
+  ProgressBar bar(&adzelog(),double(tot_m)*(param.at_g_val ? 1 : gLast)*numLoci,
 		  BARLEN[min(int(widest)-1,3)]);
   if(param.pp.val)
     {
@@ -1637,9 +1644,9 @@ void calcPgTuples(Population pop[], int numDivs,
       for(int locus = 0; locus < numLoci; locus++)
 	{
 	  const int numAlleles = pop[0].getNjiColLength(locus);
-	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
+	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gLast; g++)
+	  for(int g = 1; g <= gCeil; g++)
 	    {
 	      double pg = 0;
 
@@ -1675,12 +1682,12 @@ void calcPgTuples(Population pop[], int numDivs,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gLast);
+	      bar.adv(param.at_g_val ? 1 : gLast);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gLast; g++)
+      for(int g = 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
@@ -1711,7 +1718,7 @@ void calcPgTuples(Population pop[], int numDivs,
 	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
 			   win_names,
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gLast);
+			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
       if(!param.tsv.val) reg_out << endl;
@@ -1837,11 +1844,18 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   int gLast = param.g.val;
   if(minNjAll < gLast) gLast = minNjAll;
   if(gLast < 1) gLast = 1;
-  const int gStride = gLast + 1;
+  /*
+   * --at-g: the recurrence in g is sequential, so it still has to climb to the
+   * g being reported -- but no higher, and the buffer need hold no more than
+   * that. Asking for g = 2 where MAX_G is 33 therefore builds a table of 3
+   * rows instead of 34 and stops the climb 31 steps early.
+   */
+  const int gCeil = param.at_g_val ? param.at_g_val : gLast;
+  const int gStride = gCeil + 1;
 
   vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
 
-  ProgressBar bar(&adzelog(),double(numDivs)*gLast*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*(param.at_g_val ? 1 : gLast)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -1872,9 +1886,9 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
       for(int locus = 0; locus < numLoci; locus++)
 	{
 	  const int numAlleles = pop[j].getNjiColLength(locus);
-	  buildQTable(pop,numDivs,locus,numAlleles,gLast,gStride,q);
+	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gLast; g++)
+	  for(int g = 1; g <= gCeil; g++)
 	    {
 	      if(minNjLocus[locus] < g)
 		{
@@ -1903,12 +1917,12 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gLast);
+	      bar.adv(param.at_g_val ? 1 : gLast);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gLast; g++)
+      for(int g = 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
@@ -1933,7 +1947,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
 			   pop[j].getName(),
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gLast);
+			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
       if(!param.tsv.val) pg_out << endl;
@@ -1960,7 +1974,14 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 {
   const int numLoci = param.loci.val;
   const int gTop = param.g.val;
-  const int gStride = gTop + 1;
+  /*
+   * --at-g: the recurrence in g is sequential, so it still has to climb to the
+   * g being reported -- but no higher, and the buffer need hold no more than
+   * that. Asking for g = 2 where MAX_G is 33 therefore builds a table of 3
+   * rows instead of 34 and stops the climb 31 steps early.
+   */
+  const int gCeil = param.at_g_val ? param.at_g_val : gTop;
+  const int gStride = gCeil + 1;
   ofstream ag_full_out,ag_out;
 
   if(full_rich)
@@ -1989,7 +2010,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       writeWindowHeader(ag_win_out,"POP_GROUPING");
     }
 
-  ProgressBar bar(&adzelog(),double(numDivs)*gTop*numLoci,BARLEN[0]);
+  ProgressBar bar(&adzelog(),double(numDivs)*(param.at_g_val ? 1 : gTop)*numLoci,BARLEN[0]);
   if(param.pp.val)
     {
       bar.init();
@@ -2031,9 +2052,9 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	  const int numAlleles = pop[j].getNjiColLength(locus);
 	  const int Nj = pop[j].getNj(locus);
 
-	  buildQTable(&pop[j],1,locus,numAlleles,gTop,gStride,q);
+	  buildQTable(&pop[j],1,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gTop; g++)
+	  for(int g = 1; g <= gCeil; g++)
 	    {
 	      if(g > Nj)
 		{
@@ -2055,12 +2076,12 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 #ifdef _OPENMP
 #pragma omp critical(progress)
 #endif
-	      bar.adv(gTop);
+	      bar.adv(param.at_g_val ? 1 : gTop);
 	    }
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gTop; g++)
+      for(int g = 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
@@ -2085,7 +2106,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
 			   pop[j].getName(),
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gTop);
+			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
       if(!param.tsv.val) ag_out << endl;
