@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check the sliding-window statistics against what the layout implies.
+"""Check the 2.0 statistics that ADZE 1.0 cannot produce.
 
-There is no reference implementation to diff against, so every case here is an
-invariant that must hold whatever the numbers are:
+Sliding windows, g = 1 and single-g reporting have no 1.0 counterpart, so
+test/regress.py has nothing to diff them against. Every case here is instead
+an invariant or a closed form that must hold whatever the numbers are:
 
   whole            one window spanning a single-chromosome dataset reproduces
                    the genome-wide output exactly
@@ -20,6 +21,9 @@ invariant that must hold whatever the numbers are:
   g1              at one gene copy the estimators have closed forms in the
                    allele frequencies; every per-locus value must match, and
                    richness must be exactly 1
+  atg              --at-g must give exactly the rows a full run gives at that
+                   g, in every output file, and must clamp with a warning
+                   rather than reporting an unreachable g
   refusals         unsorted positions, a chromosome in two blocks, a locus
                    with no coordinate, and STRUCTURE without a map are all
                    refused
@@ -416,6 +420,106 @@ def case_g1_closed_forms(s, adze, w):
                     "max deviation %.3g from the closed form" % worst)
 
 
+def case_at_g(s, adze, w):
+    """--at-g reports one g: the rows must be the ones a full run gives there.
+
+    This is the whole contract. If the single-g rows are byte-identical to the
+    corresponding rows of an otherwise identical full run, then narrowing the
+    sweep changed nothing about the answer -- which is the thing worth
+    checking, since the sweep now stops climbing at the requested g.
+    """
+    meta = gen_data.write_pair(os.path.join(w, "ag"), npops=3, nind=6,
+                               nloci=16, nall=5, missing=0.05, seed=22,
+                               chroms=2, spacing=1000)
+
+    common = ["--data", "ag.vcf", "--samples", "ag.samples", "--max-g", "6",
+              "--stat", "richness,private,tuples", "--combinations",
+              "--tuples-k", "2", "--full-richness", "--full-private",
+              "--window-loci", "4"]
+    run(adze, w, common + ["--out-prefix", "ag_full"])
+
+    def rows_at(path, g, label_size=1, tsv=False):
+        """Rows of a results file reporting this g, labels intact."""
+        out = []
+        for line in open(path):
+            f = line.split("\t") if tsv else line.split()
+            if not f or not f[0].strip():
+                continue
+            if tsv and f[0] == "CHROM":
+                continue
+            gi = 4 if tsv else label_size
+            try:
+                if int(f[gi]) == g:
+                    out.append(line.rstrip("\n"))
+            except (ValueError, IndexError):
+                continue
+        return out
+
+    for g in (1, 3, 6):
+        run(adze, w, common + ["--at-g", str(g), "--out-prefix", "ag_%d" % g])
+
+        for stat, label_size in (("richness", 1), ("private", 1)):
+            for suffix in ("", "_fulldata"):
+                full = os.path.join(w, "ag_full.%s%s" % (stat, suffix))
+                one = os.path.join(w, "ag_%d.%s%s" % (g, stat, suffix))
+                want = rows_at(full, g, label_size)
+                got = rows_at(one, g, label_size)
+                s.check("atg.%d.%s%s" % (g, stat, suffix), want == got and want,
+                        "%d rows wanted, %d found" % (len(want), len(got)))
+                # and nothing else is in the file
+                others = [l for l in open(one)
+                          if l.strip() and not l.startswith("POP_GROUPING")
+                          and l.rstrip("\n") not in got]
+                s.check("atg.%d.%s%s.only" % (g, stat, suffix), not others,
+                        "%d rows at other g" % len(others))
+
+        # tuple file: the label is two groupings wide
+        full = os.path.join(w, "ag_full.tuples_2")
+        one = os.path.join(w, "ag_%d.tuples_2" % g)
+        if os.path.exists(full) and os.path.exists(one):
+            s.check("atg.%d.tuples" % g,
+                    rows_at(full, g, 2) == rows_at(one, g, 2) and rows_at(one, g, 2),
+                    "tuple rows differ at g=%d" % g)
+
+        # window files are tab-separated with G in column 5
+        for stat in ("richness_windows", "private_windows"):
+            full = os.path.join(w, "ag_full." + stat)
+            one = os.path.join(w, "ag_%d.%s" % (g, stat))
+            want = rows_at(full, g, tsv=True)
+            got = rows_at(one, g, tsv=True)
+            s.check("atg.%d.%s" % (g, stat), want == got and want,
+                    "%d rows wanted, %d found" % (len(want), len(got)))
+
+    # max resolves to the top of the ladder
+    run(adze, w, common + ["--at-g", "max", "--out-prefix", "ag_max"])
+    s.check("atg.max",
+            open(os.path.join(w, "ag_max.richness")).read() ==
+            open(os.path.join(w, "ag_6.richness")).read(),
+            "--at-g max differs from --at-g 6 with MAX_G 6")
+
+    # over-large request: warns, then reports at the ceiling
+    r = run(adze, w, common + ["--at-g", "99", "--out-prefix", "ag_99"])
+    s.check("atg.clamp.warns", "WARNING" in r.stderr and "--at-g 99" in r.stderr,
+            "no warning naming the request: %s" % r.stderr.strip()[:120])
+    s.check("atg.clamp.output",
+            open(os.path.join(w, "ag_99.richness")).read() ==
+            open(os.path.join(w, "ag_6.richness")).read(),
+            "clamped output differs from asking for the ceiling")
+
+    # an explicit MAX_G below the request binds first
+    r = run(adze, w, ["--data", "ag.vcf", "--samples", "ag.samples",
+                      "--max-g", "3", "--at-g", "5", "--out-prefix", "ag_b"])
+    s.check("atg.clamp.maxg", "reporting at g = 3" in r.stderr,
+            "MAX_G 3 did not bind: %s" % r.stderr.strip()[:120])
+
+    # nonsense is refused, not rounded
+    for bad in ("0", "-2", "two", "max2"):
+        r = run(adze, w, ["--data", "ag.vcf", "--samples", "ag.samples",
+                          "--at-g", bad, "--out-prefix", "ag_bad"])
+        s.check("atg.refuse.%s" % bad, r.returncode == 2 and "ERROR" in r.stderr,
+                "exit %d for --at-g %s" % (r.returncode, bad))
+
+
 def case_refusals(s, adze, w):
     """Inputs a window cannot be defined over are refused, not guessed at."""
     meta = gen_data.write_pair(os.path.join(w, "rf"), npops=3, nind=5,
@@ -478,7 +582,7 @@ def main():
     s = Suite(args.verbose)
     for case in (case_whole, case_recompute, case_layout, case_units,
                  case_minloci, case_formats, case_threads,
-                 case_g1_closed_forms, case_refusals):
+                 case_g1_closed_forms, case_at_g, case_refusals):
         case(s, args.candidate, args.workdir)
 
     if not s.failures and not args.keep:
