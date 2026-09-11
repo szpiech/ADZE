@@ -20,7 +20,7 @@ enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
      OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,TSV,DRY_RUN,QUIET,THREADS,PARAMS,
      FORMAT,SAMPLES,LOCI_MAP,
-     WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,
+     WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,
      LABEL_SIZE};
 
 enum OptType{OPT_INT,OPT_LONG,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
@@ -115,6 +115,14 @@ class ParamSet
   Param<long long> step_bp;
   Param<long long> step_loci;
   Param<int> min_win_loci;
+
+  /*
+   * Report one g instead of the whole ladder.  Held as text because the value
+   * is either a number or the word max; at_g_val carries the resolved integer
+   * once the ceilings are known, and 0 means "report every g", the default.
+   */
+  Param<string> at_g;
+  int at_g_val;
 
   bool windowed() const { return win_bp.set || win_loci.set; }
   Param<bool> tsv;

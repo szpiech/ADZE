@@ -1682,6 +1682,10 @@ void calcPgTuples(Population pop[], int numDivs,
 
       for(int g = 1; g <= gLast; g++)
 	{
+	  //--at-g: one row, not the ladder.  The sweep above still had to
+	  //climb to it, the recurrence in g being sequential.
+	  if(param.at_g_val && g != param.at_g_val) continue;
+
 	  Stats comb_stats;
 	  comb_stats.putData(&pgcomb[size_t(g)*numLoci],numLoci);
 	  comb_stats.calcAvg();
@@ -1705,7 +1709,9 @@ void calcPgTuples(Population pop[], int numDivs,
 	   */
 	  const string win_names = combineNames(&names[0],k,',');
 	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
-			   win_names,1,gLast);
+			   win_names,
+			   param.at_g_val ? param.at_g_val : 1,
+			   param.at_g_val ? param.at_g_val : gLast);
 	}
 
       if(!param.tsv.val) reg_out << endl;
@@ -1904,6 +1910,10 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
       for(int g = 1; g <= gLast; g++)
 	{
+	  //--at-g: one row, not the ladder.  The sweep above still had to
+	  //climb to it, the recurrence in g being sequential.
+	  if(param.at_g_val && g != param.at_g_val) continue;
+
 	  Stats pg_stats;
 	  pg_stats.putData(&pg[size_t(g)*numLoci],numLoci);
 	  pg_stats.calcAvg();
@@ -1921,7 +1931,9 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
       if(!windows.empty())
 	{
 	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
-			   pop[j].getName(),1,gLast);
+			   pop[j].getName(),
+			   param.at_g_val ? param.at_g_val : 1,
+			   param.at_g_val ? param.at_g_val : gLast);
 	}
 
       if(!param.tsv.val) pg_out << endl;
@@ -2050,6 +2062,10 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
       for(int g = 1; g <= gTop; g++)
 	{
+	  //--at-g: one row, not the ladder.  The sweep above still had to
+	  //climb to it, the recurrence in g being sequential.
+	  if(param.at_g_val && g != param.at_g_val) continue;
+
 	  Stats ag_stats;
 	  ag_stats.putData(&ag[size_t(g)*numLoci],numLoci);
 	  ag_stats.calcAvg();
@@ -2067,7 +2083,9 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       if(!windows.empty())
 	{
 	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
-			   pop[j].getName(),1,gTop);
+			   pop[j].getName(),
+			   param.at_g_val ? param.at_g_val : 1,
+			   param.at_g_val ? param.at_g_val : gTop);
 	}
 
       if(!param.tsv.val) ag_out << endl;

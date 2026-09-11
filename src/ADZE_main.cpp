@@ -238,6 +238,24 @@ int main(int argc, char* argv[])
 	       << "which can raise both numbers)\n";
 	}
 
+      /*
+       * The g that will actually be reported, against the ceilings known
+       * before filtering: the same rule the run itself applies, so the dry
+       * run says what the run will do rather than what was asked for.
+       */
+      if(p.at_g.set)
+	{
+	  const int sweepTop = p.g.set ? p.g.val : ((feasibleG < 1) ? 1 : feasibleG);
+	  int ceiling = (feasibleG < sweepTop) ? feasibleG : sweepTop;
+	  if(ceiling < 1) ceiling = 1;
+
+	  const int asked = (p.at_g.val == "max") ? sweepTop : p.at_g_val;
+	  cout << "Reporting at g:         " << ((asked > ceiling) ? ceiling : asked);
+	  if(asked > ceiling) cout << "  (--at-g " << p.at_g.val
+				   << " clamped to the ceiling)";
+	  cout << "\n";
+	}
+
       if(p.windowed())
 	{
 	  /*
@@ -290,7 +308,9 @@ int main(int argc, char* argv[])
 	   * tuple statistics multiply that by the number of tuples, so say how
 	   * large the files will be before anyone waits for them.
 	   */
-	  const int gRange = (p.g.set ? p.g.val : feasibleG) - 1;
+	  //Rows per window: the whole ladder from g = 1, or one row for --at-g.
+	  const int gRange = p.at_g.set
+	    ? 1 : (p.g.set ? p.g.val : ((feasibleG < 1) ? 1 : feasibleG));
 	  if(gRange > 0)
 	    {
 	      long long rows = (long long)(windows.size()) * gRange;
@@ -441,6 +461,43 @@ int main(int argc, char* argv[])
 		<< "sample size in the data (" << feasibleG << ").\n"
 		<< "         Rows above g = " << feasibleG
 		<< " will be undefined.\n";
+    }
+
+  /*
+   * --at-g reports one g instead of the ladder.  Two ceilings bind: MAX_G,
+   * which is what the run was asked to sweep, and the smallest number of gene
+   * copies scored anywhere, which is the largest g with defined values.  A
+   * request above either is met at the ceiling with a warning -- unlike an
+   * over-large MAX_G, which keeps its shape and reports the unreachable rows
+   * as undefined, because a single-g report of nothing but NA would be no
+   * answer at all.
+   */
+  if(p.at_g.set)
+    {
+      const bool wantsMax = (p.at_g.val == "max");
+      int target = wantsMax ? p.g.val : p.at_g_val;
+
+      int ceiling = p.g.val;
+      string bound = "MAX_G";
+      if(feasibleG < ceiling)
+	{
+	  ceiling = feasibleG;
+	  bound = "the smallest sample size in the data";
+	}
+      if(ceiling < 1) ceiling = 1;
+
+      if(target > ceiling)
+	{
+	  adzelog() << "WARNING: --at-g " << p.at_g.val << " exceeds " << bound
+		    << " (" << ceiling << "); reporting at g = " << ceiling
+		    << ".\n";
+	  target = ceiling;
+	}
+
+      p.at_g_val = target;
+
+      adzelog() << "Reporting at g = " << p.at_g_val << " only.\n";
+      summary << "AT_G resolved to " << p.at_g_val << endl;
     }
 
   if(do_rich)

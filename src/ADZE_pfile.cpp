@@ -58,6 +58,8 @@ const OptSpec OPTIONS[] = {
    "Analysis", "advance locus windows by N loci (default: the window width)"},
   {MIN_WIN_LOCI,"MIN_WINDOW_LOCI","--min-window-loci",0,         OPT_INT,    "N",
    "Analysis", "do not report a window holding fewer than N loci (default 1)"},
+  {AT_G,      "AT_G",           "--at-g",           0,           OPT_STRING, "N|max",
+   "Analysis", "report only this g, or max for whatever MAX_G resolves to (default: every g)"},
   {STAT,      0,                "--stat",           0,           OPT_STRING, "LIST",
    "Analysis", "which statistics to compute: richness,private,tuples (default: richness,private)"},
   {TOL,       "TOLERANCE",      "--tolerance",      "-t",        OPT_DOUBLE, "X",
@@ -143,6 +145,8 @@ ParamSet::ParamSet()
   step_bp.val = 0;
   step_loci.val = 0;
   min_win_loci.val = 1;
+  at_g.val = "";
+  at_g_val = 0;
   tsv.val = 0;
   dry_run.val = 0;
   quiet.val = 0;
@@ -285,6 +289,7 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case STEP_BP:    SETP(step_bp);    step_bp.val = atoll(val.c_str());  break;
     case STEP_LOCI:  SETP(step_loci);  step_loci.val = atoll(val.c_str());break;
     case MIN_WIN_LOCI: SETP(min_win_loci); min_win_loci.val = atoi(val.c_str()); break;
+    case AT_G:       SETP(at_g);       at_g.val = val;                   break;
     case PARAMS:     SETP(params);     params.val = val;                 break;
     case COMB:       SETP(comb);       comb.val = boolValue(val);        break;
     case FULL_R:     SETP(full_r);     full_r.val = boolValue(val);      break;
@@ -560,6 +565,22 @@ bool ParamSet::finish()
 	   << "ignoring it.\n";
     }
 
+  /*
+   * --at-g takes a number or the word max.  A value below 1 is refused rather
+   * than rounded up: g is a sample size, and 0 gene copies is not a request
+   * the program can meet halfway.
+   */
+  if(at_g.set && at_g.val != "max")
+    {
+      if(!isint(at_g.val) || atoi(at_g.val.c_str()) < 1)
+	{
+	  cerr << "ERROR: --at-g takes a whole number of 1 or more, or the "
+	       << "word max; got \"" << at_g.val << "\".\n";
+	  ok = 0;
+	}
+      else at_g_val = atoi(at_g.val.c_str());
+    }
+
   if(format.set && format.val != "auto" && format.val != "structure" &&
      format.val != "vcf")
     {
@@ -671,6 +692,7 @@ void ParamSet::echo(ostream& out)
 	  << "STEP_LOCI " << step_loci.val << endl;
     }
   if(windowed()) out << "MIN_WINDOW_LOCI " << min_win_loci.val << endl;
+  if(at_g.set) out << "AT_G " << at_g.val << endl;
   out << "\n###-----------Advanced Options-----------###\n"
       << "MISSING " << miss.val << endl
       << "TOLERANCE " << tol.val << endl
