@@ -84,12 +84,18 @@ if(BUILD_TESTING AND ADZE_REFERENCE)
   endif()
 endif()
 
-# These two need no reference build: the format suite checks the readers
-# against each other, and the window suite checks the windowed statistics
-# against the layout they claim to cover.
+# These need no reference build: the format suite checks the readers against
+# each other, the window suite checks the windowed statistics against the
+# layout they claim to cover, and the documentation check compares the README's
+# option table with the OPTIONS table in the source (it needs no binary at all,
+# so it runs even on a tree that has not been built).
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
+    add_test(NAME docs
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/docs.py
+                     --readme ${CMAKE_CURRENT_SOURCE_DIR}/README.md
+                     --source ${CMAKE_CURRENT_SOURCE_DIR}/src/ADZE_pfile.cpp)
     add_test(NAME formats
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/formats.py
                      --candidate $<TARGET_FILE:adze>

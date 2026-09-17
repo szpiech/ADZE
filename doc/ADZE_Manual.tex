@@ -477,8 +477,11 @@ ladder anyway.
 
 The following is generated from the option table in the source, so it lists
 exactly what the program accepts. Each entry gives the long option, the
-version 1.0 short flag where one exists, and the parameter-file keyword where
-one exists.
+version 1.0 short flag where one exists, the parameter-file keyword where one
+exists, and the default the program applies when the option is not given. That
+default is declared once, in the same table, and is what \flag{--help} prints
+and what the README tabulates; \texttt{test/docs.py} fails if the README and
+the table disagree about a value.
 
 \input{options.tex}
 

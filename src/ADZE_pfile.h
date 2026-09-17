@@ -33,6 +33,7 @@ struct OptSpec
   const char* legacy;  //1.0 short flag, 0 if none
   OptType type;
   const char* arg;     //argument placeholder, 0 for a switch
+  const char* dflt;    //default, as it is shown to a reader; 0 if there is none
   const char* section;
   const char* help;
 };

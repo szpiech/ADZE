@@ -21,6 +21,7 @@ ENTRY = re.compile(
     r'(0|"[^"]*")\s*,\s*'
     r"(OPT_\w+)\s*,\s*"
     r'(0|"[^"]*")\s*,\s*'
+    r'(0|"[^"]*")\s*,\s*'
     r'"([^"]*)"\s*,\s*'
     r'"((?:[^"\\]|\\.)*)"\s*\}',
     re.S)
@@ -56,8 +57,9 @@ def parse(path):
             "legacy": unquote(m.group(4)),
             "type": TYPE_NAME[m.group(5)],
             "arg": unquote(m.group(6)),
-            "section": m.group(7),
-            "help": m.group(8).replace('\\"', '"'),
+            "dflt": unquote(m.group(7)),
+            "section": m.group(8),
+            "help": m.group(9).replace('\\"', '"'),
         })
     if not rows:
         raise SystemExit("no OPTIONS entries parsed from %s" % path)
@@ -84,8 +86,11 @@ def emit(rows, out):
                     flags.append("\\texttt{%s}" % tex_escape(r["legacy"]))
                 if r["key"]:
                     flags.append("\\texttt{%s} (paramfile)" % tex_escape(r["key"]))
+                line = tex_escape(r["help"])
+                if r["dflt"]:
+                    line += " \\textit{Default:} \\texttt{%s}." % tex_escape(r["dflt"])
                 fh.write("\\item[%s] \\hfill \\textit{%s}\\\\ %s\n" % (
-                    ", ".join(flags), r["type"], tex_escape(r["help"])))
+                    ", ".join(flags), r["type"], line))
             fh.write("\\end{description}\n")
 
     return len(rows), sections

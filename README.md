@@ -129,26 +129,40 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 
 ### Options worth knowing
 
-| option | effect |
-|---|---|
-| `--out-prefix P` | write `P.richness`, `P.private`, `P.tuples_k*`, `P.summary.txt` |
-| `--stat richness,private,tuples` | compute only the named statistics |
-| `--pops A,B,C` / `--exclude-pops X` | restrict the analysis to some groupings |
-| `--tuples FILE` | private alleles of the tuples named in FILE, one per line, instead of every k-subset |
-| `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) |
-| `--samples FILE` | sample-to-grouping map, required for VCF input |
-| `--format auto\|structure\|vcf` | input format; `auto` reads the file name |
-| `--legacy` | write version 1.0's output layout instead of the default tab-separated one |
-| `--at-g N` / `--at-g max` | report a single g instead of every g from 1 to `MAX_G` |
-| `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci |
-| `--step-bp N` / `--step-loci N` | how far a window advances (default: its own width, i.e. no overlap) |
-| `--min-window-loci N` | skip windows holding fewer than N loci |
-| `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input |
-| `--tolerance X` | drop loci where any grouping exceeds fraction X missing (default 0.1; `1` keeps all, as in 1.0) |
-| `--tsv` | names the default layout explicitly; accepted for compatibility |
-| `--threads N` | parallelize the per-locus loops (OpenMP builds) |
-| `--quiet`, `--progress` | control what reaches stderr |
-| `--write-template [FILE]` | generate a commented parameter file |
+Defaults are those the program actually applies; `adze --help` prints the same
+values, both being read from the one option table in `src/ADZE_pfile.cpp`.
+
+| option | effect | default |
+|---|---|---|
+| `--data FILE` | genotype file: STRUCTURE layout or VCF, optionally gzipped | required |
+| `--out-prefix P` | write `P.richness`, `P.private`, `P.tuples_k*`, `P.summary.txt` | `adze` |
+| `--max-g N` | largest standardized sample size | the largest the data supports |
+| `--tolerance X` | drop loci where any grouping exceeds fraction X missing | `0.1` (`1` keeps all, as in 1.0) |
+| `--group-col N` | which label column names the grouping | the last label column |
+| `--missing STR` | code for a missing allele | `-9` |
+| `--loci N`, `--data-lines N`, `--non-data-cols N` | declare a dimension instead of measuring it | detected |
+| `--non-data-rows N` | header rows before the genotypes | `1` |
+| `--stat richness,private,tuples` | compute only the named statistics | `richness,private` |
+| `--pops A,B,C` | analyse only these groupings | every grouping |
+| `--exclude-pops X` | analyse everything except these groupings | none excluded |
+| `--combinations` | also compute private alleles of grouping tuples | off |
+| `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) | none |
+| `--tuples FILE` | private alleles of the tuples named in FILE, one per line | every k-subset |
+| `--at-g N` / `--at-g max` | report a single g instead of every g from 1 to `MAX_G` | every g |
+| `--samples FILE` | sample-to-grouping map, required for VCF input | none |
+| `--format auto\|structure\|vcf` | input format; `auto` reads the file name | `auto` |
+| `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input | none |
+| `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci | off |
+| `--step-bp N` / `--step-loci N` | how far a window advances | the window width |
+| `--min-window-loci N` | skip windows holding fewer than N loci | `1` |
+| `--full-richness`, `--full-private`, `--full-tuples` | also write the per-locus values | off |
+| `--legacy` | write version 1.0's output layout | off |
+| `--tsv` | names the default layout explicitly; accepted for compatibility | on |
+| `--threads N` | parallelize the per-locus loops (OpenMP builds) | `1` |
+| `--progress` | progress bars | on when stderr is a terminal |
+| `--quiet` | suppress progress and informational messages | off |
+| `--dry-run` | report the detected layout, groupings and feasible `MAX_G`, then stop | off |
+| `--write-template [FILE]` | generate a commented parameter file | — |
 
 Results do not depend on `--threads`: loci are processed independently and
 reduced in locus order, so any thread count gives bit-identical output.

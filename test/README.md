@@ -1,10 +1,11 @@
 # Test suite
 
-Three suites, all driven by `gen_data.py`. `regress.py` holds the numbers to
+Four suites. Three are driven by `gen_data.py`. `regress.py` holds the numbers to
 ADZE 1.0; `formats.py` holds the input formats to each other; `windows.py`
-holds the windowed statistics to the layout they claim to cover. All three run
-under `ctest` when the tree is configured with CMake (`regress` needs
-`-DADZE_REFERENCE=/path/to/adze-1.0`).
+holds the windowed statistics to the layout they claim to cover. `docs.py`
+needs no data and no binary: it holds the README to the program's own option
+table. All four run under `ctest` when the tree is configured with CMake
+(`regress` needs `-DADZE_REFERENCE=/path/to/adze-1.0`).
 
 ## regress.py
 
@@ -70,3 +71,14 @@ spacing, so a window of k spacings holds exactly k loci and the expected
 layout can be written down by hand.
 
     ./test/gen_data.py /tmp/adze-data
+
+## docs.py
+
+The only one that needs neither a binary nor data. It parses the option table
+out of `src/ADZE_pfile.cpp` and the option table out of `README.md` and fails
+if they disagree: a README row naming an option the program no longer has, or
+claiming a default the program does not apply. The comparison is permissive
+about wording and strict about the value, and it is one-directional on purpose
+-- accepting the README's text inside the table's default instead would pass a
+README saying `1` where the program uses `0.1`. Confirmed by running it against
+a deliberately wrong README.
