@@ -24,6 +24,9 @@ an invariant or a closed form that must hold whatever the numbers are:
   atg              --at-g must give exactly the rows a full run gives at that
                    g, in every output file, and must clamp with a warning
                    rather than reporting an unreachable g
+  tol              the shipped --tolerance default is 0.1, and a grouping left
+                   unusable by a retained locus is named rather than silently
+                   producing empty files
   refusals         unsorted positions, a chromosome in two blocks, a locus
                    with no coordinate, and STRUCTURE without a map are all
                    refused
@@ -64,7 +67,18 @@ VAR_RTOL = 1e-3
 ATOL = 1e-12
 
 
-def run(binary, workdir, args, expect=0):
+def run(binary, workdir, args, expect=0, pin_tolerance=True):
+    """Run adze, pinning --tolerance unless the case sets it itself.
+
+    Most cases here reason about the full locus set -- which loci a window
+    holds, which per-locus values a mean is built from -- so they must not
+    inherit whatever the shipped default happens to be. --tolerance 1 keeps
+    every locus, which is what these expectations were written against.
+    case_tolerance_default is the one case that wants the default, and passes
+    pin_tolerance=False.
+    """
+    if pin_tolerance and "--tolerance" not in args and "-t" not in args:
+        args = args + ["--tolerance", "1"]
     r = subprocess.run([os.path.abspath(binary)] + args, cwd=workdir,
                        capture_output=True, text=True)
     return r
@@ -520,6 +534,66 @@ def case_at_g(s, adze, w):
                 "exit %d for --at-g %s" % (r.returncode, bad))
 
 
+def case_tolerance_default(s, adze, w):
+    """The shipped default is --tolerance 0.1, and it is what a bare run uses.
+
+    Checked behaviourally rather than by reading the help text: a run with no
+    --tolerance must agree with an explicit 0.1 and differ from 1 on data where
+    the two disagree. Also covers the diagnostic the default exists to avoid --
+    a grouping that scored nothing at a retained locus must be named, with the
+    locus count, rather than leaving the user with blank result files.
+    """
+    gen_data.write_pair(os.path.join(w, "td"), npops=3, nind=8, nloci=10,
+                        nall=5, missing=0.08, seed=4)
+
+    # Take every copy from one grouping at one locus: at --tolerance 1 that
+    # locus survives and makes the grouping undefined at every g.
+    path = os.path.join(w, "td.stru")
+    rows = [l.split() for l in open(path)]
+    for r in rows[1:]:
+        if r[1] == "POP2":
+            r[2 + 3] = "-9"
+    with open(path, "w") as fh:
+        fh.write(" ".join(rows[0]) + "\n")
+        for r in rows[1:]:
+            fh.write(" ".join(r) + "\n")
+
+    args = ["--data", "td.stru", "--group-col", "2"]
+    bare = run(adze, w, args + ["--out-prefix", "td_bare"], pin_tolerance=False)
+    tenth = run(adze, w, args + ["--tolerance", "0.1", "--out-prefix", "td_01"])
+    keep = run(adze, w, args + ["--tolerance", "1", "--out-prefix", "td_1"])
+
+    s.check("tol.default.runs", bare.returncode == 0 and tenth.returncode == 0,
+            "bare exit %d, explicit 0.1 exit %d" % (bare.returncode,
+                                                    tenth.returncode))
+    s.check("tol.default.is_0.1",
+            open(os.path.join(w, "td_bare.richness")).read() ==
+            open(os.path.join(w, "td_01.richness")).read(),
+            "a bare run does not match --tolerance 0.1")
+    s.check("tol.default.differs_from_1",
+            open(os.path.join(w, "td_bare.richness")).read() !=
+            open(os.path.join(w, "td_1.richness")).read(),
+            "--tolerance 0.1 and 1 gave the same output, so the case proves nothing")
+
+    # The old default leaves this grouping with nothing, and must say so.
+    s.check("tol.names_grouping", "POP2" in keep.stderr and "WARNING" in keep.stderr,
+            "the unusable grouping was not named: %s" % keep.stderr.strip()[-200:])
+    s.check("tol.suggests_tolerance", "--tolerance" in keep.stderr,
+            "no remedy suggested")
+    s.check("tol.counts_loci", " of 10" in keep.stderr,
+            "the locus count was not reported: %s" % keep.stderr.strip()[-200:])
+    # The rows really do vanish from the legacy format, which is why it warns:
+    # the unusable grouping is absent entirely, and the ladder collapses to the
+    # single g that the clamped MAX_G leaves -- on data where every grouping has
+    # such a locus, that is a file of blank lines.
+    rows = [l.split() for l in open(os.path.join(w, "td_1.richness")) if l.strip()]
+    labels = set(r[0] for r in rows)
+    s.check("tol.unusable_grouping_vanishes", "POP2" not in labels and labels,
+            "POP2 present, or nothing written at all: %s" % sorted(labels))
+    s.check("tol.ladder_collapses", set(r[1] for r in rows) == {"1"},
+            "expected only g = 1 rows, got g in %s" % sorted(set(r[1] for r in rows)))
+
+
 def case_refusals(s, adze, w):
     """Inputs a window cannot be defined over are refused, not guessed at."""
     meta = gen_data.write_pair(os.path.join(w, "rf"), npops=3, nind=5,
@@ -582,7 +656,8 @@ def main():
     s = Suite(args.verbose)
     for case in (case_whole, case_recompute, case_layout, case_units,
                  case_minloci, case_formats, case_threads,
-                 case_g1_closed_forms, case_at_g, case_refusals):
+                 case_g1_closed_forms, case_at_g, case_tolerance_default,
+                 case_refusals):
         case(s, args.candidate, args.workdir)
 
     if not s.failures and not args.keep:

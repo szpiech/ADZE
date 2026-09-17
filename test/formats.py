@@ -77,7 +77,10 @@ def main():
 
     for name, kw in CASES:
         meta = gen_data.write_pair(os.path.join(args.workdir, name), **kw)
-        common = ["--max-g", "6", "--full-richness", "--full-private"]
+        # --tolerance 1 keeps every locus: this suite compares the readers
+        # against each other, so the locus set must not depend on the default.
+        common = ["--max-g", "6", "--full-richness", "--full-private",
+                  "--tolerance", "1"]
 
         outs = {}
         for tag, source in [("stru", ["--data", "%s.stru" % name,

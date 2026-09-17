@@ -21,7 +21,8 @@ FULL_R 1
 FULL_P 1
 FULL_C 1
 PRINT_PROGRESS 1
-Total alleles completed at (d:h:m:s) 0:0:0:0
-Private alleles completed at (d:h:m:s) 0:0:0:0
-All 2-tuples completed at (d:h:m:s) 0:0:0:0
-ADZE finished in (d:h:m:s) 0:0:0:0
+Total alleles completed at (d:h:m:s) 0:0:0:0.01
+Private alleles completed at (d:h:m:s) 0:0:0:0.01
+2-tuples completed at (d:h:m:s) 0:0:0:0.02
+
+adze finished in (d:h:m:s) 0:0:0:0.02

@@ -41,8 +41,17 @@ EAST_ASIA at g = 7 and 8, where their own sample sizes reach. Nothing is
 private at a g that some grouping cannot reach, so the private and pair
 statistics stop at 6 either way.
 
+The --tolerance 0.2 above is the paramfile's value, not a default: without it
+the default of 0.1 applies, which on this data set drops the same two loci and
+so gives the same result here. Version 1.0's default was 1 (keep every locus).
+
 Add --dry-run to either command to see the detected layout, the per-grouping
 sample sizes and the largest feasible MAX_G without computing anything.
+
+The result files shipped beside the data were regenerated with this version.
+They differ from 1.0's published output in one respect only: the sweep starts
+at g = 1, so each file carries one extra row per grouping or tuple. Dropping
+those rows reproduces 1.0's files byte for byte.
 
 Expected output
 ---------------

@@ -81,6 +81,14 @@ allelic richness at g = 1 is the chance that a single copy drawn from the
 grouping carries an allele that single draws from every other grouping all
 miss.
 
+The `--tolerance` default is 0.1, not 1.0's `1`. Keeping every locus means a
+single locus where one grouping scored nothing drives `MAX_G` to 1 and leaves
+that grouping undefined at every g, so the run completes and reports nothing;
+`--tolerance 1` restores the old behaviour, and a parameter file that declares
+`TOLERANCE` is unaffected. When a grouping is left unusable, adze now names it
+with the locus count rather than leaving you to infer it from empty files, and
+`--dry-run` reports the same ceiling before computing anything.
+
 `--at-g N` reports one g instead, and `--at-g max` reports at whatever `MAX_G`
 resolves to without needing to know the number. A request above the reachable
 ceiling — `MAX_G`, or the smallest number of gene copies scored anywhere — is
@@ -124,7 +132,7 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 | `--step-bp N` / `--step-loci N` | how far a window advances (default: its own width, i.e. no overlap) |
 | `--min-window-loci N` | skip windows holding fewer than N loci |
 | `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input |
-| `--tolerance X` | drop loci where any grouping exceeds fraction X missing |
+| `--tolerance X` | drop loci where any grouping exceeds fraction X missing (default 0.1; `1` keeps all, as in 1.0) |
 | `--tsv` | tab-separated output with a header row and `NA` for undefined values |
 | `--threads N` | parallelize the per-locus loops (OpenMP builds) |
 | `--quiet`, `--progress` | control what reaches stderr |

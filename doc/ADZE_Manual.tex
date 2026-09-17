@@ -391,16 +391,31 @@ a given $g$ only when it is defined at every locus, one locus with a small
 $N_j$ limits the whole analysis.
 
 \flag{--tolerance} $x$ drops any locus at which some grouping has more than a
-fraction $x$ of its gene copies missing. The default, $x = 1$, keeps every
-locus. Loci dropped this way are listed in the \texttt{\_deletedloci} file
-(section~\ref{sec:deletedloci}). Filtering is a trade: it discards loci to buy
-a larger \texttt{MAX\_G}, and section~\ref{sec:examplesmall} works through the
-trade-off on the example data.
+fraction $x$ of its gene copies missing. Loci dropped this way are listed in
+the \texttt{\_deletedloci} file (section~\ref{sec:deletedloci}). Filtering is a
+trade: it discards loci to buy a larger \texttt{MAX\_G}, and
+section~\ref{sec:examplesmall} works through the trade-off on the example data.
 
-A locus at which no allele is observed in any grouping contributes nothing;
-such loci are counted, reported in a warning, and treated as undefined at
-every $g$. If filtering removes every locus, \prog\ stops with an error rather
-than reporting statistics over no data.
+The default is $x = 0.1$. Version 1.0's default, $x = 1$, keeps every locus,
+and on modern data that is rarely what is wanted: a single locus at which one
+grouping scored nothing drives \texttt{MAX\_G} to 1 and leaves that grouping
+undefined at every $g$, so a genome-wide run can complete and report nothing.
+\flag{--tolerance 1} restores the old behaviour for anyone who wants it. A
+parameter file that declares \texttt{TOLERANCE} is unaffected, and 1.0's files
+all declare it.
+
+Two conditions make a grouping unusable, and both are now reported by name
+rather than left to be inferred from empty output. A locus at which no allele
+is observed in any grouping contributes nothing: such loci are counted and
+reported, and treated as undefined at every $g$. A locus at which one
+particular grouping scored fewer than $g$ gene copies makes that grouping
+undefined at $g$ --- and because the sentinel propagates through the average,
+one such locus is enough. \prog\ therefore reports, per grouping, the fewest
+copies it scored anywhere, how many loci sit at that floor, and how many it did
+not score at all, adding an explicit remedy when the floor leaves nothing
+usable. \flag{--dry-run} reports the same ceiling without computing anything.
+If filtering removes every locus, \prog\ stops with an error rather than
+reporting statistics over no data.
 
 \section{Parameters and options}
 
@@ -668,29 +683,30 @@ adze --data small_data.stru --group-col 5 --out-prefix small
 \noindent reports on standard error
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 Read 22 gene copies at 5 loci in 3 groupings (d:h:m:s 0:0:0:0.00)
-MAX_G not given; using 3, the largest the 5 surviving loci support.
-\end{Verbatim}
-\noindent and writes richness results that stop at $g = 3$. Three is low for 22
-gene copies, and the reason is missing data rather than sample size: the
-\texttt{EUROPE} grouping has six gene copies in total, but at locus
-\texttt{D9S1825} three of those six are missing, leaving $N_j = 3$.
-\texttt{D9S1825} is also missing 25\% of the \texttt{AMERICA} grouping, and
-\texttt{D14S1007} is missing 25\% of \texttt{EAST\_ASIA}.
-
-Filtering those two loci buys a much larger standardized sample size:
-\begin{Verbatim}[xleftmargin=1em]
-adze --data small_data.stru --group-col 5 --out-prefix small24 \
-     --tolerance 0.24
-\end{Verbatim}
-\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
-2 loci have at least one grouping with more than 24% missing data.
+2 loci have at least one grouping with more than 10% missing data.
 MAX_G not given; using 6, the largest the 3 surviving loci support.
 \end{Verbatim}
-\noindent Now the analysis runs to $g = 6$, the limit set by
-\texttt{EUROPE}'s sample size alone, over the three surviving loci. Which of
-the two runs to prefer is a judgement about the data: the first uses all five
-loci but compares populations only at $g \leq 3$; the second compares them over
-a much wider range of $g$ using three loci.
+\noindent Two of the five loci exceed the default tolerance of 0.1 and are
+dropped, and the analysis runs to $g = 6$ over the three that remain. Asking
+instead for every locus,
+\begin{Verbatim}[xleftmargin=1em]
+adze --data small_data.stru --group-col 5 --out-prefix keep --tolerance 1
+\end{Verbatim}
+\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+MAX_G not given; using 3, the largest the 5 surviving loci support.
+\end{Verbatim}
+\noindent halves the standardized sample size. Three is low for 22 gene copies,
+and the reason is missing data rather than sample size: the \texttt{EUROPE}
+grouping has six gene copies in total, but at locus \texttt{D9S1825} three of
+those six are missing, leaving $N_j = 3$. \texttt{D9S1825} is also missing
+25\% of the \texttt{AMERICA} grouping, and \texttt{D14S1007} is missing 25\% of
+\texttt{EAST\_ASIA} --- which is why the default drops exactly those two.
+
+Which run to prefer is a judgement about the data: the second uses all five
+loci but compares populations only at $g \leq 3$; the first compares them over
+a much wider range of $g$ using three loci. The default leans towards the
+larger $g$, on the grounds that a locus one grouping barely scored constrains
+every grouping.
 
 The parameter file distributed with the example, \texttt{small\_paramfile.txt},
 runs the same analysis in version 1.0's style, declaring all four dimensions
@@ -810,16 +826,18 @@ adze --data scan.vcf --samples scan.samples \
 \begin{Verbatim}[frame=single,fontsize=\small]
 Largest feasible MAX_G: 20
 MAX_G to be used:       the largest feasible
+  (TOLERANCE 0.1 will drop loci first, which can raise both numbers)
 Windows:          12 of 50000 bp, step 25000
-  loci per window: 5-10
+  loci per window: 4-10
   richness rows:   960
   private rows:    960
 \end{Verbatim}
 
-\noindent Twelve windows, none thinner than five loci, and $g$ running from 1
-to 20 everywhere because every grouping has 24 gene copies and the sparsest
-locus still carries 20 --- twelve windows times twenty values of $g$ times four
-groupings. Then run it, with a floor on how thin a window may be:
+\noindent Twelve windows and, before filtering, $g$ running to 20, every
+grouping having 24 gene copies and the sparsest locus carrying 20. The
+projection is deliberately conservative about its own arithmetic: filtering
+happens first and raises both the reachable $g$ and the row count, as the run
+itself then reports. Then run it, with a floor on how thin a window may be:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 adze --data scan.vcf --samples scan.samples \
@@ -827,14 +845,21 @@ adze --data scan.vcf --samples scan.samples \
      --out-prefix scan
 \end{Verbatim}
 
-\noindent Nine hundred and sixty rows is more than a scan is usually read at.
-Adding \flag{--at-g 10} asks for one $g$ and gives 48 --- one row per window
-per grouping:
+\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+7 loci have at least one grouping with more than 10% missing data.
+Laid out 12 windows over 60 loci.
+MAX_G not given; using 22, the largest the 53 surviving loci support.
+\end{Verbatim}
+
+\noindent The filter drops seven of the sixty loci, which raises the reachable
+$g$ from 20 to 22 and the output to 1056 rows --- more than a scan is usually
+read at. Adding \flag{--at-g 10} asks for one $g$ and gives 48, one row per
+window per grouping:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 CHROM  START   END     POP_GROUPING  G   NUM_LOCI  MEAN     VAR        STD_ERR
-chr1   1       50000   POP0          10  10        3.43492  0.0673694  0.0820789
-chr1   25001   75000   POP0          10  10        3.55669  0.0546877  0.0739512
+chr1   1       50000   POP0          10  8         3.45471  0.0842792  0.10264
+chr1   25001   75000   POP0          10  8         3.56664  0.0605046  0.0869659
 \end{Verbatim}
 
 \noindent The consecutive windows overlap by 25\,kb, so each interior locus
@@ -886,6 +911,11 @@ copies.}
 \subsection{Compatibility}
 
 Parameter files written for version 1.0 work unchanged, as do the short flags.
+One default differs: \flag{--tolerance} is 0.1 rather than 1, so a run that
+names no tolerance now drops loci that version 1.0 kept. Every 1.0 parameter
+file declares \texttt{TOLERANCE} and is therefore unaffected;
+\flag{--tolerance 1} restores the old behaviour explicitly
+(section~\ref{sec:tolerance}).
 Explicitly named output files keep version 1.0's literal suffixes, and the
 default result format is unchanged. \texttt{SKIP\_CHK} and \flag{--no-check}
 are still accepted but do nothing, because validation now costs nothing: it
@@ -909,6 +939,14 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
+\item The \flag{--tolerance} default is 0.1 rather than 1
+  (section~\ref{sec:tolerance}), and the groupings a retained locus leaves
+  unusable are named with their locus counts rather than showing up as empty
+  result files.
+\item The \flag{--tolerance} default is 0.1 rather than 1
+  (section~\ref{sec:tolerance}), and the groupings that a retained locus leaves
+  unusable are named, with their locus counts, instead of showing up as empty
+  result files.
 \item Every statistic is now also reported at $g = 1$
   (section~\ref{sec:gone}); version 1.0's sweeps started at $g = 2$. The
   default output therefore carries one extra row per grouping, which is the one

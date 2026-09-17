@@ -63,7 +63,7 @@ const OptSpec OPTIONS[] = {
   {STAT,      0,                "--stat",           0,           OPT_STRING, "LIST",
    "Analysis", "which statistics to compute: richness,private,tuples (default: richness,private)"},
   {TOL,       "TOLERANCE",      "--tolerance",      "-t",        OPT_DOUBLE, "X",
-   "Analysis", "drop a locus if any grouping exceeds this missing fraction (default 1 = keep all)"},
+   "Analysis", "drop a locus if any grouping exceeds this missing fraction (default 0.1; 1 keeps all)"},
   {COMB,      "COMB",           "--combinations",   "-c",        OPT_BOOL,   0,
    "Analysis", "also compute private alleles of grouping tuples"},
   {K,         "K_RANGE",        "--tuples-k",       "-k",        OPT_STRING, "LIST",
@@ -118,7 +118,7 @@ ParamSet::ParamSet()
   nd_cols.val = 0;        //0 => detect
   dlines.val = 0;         //0 => detect
   sort_by.val = 0;        //0 => last label column
-  tol.val = 1;
+  tol.val = 0.1;
   k.val = "none";
   dfile.val = "none";
   r_out.val = "none";
@@ -802,7 +802,7 @@ void ParamSet::makeParamFile(const string& file)
 	    case DFILE:    out << "DATA_FILE your_data.stru\n";     break;
 	    case ND_ROWS:  out << "NON_DATA_ROWS 1\n";              break;
 	    case MISS:     out << "MISSING -9\n";                   break;
-	    case TOL:      out << "TOLERANCE 1\n";                  break;
+	    case TOL:      out << "TOLERANCE 0.1\n";                break;
 	    case COMB:     out << "COMB 0\n";                       break;
 	    case R_OUT:    out << "#R_OUT richness.txt\n";          break;
 	    case P_OUT:    out << "#P_OUT private.txt\n";           break;
