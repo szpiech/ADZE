@@ -81,6 +81,14 @@ allelic richness at g = 1 is the chance that a single copy drawn from the
 grouping carries an allele that single draws from every other grouping all
 miss.
 
+Result files are tab-separated with a header row, and a statistic undefined at
+a given g is written as `NA`. `--legacy` asks for 1.0's layout instead — no
+header, space separators, undefined rows omitted rather than marked. That
+omission is why the default changed: a grouping undefined at every g disappears
+from the legacy file entirely, so a run can complete and report nothing with no
+visible reason. Window files were always tab-separated with a header, and
+`_fulldata`, `_deletedloci` and `_summary` are unaffected either way.
+
 The `--tolerance` default is 0.1, not 1.0's `1`. Keeping every locus means a
 single locus where one grouping scored nothing drives `MAX_G` to 1 and leaves
 that grouping undefined at every g, so the run completes and reports nothing;
@@ -127,13 +135,14 @@ files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
 | `--tuples-k 1-3` | tuple sizes to enumerate (`-k`, with `--combinations`) |
 | `--samples FILE` | sample-to-grouping map, required for VCF input |
 | `--format auto\|structure\|vcf` | input format; `auto` reads the file name |
+| `--legacy` | write version 1.0's output layout instead of the default tab-separated one |
 | `--at-g N` / `--at-g max` | report a single g instead of every g from 1 to `MAX_G` |
 | `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci |
 | `--step-bp N` / `--step-loci N` | how far a window advances (default: its own width, i.e. no overlap) |
 | `--min-window-loci N` | skip windows holding fewer than N loci |
 | `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input |
 | `--tolerance X` | drop loci where any grouping exceeds fraction X missing (default 0.1; `1` keeps all, as in 1.0) |
-| `--tsv` | tab-separated output with a header row and `NA` for undefined values |
+| `--tsv` | names the default layout explicitly; accepted for compatibility |
 | `--threads N` | parallelize the per-locus loops (OpenMP builds) |
 | `--quiet`, `--progress` | control what reaches stderr |
 | `--write-template [FILE]` | generate a commented parameter file |

@@ -27,6 +27,8 @@ an invariant or a closed form that must hold whatever the numbers are:
   tol              the shipped --tolerance default is 0.1, and a grouping left
                    unusable by a retained locus is named rather than silently
                    producing empty files
+  fmt              the shipped layout is tab-separated with a header and NA
+                   rows, and --legacy still writes exactly 1.0's layout
   refusals         unsorted positions, a chromosome in two blocks, a locus
                    with no coordinate, and STRUCTURE without a map are all
                    refused
@@ -67,18 +69,21 @@ VAR_RTOL = 1e-3
 ATOL = 1e-12
 
 
-def run(binary, workdir, args, expect=0, pin_tolerance=True):
-    """Run adze, pinning --tolerance unless the case sets it itself.
+def run(binary, workdir, args, expect=0, pin_tolerance=True, pin_format=True):
+    """Run adze, pinning the parameters a case must not inherit from defaults.
 
     Most cases here reason about the full locus set -- which loci a window
     holds, which per-locus values a mean is built from -- so they must not
-    inherit whatever the shipped default happens to be. --tolerance 1 keeps
-    every locus, which is what these expectations were written against.
-    case_tolerance_default is the one case that wants the default, and passes
-    pin_tolerance=False.
+    inherit whatever the shipped tolerance happens to be. --tolerance 1 keeps
+    every locus, which is what these expectations were written against, and
+    --legacy is the row layout they parse. The cases that exist to check the
+    defaults pass pin_tolerance=False or pin_format=False and say what they
+    expect instead.
     """
     if pin_tolerance and "--tolerance" not in args and "-t" not in args:
         args = args + ["--tolerance", "1"]
+    if pin_format and "--legacy" not in args and "--tsv" not in args:
+        args = args + ["--legacy"]
     r = subprocess.run([os.path.abspath(binary)] + args, cwd=workdir,
                        capture_output=True, text=True)
     return r
@@ -594,6 +599,59 @@ def case_tolerance_default(s, adze, w):
             "expected only g = 1 rows, got g in %s" % sorted(set(r[1] for r in rows)))
 
 
+def case_format_default(s, adze, w):
+    """The shipped default layout is tab-separated with a header and NA rows.
+
+    Checked on the bytes, not the help text. The legacy layout stays available
+    and must still be exactly what it was: space-separated, no header, and
+    undefined rows omitted rather than marked -- which is the property that
+    made an unusable grouping invisible, and the reason the default changed.
+    """
+    gen_data.write_pair(os.path.join(w, "fd"), npops=3, nind=6, nloci=8,
+                        nall=4, missing=0.0, seed=31)
+    args = ["--data", "fd.stru", "--group-col", "2", "--max-g", "4",
+            "--combinations", "--tuples-k", "2"]
+
+    bare = run(adze, w, args + ["--out-prefix", "fd_bare"], pin_format=False)
+    tsv = run(adze, w, args + ["--tsv", "--out-prefix", "fd_tsv"])
+    leg = run(adze, w, args + ["--legacy", "--out-prefix", "fd_leg"])
+    s.check("fmt.runs", bare.returncode == tsv.returncode == leg.returncode == 0,
+            "exits %d/%d/%d" % (bare.returncode, tsv.returncode, leg.returncode))
+
+    for stat in ("richness", "private"):
+        got = open(os.path.join(w, "fd_bare.%s" % stat)).read()
+        s.check("fmt.default.header.%s" % stat,
+                got.startswith("POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n"),
+                "first line is %r" % got.splitlines()[:1])
+        s.check("fmt.default.tabs.%s" % stat, "\t" in got.splitlines()[1],
+                "second line is not tab-separated: %r" % got.splitlines()[1])
+        s.check("fmt.default.is_tsv.%s" % stat,
+                got == open(os.path.join(w, "fd_tsv.%s" % stat)).read(),
+                "a bare run does not match --tsv")
+
+        old = open(os.path.join(w, "fd_leg.%s" % stat)).read()
+        s.check("fmt.legacy.differs.%s" % stat, old != got,
+                "--legacy gave the default layout")
+        s.check("fmt.legacy.no_header.%s" % stat,
+                not old.startswith("POP_GROUPING"), "legacy grew a header")
+        s.check("fmt.legacy.spaces.%s" % stat, "\t" not in old,
+                "legacy output contains tabs")
+
+    # A tuple label is one field either way: comma-joined under tabs, so a
+    # reader splitting on tabs sees the tuple as a single column.
+    tup = [l for l in open(os.path.join(w, "fd_bare.tuples_2"))
+           if l.strip() and not l.startswith("TUPLE") and not l.startswith("POP")]
+    if tup:
+        s.check("fmt.default.tuple_label_is_one_field",
+                "," in tup[0].split("\t")[0],
+                "tuple label is not comma-joined: %r" % tup[0].split("\t")[0])
+
+    # Both are refused together rather than one silently winning.
+    clash = run(adze, w, args + ["--tsv", "--legacy", "--out-prefix", "fd_x"])
+    s.check("fmt.clash_refused", clash.returncode == 2 and "ERROR" in clash.stderr,
+            "exit %d for --tsv --legacy" % clash.returncode)
+
+
 def case_refusals(s, adze, w):
     """Inputs a window cannot be defined over are refused, not guessed at."""
     meta = gen_data.write_pair(os.path.join(w, "rf"), npops=3, nind=5,
@@ -657,7 +715,7 @@ def main():
     for case in (case_whole, case_recompute, case_layout, case_units,
                  case_minloci, case_formats, case_threads,
                  case_g1_closed_forms, case_at_g, case_tolerance_default,
-                 case_refusals):
+                 case_format_default, case_refusals):
         case(s, args.candidate, args.workdir)
 
     if not s.failures and not args.keep:

@@ -523,9 +523,13 @@ int main(int argc, char* argv[])
 	  adzelog() << "         That leaves nothing usable for "
 		    << pop[j].getName() << ": lower --tolerance to drop those "
 		    << "loci\n         (--dry-run reports the ceiling without "
-		    << "computing anything). Undefined rows are\n"
-		    << "         omitted from the default output format; "
-		    << "--tsv writes them as NA.\n";
+		    << "computing anything).\n";
+	  if(!p.tsv.val)
+	    {
+	      adzelog() << "         --legacy omits undefined rows entirely, "
+			<< "so they will be missing from the\n"
+			<< "         result file rather than marked NA.\n";
+	    }
 	}
     }
 

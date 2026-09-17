@@ -414,6 +414,8 @@ one such locus is enough. \prog\ therefore reports, per grouping, the fewest
 copies it scored anywhere, how many loci sit at that floor, and how many it did
 not score at all, adding an explicit remedy when the floor leaves nothing
 usable. \flag{--dry-run} reports the same ceiling without computing anything.
+Under \flag{--legacy} such a grouping is absent from the result file entirely,
+which is what the warning is there to explain.
 If filtering removes every locus, \prog\ stops with an error rather than
 reporting statistics over no data.
 
@@ -497,15 +499,18 @@ diagnostics. Progress bars are drawn only when standard error is a terminal.
 
 One row per grouping per $g$: the grouping name, the $g$ at which the
 statistics were computed, the number of loci used, and then the mean, variance
-and standard error across those loci (Equations~6--8). Groupings are separated
-by a blank line.
+and standard error across those loci (Equations~6--8). The columns are named on
+the first line and separated by tabs, and a statistic undefined at that $g$ is
+written as \texttt{NA}.
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
-AMERICA 2 5 1.47429 0.0886378 0.133145
-AMERICA 3 5 1.76929 0.264997 0.230216
-
-EUROPE 2 5 1.68 0.0208889 0.0646357
+POP_GROUPING    G   NUM_LOCI    MEAN        VAR         STD_ERR
+AMERICA         1   3           1           0           0
+AMERICA         2   3           1.34524     0.0973639   0.180152
 \end{Verbatim}
+
+\noindent \flag{--legacy} writes version 1.0's layout instead
+(section~\ref{sec:legacy}).
 
 \subsection{Private allelic richness of tuples}
 
@@ -535,15 +540,32 @@ It echoes the parameters actually used --- including values that were measured
 rather than declared, and \texttt{MAX\_G} when it was resolved from the data
 --- and records the elapsed time at which each phase finished.
 
-\subsection{Tab-separated output}
+\subsection{Version 1.0's layout}
+\label{sec:legacy}
 
-\flag{--tsv} writes the result files with a header row, tab separators, and
-\texttt{NA} in the value columns where a statistic is undefined at that $g$.
-Without it, the legacy format is used: no header, space separators, and rows
-that are undefined at a given $g$ are omitted entirely. The legacy format
-remains the default so that existing scripts keep working, but \flag{--tsv} is
-preferable for new work, because a consumer can distinguish ``not computable
-here'' from ``not run''.
+The result files are tab-separated with a header row, and a statistic that is
+undefined at a given $g$ is written as \texttt{NA}. \flag{--tsv} names that
+layout explicitly and is accepted for compatibility with scripts written
+against earlier 2.0 builds, where it was not the default.
+
+\flag{--legacy} asks for version 1.0's layout: no header, space separators,
+groupings separated by a blank line, and rows that are undefined at a given $g$
+omitted entirely rather than marked. That omission is why the default changed.
+A consumer of the legacy format cannot distinguish ``not computable here'' from
+``not run'', and a grouping that is undefined at every $g$ --- which one badly
+scored locus is enough to cause (section~\ref{sec:tolerance}) --- disappears
+from the file altogether, leaving a run that completed and reported nothing
+with no visible explanation. Asking for both layouts at once is refused rather
+than resolved by precedence.
+
+Tuple labels are comma-joined in the default layout and space-joined in the
+legacy one, so under tabs a tuple stays a single column.
+
+The window files (section~\ref{sec:windows}) have always been tab-separated
+with a header, whichever layout is in force: they are new in 2.0 and have no
+earlier consumer to stay compatible with. The \texttt{\_fulldata},
+\texttt{\_deletedloci} and \texttt{\_summary} files are likewise unaffected by
+the flag.
 
 \subsection{Exit status}
 
@@ -911,11 +933,14 @@ copies.}
 \subsection{Compatibility}
 
 Parameter files written for version 1.0 work unchanged, as do the short flags.
-One default differs: \flag{--tolerance} is 0.1 rather than 1, so a run that
-names no tolerance now drops loci that version 1.0 kept. Every 1.0 parameter
-file declares \texttt{TOLERANCE} and is therefore unaffected;
+Two defaults differ. \flag{--tolerance} is 0.1 rather than 1, so a run that
+names no tolerance now drops loci that version 1.0 kept; every 1.0 parameter
+file declares \texttt{TOLERANCE} and is therefore unaffected, and
 \flag{--tolerance 1} restores the old behaviour explicitly
-(section~\ref{sec:tolerance}).
+(section~\ref{sec:tolerance}). And the result files are tab-separated with a
+header rather than in 1.0's layout, which \flag{--legacy} restores
+(section~\ref{sec:legacy}). A script that parsed 1.0's output needs that one
+flag, and the differential test suite passes it for exactly that reason.
 Explicitly named output files keep version 1.0's literal suffixes, and the
 default result format is unchanged. \texttt{SKIP\_CHK} and \flag{--no-check}
 are still accepted but do nothing, because validation now costs nothing: it
@@ -939,10 +964,18 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
+\item Result files are tab-separated with a header and \texttt{NA} for
+  undefined rows (section~\ref{sec:legacy}). \flag{--legacy} writes version
+  1.0's layout, which is byte-identical to what 1.0 wrote apart from the
+  $g = 1$ row.
 \item The \flag{--tolerance} default is 0.1 rather than 1
   (section~\ref{sec:tolerance}), and the groupings a retained locus leaves
   unusable are named with their locus counts rather than showing up as empty
   result files.
+\item Result files are tab-separated with a header and \texttt{NA} for
+  undefined rows (section~\ref{sec:legacy}). \flag{--legacy} writes version
+  1.0's layout, which is byte-identical to what 1.0 wrote apart from the
+  $g = 1$ row.
 \item The \flag{--tolerance} default is 0.1 rather than 1
   (section~\ref{sec:tolerance}), and the groupings that a retained locus leaves
   unusable are named, with their locus counts, instead of showing up as empty

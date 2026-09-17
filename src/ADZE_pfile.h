@@ -20,7 +20,7 @@ enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
      OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,TSV,DRY_RUN,QUIET,THREADS,PARAMS,
      FORMAT,SAMPLES,LOCI_MAP,
-     WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,
+     WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,LEGACY,
      LABEL_SIZE};
 
 enum OptType{OPT_INT,OPT_LONG,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
@@ -125,7 +125,14 @@ class ParamSet
   int at_g_val;
 
   bool windowed() const { return win_bp.set || win_loci.set; }
+  /*
+   * Output layout.  tsv is the live flag every writer consults and is on by
+   * default; legacy is the user's request for 1.0's layout and turns it off.
+   * Two options rather than one negated flag because --tsv shipped first and
+   * scripts already pass it.
+   */
   Param<bool> tsv;
+  Param<bool> legacy;
   Param<bool> dry_run;
   Param<bool> quiet;
   Param<int> threads;

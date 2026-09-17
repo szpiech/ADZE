@@ -6,7 +6,11 @@ are compared byte-for-byte.  A case passes only if the two builds produce the
 same file set with the same bytes (after masking the wall-clock lines that are
 expected to differ between runs) and the same exit status.
 
-One qualification since 2.0 sweeps from g = 1: ADZE 1.0 started at g = 2 and
+Two qualifications. 2.0's default output layout is tab-separated with a header
+and NA for undefined rows, so the candidate is run with --legacy to ask for the
+layout 1.0 wrote; the flag is the only argv difference between the two runs.
+
+And since 2.0 sweeps from g = 1: ADZE 1.0 started at g = 2 and
 cannot produce a g = 1 row, so whole files no longer match.  The comparison is
 over the rows both builds compute -- every row at g >= 2, byte-for-byte -- and
 the g = 1 rows are accounted for separately: each results file must carry
@@ -242,7 +246,12 @@ def main():
         cnd_dir = os.path.join(args.workdir, name, "cnd")
         shutil.rmtree(os.path.join(args.workdir, name), ignore_errors=True)
         ref = run_one(args.reference, ref_dir, dfile, meta, "out", kw)
-        cnd = run_one(args.candidate, cnd_dir, dfile, meta, "out", kw)
+        # 2.0 writes tab-separated output with a header by default, so the
+        # candidate is asked for 1.0's layout explicitly. The reference cannot
+        # be given the flag -- it predates it -- which is why the two argv
+        # lists differ here and nowhere else.
+        cnd = run_one(args.candidate, cnd_dir, dfile, meta, "out", kw,
+                      extra_argv=("--legacy",))
 
         if ref.returncode < 0:
             # Reference died on a signal: nothing to compare against.
