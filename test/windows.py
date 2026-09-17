@@ -84,7 +84,7 @@ def run(binary, workdir, args, expect=0, pin_tolerance=True, pin_format=True):
     """
     if pin_tolerance and "--tolerance" not in args and "-t" not in args:
         args = args + ["--tolerance", "1"]
-    if pin_format and "--legacy" not in args and "--tsv" not in args:
+    if pin_format and "--legacy" not in args:
         args = args + ["--legacy"]
     r = subprocess.run([os.path.abspath(binary)] + args, cwd=workdir,
                        capture_output=True, text=True)
@@ -615,10 +615,9 @@ def case_format_default(s, adze, w):
             "--combinations", "--tuples-k", "2"]
 
     bare = run(adze, w, args + ["--out-prefix", "fd_bare"], pin_format=False)
-    tsv = run(adze, w, args + ["--tsv", "--out-prefix", "fd_tsv"])
     leg = run(adze, w, args + ["--legacy", "--out-prefix", "fd_leg"])
-    s.check("fmt.runs", bare.returncode == tsv.returncode == leg.returncode == 0,
-            "exits %d/%d/%d" % (bare.returncode, tsv.returncode, leg.returncode))
+    s.check("fmt.runs", bare.returncode == leg.returncode == 0,
+            "exits %d/%d" % (bare.returncode, leg.returncode))
 
     for stat in ("richness", "private"):
         got = open(os.path.join(w, "fd_bare.%s" % stat)).read()
@@ -627,10 +626,6 @@ def case_format_default(s, adze, w):
                 "first line is %r" % got.splitlines()[:1])
         s.check("fmt.default.tabs.%s" % stat, "\t" in got.splitlines()[1],
                 "second line is not tab-separated: %r" % got.splitlines()[1])
-        s.check("fmt.default.is_tsv.%s" % stat,
-                got == open(os.path.join(w, "fd_tsv.%s" % stat)).read(),
-                "a bare run does not match --tsv")
-
         old = open(os.path.join(w, "fd_leg.%s" % stat)).read()
         s.check("fmt.legacy.differs.%s" % stat, old != got,
                 "--legacy gave the default layout")
@@ -695,10 +690,12 @@ def case_format_default(s, adze, w):
             "\t" not in open(os.path.join(w, "fl_def.richness_fulldata")).read(),
             "_fulldata gained tabs; it is space-separated in both layouts")
 
-    # Both are refused together rather than one silently winning.
-    clash = run(adze, w, args + ["--tsv", "--legacy", "--out-prefix", "fd_x"])
-    s.check("fmt.clash_refused", clash.returncode == 2 and "ERROR" in clash.stderr,
-            "exit %d for --tsv --legacy" % clash.returncode)
+    # There is one layout flag. --tsv named the default during development and
+    # was removed unreleased, so it must now be an unknown option rather than a
+    # silently accepted no-op.
+    gone = run(adze, w, args + ["--tsv", "--out-prefix", "fd_x"], pin_format=False)
+    s.check("fmt.tsv_is_gone", gone.returncode == 2 and "--tsv" in gone.stderr,
+            "exit %d for --tsv, stderr %r" % (gone.returncode, gone.stderr[:120]))
 
 
 def case_refusals(s, adze, w):

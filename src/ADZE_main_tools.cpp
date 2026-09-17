@@ -1567,7 +1567,7 @@ void calcPgTuples(Population pop[], int numDivs,
     }
 
   reg_out.open(comb_out.c_str());
-  if(param.tsv.val)
+  if(param.tabbed())
     {
       reg_out << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
     }
@@ -1630,7 +1630,7 @@ void calcPgTuples(Population pop[], int numDivs,
 	  inTuple[tuple[j]] = 1;
 	}
       const string all_names =
-	combineNames(&names[0],k,param.tsv.val ? ',' : ' ');
+	combineNames(&names[0],k,param.tabbed() ? ',' : ' ');
 
 #ifdef _OPENMP
 #pragma omp parallel
@@ -1699,11 +1699,11 @@ void calcPgTuples(Population pop[], int numDivs,
 	  comb_stats.calcVar();
 	  comb_stats.calcStdErr();
 
-	  comb_stats.printStats(reg_out,all_names,g,param.tsv.val);
+	  comb_stats.printStats(reg_out,all_names,g,param.tabbed());
 
 	  if(full_comb)
 	    {
-	      comb_stats.printData(full_out,all_names,g,param.tsv.val);
+	      comb_stats.printData(full_out,all_names,g,param.tabbed());
 	    }
 	}
 
@@ -1721,7 +1721,7 @@ void calcPgTuples(Population pop[], int numDivs,
 			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
-      if(!param.tsv.val) reg_out << endl;
+      if(!param.tabbed()) reg_out << endl;
       full_out << endl;
     }
 
@@ -1775,7 +1775,7 @@ void writeWindowStats(ostream& out, vector<double>& perLocus, int numLoci,
 	  head << lmap.chromName[win.chrom] << '\t' << win.start << '\t'
 	       << win.end << '\t' << label;
 
-	  //tsv = true: a window undefined at this g is reported as NA rather
+	  //Tabbed: a window undefined at this g is reported as NA rather
 	  //than dropped, so a scan keeps one row per window per g.
 	  st.printStats(out,head.str(),g,1);
 	}
@@ -1807,7 +1807,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   pg_out.open(private_out.c_str());
-  if(param.tsv.val) pg_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+  if(param.tabbed()) pg_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
 
   ofstream pg_win_out;
   if(!windows.empty())
@@ -1934,11 +1934,11 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  pg_stats.calcVar();
 	  pg_stats.calcStdErr();
 
-	  pg_stats.printStats(pg_out,pop[j].getName(),g,param.tsv.val);
+	  pg_stats.printStats(pg_out,pop[j].getName(),g,param.tabbed());
 
 	  if(full_priv)
 	    {
-	      pg_stats.printData(pg_full_out,pop[j].getName(),g,param.tsv.val);
+	      pg_stats.printData(pg_full_out,pop[j].getName(),g,param.tabbed());
 	    }
 	}
 
@@ -1950,7 +1950,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
-      if(!param.tsv.val) pg_out << endl;
+      if(!param.tabbed()) pg_out << endl;
       pg_full_out << endl;
     }
 
@@ -2000,7 +2000,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   ag_out.open(richness_out.c_str());
-  if(param.tsv.val) ag_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+  if(param.tabbed()) ag_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
 
   ofstream ag_win_out;
   if(!windows.empty())
@@ -2093,11 +2093,11 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	  ag_stats.calcVar();
 	  ag_stats.calcStdErr();
 
-	  ag_stats.printStats(ag_out,pop[j].getName(),g,param.tsv.val);
+	  ag_stats.printStats(ag_out,pop[j].getName(),g,param.tabbed());
 
 	  if(full_rich)
 	    {
-	      ag_stats.printData(ag_full_out,pop[j].getName(),g,param.tsv.val);
+	      ag_stats.printData(ag_full_out,pop[j].getName(),g,param.tabbed());
 	    }
 	}
 
@@ -2109,7 +2109,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 			   param.at_g_val ? param.at_g_val : gCeil);
 	}
 
-      if(!param.tsv.val) ag_out << endl;
+      if(!param.tabbed()) ag_out << endl;
       ag_full_out << endl;
     }
 

@@ -15,7 +15,7 @@ using namespace std;
  * names the locus responsible: the reader can see which column went missing.
  * --legacy restores the omission.
  */
-void Stats::printData(ostream& out,string name,int g,bool tsv)
+void Stats::printData(ostream& out,string name,int g,bool tabbed)
 {
   bool anyUndefined = false;
 
@@ -24,7 +24,7 @@ void Stats::printData(ostream& out,string name,int g,bool tsv)
       if(data[l] == -9) { anyUndefined = true; break; }
     }
 
-  if(anyUndefined && !tsv) return;
+  if(anyUndefined && !tabbed) return;
 
   out << name << " "
       << g << " "
@@ -141,16 +141,16 @@ void Stats::putData(double* d,int l)
 /*
  * One result row.  In legacy format a row whose value is undefined at this g
  * is omitted entirely, so a consumer cannot tell "not computable here" from
- * "not run"; with tsv, the row is written with NA in the value columns and the
+ * "not run"; when tabbed, the row is written with NA in the value columns and the
  * fields are tab-separated under a header.
  */
-void Stats::printStats(ostream& out,string name,int g,bool tsv)
+void Stats::printStats(ostream& out,string name,int g,bool tabbed)
 {
   const bool undefined = (avg == -9 || var == -9 || std_err == -9);
 
-  if(undefined && !tsv) return;
+  if(undefined && !tabbed) return;
 
-  const char sep = tsv ? '\t' : ' ';
+  const char sep = tabbed ? '\t' : ' ';
 
   out << name << sep << g << sep << numLoci << sep;
 

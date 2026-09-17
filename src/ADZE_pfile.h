@@ -18,7 +18,7 @@ enum{FALSE,TRUE};
  */
 enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
-     OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,TSV,DRY_RUN,QUIET,THREADS,PARAMS,
+     OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,DRY_RUN,QUIET,THREADS,PARAMS,
      FORMAT,SAMPLES,LOCI_MAP,
      WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,LEGACY,
      LABEL_SIZE};
@@ -127,12 +127,11 @@ class ParamSet
 
   bool windowed() const { return win_bp.set || win_loci.set; }
   /*
-   * Output layout.  tsv is the live flag every writer consults and is on by
-   * default; legacy is the user's request for 1.0's layout and turns it off.
-   * Two options rather than one negated flag because --tsv shipped first and
-   * scripts already pass it.
+   * Output layout.  One flag: the result files are tab-separated with a header
+   * unless version 1.0's layout is asked for.  Writers ask tabbed() rather
+   * than reading legacy directly, so the question at the call site is "which
+   * layout am I writing" and not "did the user pass a flag".
    */
-  Param<bool> tsv;
   Param<bool> legacy;
   Param<bool> dry_run;
   Param<bool> quiet;
@@ -144,6 +143,9 @@ class ParamSet
   void echo(ostream& out);
   void CMDread(int,char**);           //parse the command line
   bool finish();                      //apply defaults, validate
+  //True when the result files carry a header and tab separators.
+  bool tabbed() const { return legacy.val ? false : true; }
+
   void makeParamFile(const string& file);
   string summaryName() const;
   static void usage(ostream& out);

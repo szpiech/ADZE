@@ -524,7 +524,7 @@ int main(int argc, char* argv[])
 		    << pop[j].getName() << ": lower --tolerance to drop those "
 		    << "loci\n         (--dry-run reports the ceiling without "
 		    << "computing anything).\n";
-	  if(!p.tsv.val)
+	  if(!p.tabbed())
 	    {
 	      adzelog() << "         --legacy omits undefined rows entirely, "
 			<< "so they will be missing from the\n"

@@ -82,7 +82,8 @@ grouping carries an allele that single draws from every other grouping all
 miss.
 
 Result files are tab-separated with a header row, and a statistic undefined at
-a given g is written as `NA`. `--legacy` asks for 1.0's layout instead — no
+a given g is written as `NA`. `--legacy` is the only way to change that: it
+asks for 1.0's layout — no
 header, space separators, undefined rows omitted rather than marked. That
 omission is why the default changed: a grouping undefined at every g disappears
 from the legacy file entirely, so a run can complete and report nothing with no
@@ -157,7 +158,6 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 | `--min-window-loci N` | skip windows holding fewer than N loci | `1` |
 | `--full-richness`, `--full-private`, `--full-tuples` | also write the per-locus values | off |
 | `--legacy` | write version 1.0's output layout | off |
-| `--tsv` | names the default layout explicitly; accepted for compatibility | on |
 | `--threads N` | parallelize the per-locus loops (OpenMP builds) | `1` |
 | `--progress` | progress bars | on when stderr is a terminal |
 | `--quiet` | suppress progress and informational messages | off |

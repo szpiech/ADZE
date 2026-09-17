@@ -89,8 +89,6 @@ const OptSpec OPTIONS[] = {
    "Output", "also write per-locus tuple values"},
   {LEGACY, "LEGACY_FORMAT", "--legacy", 0, OPT_BOOL, 0, "off",
    "Output", "write version 1.0's layout: space-separated, no header, undefined rows omitted"},
-  {TSV, 0, "--tsv", 0, OPT_BOOL, 0, "on",
-   "Output", "tab-separated output with a header row and NA for undefined values"},
 
   {PARAMS, 0, "--params", 0, OPT_STRING, "FILE", 0,
    "Other", "read parameters from FILE (also accepted as the first argument)"},
@@ -149,7 +147,6 @@ ParamSet::ParamSet()
   min_win_loci.val = 1;
   at_g.val = "";
   at_g_val = 0;
-  tsv.val = 1;
   legacy.val = 0;
   dry_run.val = 0;
   quiet.val = 0;
@@ -301,7 +298,6 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case PP:         SETP(pp);         pp.val = boolValue(val);          break;
     case TNC:        SETP(tnc);        tnc.val = boolValue(val);         break;
     case SKIP_CHK:   SETP(skip_chk);   skip_chk.val = boolValue(val);    break;
-    case TSV:        SETP(tsv);        tsv.val = boolValue(val);         break;
     case LEGACY:     SETP(legacy);     legacy.val = boolValue(val);      break;
     case DRY_RUN:    SETP(dry_run);    dry_run.val = boolValue(val);     break;
     case QUIET:      SETP(quiet);      quiet.val = boolValue(val);       break;
@@ -567,22 +563,6 @@ bool ParamSet::finish()
     {
       cerr << "WARNING: --min-window-loci applies to a windowed run; "
 	   << "ignoring it.\n";
-    }
-
-  /*
-   * Output layout: tab-separated with a header by default, 1.0's layout on
-   * request.  Asking for both is a contradiction rather than a precedence
-   * puzzle, so it is refused.
-   */
-  if(legacy.set && legacy.val)
-    {
-      if(tsv.set && tsv.val)
-	{
-	  cerr << "ERROR: --tsv and --legacy ask for different layouts; "
-	       << "choose one.\n";
-	  ok = 0;
-	}
-      else tsv.val = 0;
     }
 
   /*

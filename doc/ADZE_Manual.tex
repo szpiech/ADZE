@@ -566,9 +566,7 @@ rather than declared, and \texttt{MAX\_G} when it was resolved from the data
 \label{sec:legacy}
 
 The result files are tab-separated with a header row, and a statistic that is
-undefined at a given $g$ is written as \texttt{NA}. \flag{--tsv} names that
-layout explicitly and is accepted for compatibility with scripts written
-against earlier 2.0 builds, where it was not the default.
+undefined at a given $g$ is written as \texttt{NA}.
 
 \flag{--legacy} asks for version 1.0's layout: no header, space separators,
 groupings separated by a blank line, and rows that are undefined at a given $g$
@@ -577,8 +575,8 @@ A consumer of the legacy format cannot distinguish ``not computable here'' from
 ``not run'', and a grouping that is undefined at every $g$ --- which one badly
 scored locus is enough to cause (section~\ref{sec:tolerance}) --- disappears
 from the file altogether, leaving a run that completed and reported nothing
-with no visible explanation. Asking for both layouts at once is refused rather
-than resolved by precedence.
+with no visible explanation. There is one flag and no way to ask for
+both layouts at once.
 
 Tuple labels are comma-joined in the default layout and space-joined in the
 legacy one, so under tabs a tuple stays a single column.
@@ -692,7 +690,7 @@ gains \texttt{scan.richness\_windows}. The whole-dataset files are written
 exactly as before; asking for windows never changes them.
 
 Window files always carry a header and are always tab-separated, whatever
-\flag{--tsv} says --- they are new output with no version 1.0 consumer to stay
+\flag{--legacy} asks for --- they are new output with no version 1.0 consumer to stay
 compatible with, and a scan is read by machine. The columns are
 
 \begin{Verbatim}[frame=single,fontsize=\small]
@@ -1018,7 +1016,7 @@ happens during the single read pass.
   \flag{--loci-map} to give \structureprog\ input the coordinates a window
   needs. Version 1.0 reported each statistic once for the whole dataset.
 \item New: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
-  \flag{--exclude-pops}, \flag{--tuples}, \flag{--tsv}, \flag{--dry-run},
+  \flag{--exclude-pops}, \flag{--tuples}, \flag{--legacy}, \flag{--dry-run},
   \flag{--threads}, \flag{--quiet}.
 \end{itemize}
 
