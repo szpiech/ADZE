@@ -1228,7 +1228,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 		<< ((emptyLoci == 1) ? " locus has" : " loci have")
 		<< " no observed alleles in any grouping.\n"
 		<< "         Such loci make every statistic undefined at "
-		<< "every g; set TOLERANCE < 1 to drop them.\n";
+		<< "every g; lower --tolerance to drop them.\n";
     }
 
   return pop;

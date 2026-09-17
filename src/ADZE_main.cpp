@@ -2,18 +2,49 @@
 
 using namespace std;
 
-//Smallest number of gene copies scored anywhere: the largest feasible MAX_G.
-static int smallestNj(Population pop[], int numDivs, int numLoci)
+/*
+ * Per-grouping ceiling on g: the fewest gene copies a grouping scored at any
+ * surviving locus.  A locus where it scored fewer than g copies makes the
+ * statistic undefined at that g, and Stats propagates that sentinel through
+ * the average, so a single such locus takes the whole grouping out at that g.
+ * The count of loci sitting at the ceiling therefore matters as much as the
+ * ceiling itself: one locus is worth dropping, a third of the genome is not.
+ *
+ * ceiling[j] is that minimum, binding[j] how many loci sit on it, and empty[j]
+ * how many loci the grouping did not score at all. The smallest ceiling is the
+ * largest feasible MAX_G.
+ */
+static int smallestNj(Population pop[], int numDivs, int numLoci,
+		      vector<int>* ceiling = 0, vector<int>* binding = 0,
+		      vector<int>* empty = 0)
 {
   int smallest = 0;
+
+  if(ceiling) ceiling->assign(numDivs,0);
+  if(binding) binding->assign(numDivs,0);
+  if(empty) empty->assign(numDivs,0);
+
   for(int j = 0; j < numDivs; j++)
     {
+      int least = 0;
+      int atLeast = 0;
+      int none = 0;
+
       for(int l = 0; l < numLoci; l++)
 	{
 	  const int Nj = pop[j].getNj(l);
-	  if((j == 0 && l == 0) || Nj < smallest) smallest = Nj;
+	  if(l == 0 || Nj < least) { least = Nj; atLeast = 0; }
+	  if(Nj == least) atLeast++;
+	  if(Nj == 0) none++;
 	}
+
+      if(ceiling) (*ceiling)[j] = least;
+      if(binding) (*binding)[j] = atLeast;
+      if(empty) (*empty)[j] = none;
+
+      if(j == 0 || least < smallest) smallest = least;
     }
+
   return smallest;
 }
 
@@ -445,7 +476,8 @@ int main(int argc, char* argv[])
    * missing data raises the smallest sample size, so the largest usable g is a
    * property of the surviving loci.
    */
-  feasibleG = smallestNj(pop,numDivs,p.loci.val);
+  vector<int> ceiling, binding, emptyIn;
+  feasibleG = smallestNj(pop,numDivs,p.loci.val,&ceiling,&binding,&emptyIn);
 
   if(!p.g.set)
     {
@@ -455,12 +487,46 @@ int main(int argc, char* argv[])
       summary << "MAX_G resolved to " << p.g.val << " over " << p.loci.val
 	      << (p.loci.val == 1 ? " locus\n" : " loci\n");
     }
-  else if(p.g.val > feasibleG)
+
+  /*
+   * Which groupings cannot reach MAX_G, and what holds them back.  Naming them
+   * is the whole point: a run whose ceiling is 1 produces nothing usable, and
+   * in the legacy format it produces nothing visible either, since undefined
+   * rows are omitted rather than written as NA. Reporting only the global
+   * minimum -- which is what 1.0 did, and what this did until now -- leaves a
+   * user staring at blank result files with no idea which grouping, or how
+   * many loci, caused it.
+   */
+  for(int j = 0; j < numDivs; j++)
     {
-      adzelog() << "WARNING: MAX_G " << p.g.val << " exceeds the smallest "
-		<< "sample size in the data (" << feasibleG << ").\n"
-		<< "         Rows above g = " << feasibleG
-		<< " will be undefined.\n";
+      if(ceiling[j] >= p.g.val) continue;
+
+      adzelog() << "WARNING: " << pop[j].getName() << " scored only "
+		<< ceiling[j] << " gene cop" << ((ceiling[j] == 1) ? "y" : "ies")
+		<< " at " << binding[j]
+		<< ((binding[j] == 1) ? " locus" : " loci")
+		<< " of " << p.loci.val;
+      if(emptyIn[j] > 0)
+	{
+	  adzelog() << " (" << emptyIn[j]
+		    << ((emptyIn[j] == 1) ? " locus is" : " loci are")
+		    << " not scored at all)";
+	}
+      if(ceiling[j] == 0)
+	adzelog() << ",\n         so its statistics are undefined at every g.\n";
+      else
+	adzelog() << ",\n         so its statistics are undefined above g = "
+		  << ceiling[j] << ".\n";
+
+      if(ceiling[j] < 2)
+	{
+	  adzelog() << "         That leaves nothing usable for "
+		    << pop[j].getName() << ": lower --tolerance to drop those "
+		    << "loci\n         (--dry-run reports the ceiling without "
+		    << "computing anything). Undefined rows are\n"
+		    << "         omitted from the default output format; "
+		    << "--tsv writes them as NA.\n";
+	}
     }
 
   /*
