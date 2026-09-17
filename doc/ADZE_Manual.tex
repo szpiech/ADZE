@@ -526,6 +526,25 @@ file per $k$; with \flag{--tuples} the named tuples all go to one file.
 statistic at every locus used. The first line names the columns, including one
 column per locus.
 
+This file is space-separated in both layouts --- version 1.0 wrote it that way,
+and one column per locus does not become easier to read under tabs --- but
+\flag{--legacy} does change what happens to an undefined value. By default a
+locus at which the statistic is undefined at this $g$ is written as
+\texttt{NA}, which names the locus responsible: the reader can see which column
+went missing and at which $g$ it did so.
+
+\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+POP_GROUPING G NUM_LOCI L0 L1 L2 L3 MEAN VAR STD_ERR
+POP1 2 4 1.53571 1.60714 1 1.67857 1.45536 0.095557 0.154561
+POP1 3 4 1.80357 2 NA 2.125 NA NA NA
+\end{Verbatim}
+
+\noindent Here \texttt{POP1} scored only two gene copies at \texttt{L2}, so
+that locus is undefined from $g = 3$ up, and the summary columns with it.
+Version 1.0 dropped the whole row as soon as one locus was undefined, so a
+grouping with a single badly scored locus disappeared from the file at every
+$g$ with nothing to say why; \flag{--legacy} reproduces that.
+
 \subsection{Filtered loci}
 \label{sec:deletedloci}
 
@@ -965,7 +984,9 @@ happens during the single read pass.
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
 \item Result files are tab-separated with a header and \texttt{NA} for
-  undefined rows (section~\ref{sec:legacy}). \flag{--legacy} writes version
+  undefined rows (section~\ref{sec:legacy}), and the \texttt{\_fulldata} files
+  mark an undefined locus \texttt{NA} rather than dropping the row
+  (section~\ref{sec:fulldata}). \flag{--legacy} writes version
   1.0's layout, which is byte-identical to what 1.0 wrote apart from the
   $g = 1$ row.
 \item The \flag{--tolerance} default is 0.1 rather than 1
@@ -973,7 +994,9 @@ happens during the single read pass.
   unusable are named with their locus counts rather than showing up as empty
   result files.
 \item Result files are tab-separated with a header and \texttt{NA} for
-  undefined rows (section~\ref{sec:legacy}). \flag{--legacy} writes version
+  undefined rows (section~\ref{sec:legacy}), and the \texttt{\_fulldata} files
+  mark an undefined locus \texttt{NA} rather than dropping the row
+  (section~\ref{sec:fulldata}). \flag{--legacy} writes version
   1.0's layout, which is byte-identical to what 1.0 wrote apart from the
   $g = 1$ row.
 \item The \flag{--tolerance} default is 0.1 rather than 1

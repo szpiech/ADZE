@@ -28,7 +28,9 @@ an invariant or a closed form that must hold whatever the numbers are:
                    unusable by a retained locus is named rather than silently
                    producing empty files
   fmt              the shipped layout is tab-separated with a header and NA
-                   rows, and --legacy still writes exactly 1.0's layout
+                   rows, --legacy still writes exactly 1.0's layout, and
+                   _fulldata marks an undefined locus NA by default while
+                   --legacy drops the row as 1.0 did
   refusals         unsorted positions, a chromosome in two blocks, a locus
                    with no coordinate, and STRUCTURE without a map are all
                    refused
@@ -645,6 +647,53 @@ def case_format_default(s, adze, w):
         s.check("fmt.default.tuple_label_is_one_field",
                 "," in tup[0].split("\t")[0],
                 "tuple label is not comma-joined: %r" % tup[0].split("\t")[0])
+
+    # _fulldata: space-separated in both layouts, but an undefined cell is
+    # marked NA by default and drops the whole row under --legacy, as 1.0 did.
+    # The fixture takes six of one grouping's eight gene copies at one locus,
+    # so that locus supports g <= 2 for it and nothing else changes.
+    gen_data.write_dataset(os.path.join(w, "fl.stru"), npops=3, nind=4,
+                           nloci=4, nall=4, missing=0.0, seed=12)
+    rows = [l.split() for l in open(os.path.join(w, "fl.stru"))]
+    seen = 0
+    for r in rows[1:]:
+        if r[1] == "POP1":
+            seen += 1
+            if seen > 2:
+                r[2 + 2] = "-9"
+    with open(os.path.join(w, "fl.stru"), "w") as fh:
+        fh.write(" ".join(rows[0]) + "\n")
+        for r in rows[1:]:
+            fh.write(" ".join(r) + "\n")
+
+    flargs = ["--data", "fl.stru", "--group-col", "2", "--max-g", "4",
+              "--tolerance", "1", "--full-richness"]
+    run(adze, w, flargs + ["--out-prefix", "fl_def"], pin_format=False)
+    run(adze, w, flargs + ["--legacy", "--out-prefix", "fl_leg"])
+
+    def rows_for(path, label):
+        return [l.split() for l in open(path)
+                if l.startswith(label + " ")]
+
+    d = rows_for(os.path.join(w, "fl_def.richness_fulldata"), "POP1")
+    l = rows_for(os.path.join(w, "fl_leg.richness_fulldata"), "POP1")
+    s.check("fmt.fulldata.default_keeps_rows", len(d) == 4,
+            "expected g = 1..4, got %d rows" % len(d))
+    s.check("fmt.fulldata.legacy_drops_rows", len(l) == 2,
+            "expected --legacy to keep only g = 1,2; got %d rows" % len(l))
+    s.check("fmt.fulldata.defined_rows_match", d[:2] == l[:2],
+            "the rows both layouts write disagree")
+    # NA lands in the offending locus column, not just the summary columns
+    g3 = [r for r in d if r[1] == "3"]
+    s.check("fmt.fulldata.na_names_the_locus",
+            bool(g3) and g3[0][3:7].count("NA") == 1 and g3[0][5] == "NA",
+            "expected NA in the third locus column only: %s" % (g3[0][3:7] if g3 else None))
+    s.check("fmt.fulldata.na_summary",
+            bool(g3) and g3[0][-3:] == ["NA", "NA", "NA"],
+            "summary columns not NA: %s" % (g3[0][-3:] if g3 else None))
+    s.check("fmt.fulldata.spaces_in_both",
+            "\t" not in open(os.path.join(w, "fl_def.richness_fulldata")).read(),
+            "_fulldata gained tabs; it is space-separated in both layouts")
 
     # Both are refused together rather than one silently winning.
     clash = run(adze, w, args + ["--tsv", "--legacy", "--out-prefix", "fd_x"])

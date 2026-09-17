@@ -2,27 +2,48 @@
 
 using namespace std;
 
-void Stats::printData(ostream& out,string name,int g)
+/*
+ * One per-locus row: the label, g, the locus count, the statistic at each
+ * locus, then the summary columns.  Always space-separated -- 1.0 wrote this
+ * file that way and nothing about tabs would make a per-locus row with one
+ * column per locus easier to read -- but the layout flag does govern what
+ * happens to an undefined value, as it does for the summary files.
+ *
+ * 1.0 dropped the whole row as soon as one locus was undefined at this g, so a
+ * grouping with a single badly scored locus vanished from the file at every g
+ * with nothing to say why.  The default marks those cells NA instead, which
+ * names the locus responsible: the reader can see which column went missing.
+ * --legacy restores the omission.
+ */
+void Stats::printData(ostream& out,string name,int g,bool tsv)
 {
+  bool anyUndefined = false;
+
   for(int l = 0; l < numLoci; l++)
     {
-      if(data[l] == -9) return;
+      if(data[l] == -9) { anyUndefined = true; break; }
     }
+
+  if(anyUndefined && !tsv) return;
 
   out << name << " "
       << g << " "
       << numLoci << " ";
-  
+
   for(int l = 0; l < numLoci;l++)
     {
-      out << data[l] << " ";
-      
+      if(data[l] == -9) out << "NA ";
+      else out << data[l] << " ";
     }
-  
-  out << avg << " "
-      << var << " "
-      << std_err << endl;
-	
+
+  if(avg == -9 || var == -9 || std_err == -9) out << "NA NA NA" << endl;
+  else
+    {
+      out << avg << " "
+	  << var << " "
+	  << std_err << endl;
+    }
+
   return;
 }
 

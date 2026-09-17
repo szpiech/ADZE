@@ -1703,7 +1703,7 @@ void calcPgTuples(Population pop[], int numDivs,
 
 	  if(full_comb)
 	    {
-	      comb_stats.printData(full_out,all_names,g);
+	      comb_stats.printData(full_out,all_names,g,param.tsv.val);
 	    }
 	}
 
@@ -1938,7 +1938,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  if(full_priv)
 	    {
-	      pg_stats.printData(pg_full_out,pop[j].getName(),g);
+	      pg_stats.printData(pg_full_out,pop[j].getName(),g,param.tsv.val);
 	    }
 	}
 
@@ -2097,7 +2097,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  if(full_rich)
 	    {
-	      ag_stats.printData(ag_full_out,pop[j].getName(),g);
+	      ag_stats.printData(ag_full_out,pop[j].getName(),g,param.tsv.val);
 	    }
 	}
 
