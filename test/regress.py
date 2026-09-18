@@ -175,9 +175,48 @@ def reference_has_no_loci(directory, files):
 
 
 # Files that carry statistics rows, and so gain a g = 1 row in the candidate.
+def died(returncode):
+    """True when the process was killed rather than exiting on its own.
+
+    POSIX reports a signal as a negative status. Windows has no signals: a
+    crash surfaces as the NTSTATUS value itself, far above the 0-255 an exit
+    status can hold (an access violation is 0xC0000005 = 3221225477). Both are
+    "it died", and the difference is why ADZE 1.0's abort on a locus with no
+    observed allele read as a signal on Linux and as an ordinary failing exit
+    status on Windows.
+    """
+    return returncode < 0 or returncode > 255
+
+
 def is_results_file(name):
     return not (name.endswith("_summary") or name.endswith(".summary.txt")
                 or name.endswith("deletedloci"))
+
+
+def first_difference(ref_bytes, cnd_bytes, width=64):
+    """Where two masked files first disagree, short enough to sit in a log.
+
+    A bare list of differing filenames says nothing about the cause -- on one
+    machine it is a number, on another it could be a header, a row that should
+    not be there, or a line ending. Printing the first disagreeing line makes
+    the log self-diagnosing, which matters most when the failure is on a
+    machine you cannot reach.
+    """
+    ref = ref_bytes.decode("utf-8", "replace").splitlines()
+    cnd = cnd_bytes.decode("utf-8", "replace").splitlines()
+
+    for i in range(max(len(ref), len(cnd))):
+        r = ref[i] if i < len(ref) else None
+        c = cnd[i] if i < len(cnd) else None
+        if r == c:
+            continue
+        if r is None:
+            return "line %d: candidate has %r, reference ends" % (i + 1, c[:width])
+        if c is None:
+            return "line %d: reference has %r, candidate ends" % (i + 1, r[:width])
+        return "line %d: ref %r vs cnd %r" % (i + 1, r[:width], c[:width])
+
+    return "%d vs %d bytes, no differing line" % (len(ref_bytes), len(cnd_bytes))
 
 
 def compare(ref_dir, cnd_dir, files):
@@ -192,8 +231,10 @@ def compare(ref_dir, cnd_dir, files):
     for f in files:
         a, b = os.path.join(ref_dir, f), os.path.join(cnd_dir, f)
 
-        if masked(a) != masked(b, drop_g1=is_results_file(f)):
-            diffs.append(f)
+        ref_bytes = masked(a)
+        cnd_bytes = masked(b, drop_g1=is_results_file(f))
+        if ref_bytes != cnd_bytes:
+            diffs.append("%s (%s)" % (f, first_difference(ref_bytes, cnd_bytes)))
             continue
 
         if is_results_file(f):
@@ -253,20 +294,20 @@ def main():
         cnd = run_one(args.candidate, cnd_dir, dfile, meta, "out", kw,
                       extra_argv=("--legacy",))
 
-        if ref.returncode < 0:
-            # Reference died on a signal: nothing to compare against.
-            if cnd.returncode < 0:
+        if died(ref.returncode):
+            # The reference died: nothing to compare against.
+            if died(cnd.returncode):
                 status, detail = "XFAIL", (
-                    "reference and candidate both die on signal %d "
-                    "(pre-existing defect)" % -ref.returncode)
+                    "reference and candidate both die (status %d) "
+                    "-- pre-existing defect" % ref.returncode)
             elif cnd.returncode != 0:
                 status, detail = "FAIL", (
-                    "reference died on signal %d, candidate exited %d" % (
-                        -ref.returncode, cnd.returncode))
+                    "reference died (status %d), candidate exited %d" % (
+                        ref.returncode, cnd.returncode))
             else:
                 status, detail = "FIXED", (
-                    "reference died on signal %d, candidate exited 0 with %d outputs" % (
-                        -ref.returncode, len(outputs(cnd_dir, dfile))))
+                    "reference died (status %d), candidate exited 0 with %d outputs" % (
+                        ref.returncode, len(outputs(cnd_dir, dfile))))
         elif reference_has_no_loci(ref_dir, outputs(ref_dir, dfile)):
             # Reference reported statistics over zero loci; only the
             # candidate's handling of the degenerate input is checkable.

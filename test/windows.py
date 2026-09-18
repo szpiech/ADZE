@@ -560,7 +560,7 @@ def case_tolerance_default(s, adze, w):
     for r in rows[1:]:
         if r[1] == "POP2":
             r[2 + 3] = "-9"
-    with open(path, "w") as fh:
+    with open(path, "w", newline="\n") as fh:
         fh.write(" ".join(rows[0]) + "\n")
         for r in rows[1:]:
             fh.write(" ".join(r) + "\n")

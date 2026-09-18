@@ -114,6 +114,19 @@ jobs:
       - name: Run the suites
         run: ctest --test-dir build --output-on-failure
 
+      # The suites leave their scratch directories in place on failure; both
+      # sides of every differing file are in there, which is the difference
+      # between diagnosing a remote failure and guessing at it.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: scratch-${{ matrix.os }}
+          path: |
+            build/regress
+            build/formats
+            build/windows
+          if-no-files-found: ignore
+
   makefile:
     name: plain make
     runs-on: ubuntu-latest
@@ -242,8 +255,15 @@ jobs:
           set -euxo pipefail
           mkdir -p ref10
           git archive origin/master src | tar -x -C ref10
+          # __USE_MINGW_ANSI_STDIO: mingw-w64 turns its own POSIX-conformant
+          # printf on for C++11 and later and leaves the MSVCRT one in place
+          # below that, and the two disagree about exponents -- 8.2173e-033
+          # against 8.2173e-33. 2.0 is built as C++17 and gets the conformant
+          # one; 1.0 is C++03 and would not, which makes identical numbers
+          # compare as different bytes. Asking for it explicitly puts both
+          # builds on the same formatting.
           make -C ref10/src \
-            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            G++FLAG="-O2 -std=c++03 -w -D__USE_MINGW_ANSI_STDIO=1 -include cstring -include cstdlib -include climits" \
             I_PATH=/mingw64/include \
             L_PATH=/mingw64/lib \
             LINK_OPTS="-L/mingw64/lib -lgsl -lgslcblas"
@@ -282,6 +302,19 @@ jobs:
 
       - name: Run the suites
         run: ctest --test-dir build --output-on-failure
+
+      # The suites leave their scratch directories in place on failure; both
+      # sides of every differing file are in there, which is the difference
+      # between diagnosing a remote failure and guessing at it.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: scratch-windows
+          path: |
+            build/regress
+            build/formats
+            build/windows
+          if-no-files-found: ignore
 
       # The Makefile path matters more on Windows than elsewhere: MSYS2 users
       # reach for make, and CMake's Ninja generator hides Makefile breakage.

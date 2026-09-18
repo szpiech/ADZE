@@ -3,3 +3,9 @@
 *.h text eol=lf
 *.py text eol=lf
 Makefile text eol=lf
+
+# The example's data, parameter file and tracked results are compared byte for
+# byte by the test suites and read by both builds, so they stay LF in the
+# working tree on every platform rather than being converted on checkout.
+example/** text eol=lf
+test/** text eol=lf

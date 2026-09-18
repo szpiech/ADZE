@@ -10,6 +10,12 @@ sample-to-grouping map VCF input needs, which is what test/formats.py uses to
 check that the two readers agree.
 
 Uses only the standard library so it runs anywhere the compiler does.
+
+Every file is written with newline="\n", so a fixture is the same bytes on
+every platform; Python's text mode would otherwise write CRLF on Windows. Both
+builds read either ending correctly -- that is checked in test/formats.py --
+but a fixture that changes with the platform makes a byte comparison harder to
+reason about than it needs to be.
 """
 import argparse
 import gzip
@@ -28,7 +34,7 @@ def write_dataset(path, npops, nind, nloci, nall, missing=0.0, seed=1,
     if isinstance(nind, int):
         nind = [nind] * npops
     assert len(nind) == npops
-    with open(path, "w") as fh:
+    with open(path, "w", newline="\n") as fh:
         fh.write(" ".join("L%d" % l for l in range(nloci)) + "\n")
         for p in range(npops):
             # Population-specific allele pool, overlapping but not identical, so
@@ -119,7 +125,7 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, chroms=1,
     ploidy = len(geno[0][0])
     coords = place_loci(nloci, chroms, spacing)
 
-    with open(prefix + ".stru", "w") as fh:
+    with open(prefix + ".stru", "w", newline="\n") as fh:
         fh.write(" ".join(names) + "\n")
         for p, inds in enumerate(geno):
             for i, copies in enumerate(inds):
@@ -127,13 +133,13 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, chroms=1,
                     fh.write("ind%d_%d POP%d %s\n" % (
                         p, i, p, " ".join("-9" if a is None else str(a) for a in row)))
 
-    with open(prefix + ".samples", "w") as fh:
+    with open(prefix + ".samples", "w", newline="\n") as fh:
         fh.write("# sample\tgrouping\n")
         for p, inds in enumerate(geno):
             for i in range(len(inds)):
                 fh.write("ind%d_%d\tPOP%d\n" % (p, i, p))
 
-    with open(prefix + ".map", "w") as fh:
+    with open(prefix + ".map", "w", newline="\n") as fh:
         fh.write("# locus\tchromosome\tposition\n")
         for nm, (c, pos) in zip(names, coords):
             fh.write("%s\t%s\t%d\n" % (nm, c, pos))
@@ -161,10 +167,10 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, chroms=1,
                                  "PASS", ".", "GT"] + calls))
     text = "\n".join(lines) + "\n"
 
-    with open(prefix + ".vcf", "w") as fh:
+    with open(prefix + ".vcf", "w", newline="\n") as fh:
         fh.write(text)
     if gzip_vcf:
-        with gzip.open(prefix + ".vcf.gz", "wt") as fh:
+        with gzip.open(prefix + ".vcf.gz", "wt", newline="\n") as fh:
             fh.write(text)
 
     return {"dlines": ploidy * sum(nind), "loci": nloci,
@@ -196,7 +202,7 @@ def write_paramfile(path, meta, dfile, prefix, g=6, comb=0, k="", tol=1,
              "PRINT_PROGRESS %d" % pp]
     if comb:
         lines.append("K_RANGE %s" % k)
-    with open(path, "w") as fh:
+    with open(path, "w", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
     return path
 
