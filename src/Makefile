@@ -33,6 +33,20 @@ CXXFLAGS += -DADZE_HAVE_ZLIB
 LDLIBS   += -lz
 endif
 
+# Hooks for flags that belong to a particular build rather than to the
+# program: a static link for a binary that has to run on a machine without the
+# toolchain, or several -arch flags for a universal macOS binary. They exist
+# because setting CXXFLAGS or LDFLAGS on the command line replaces the value
+# in this file, and make then ignores the += above it -- so ZLIB=1 would
+# silently stop defining ADZE_HAVE_ZLIB. Appending a command-line variable is
+# safe, which is what these are.
+#
+#   make ZLIB=1 EXTRA_LDFLAGS=-static
+#   make ZLIB=1 EXTRA_CXXFLAGS="-arch x86_64 -arch arm64" \
+#               EXTRA_LDFLAGS="-arch x86_64 -arch arm64"
+CXXFLAGS += $(EXTRA_CXXFLAGS)
+LDFLAGS  += $(EXTRA_LDFLAGS)
+
 # Set I_PATH/L_PATH if headers or libraries live outside the default paths.
 ifdef I_PATH
 CXXFLAGS += -I$(I_PATH)

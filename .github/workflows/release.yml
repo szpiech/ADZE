@@ -1,0 +1,220 @@
+name: Release
+
+# Pre-built binaries, one per platform, in the spirit of the 1.0 archives
+# already in this repository (adze-1.0-x86_64.tar.gz, -osx, -win32) but for
+# current machines:
+#
+#   adze-<version>-linux-x86_64.tar.gz     static, zlib and OpenMP
+#   adze-<version>-macos-universal2.tar.gz x86_64 + arm64, zlib, no OpenMP
+#   adze-<version>-windows-x86_64.zip      static, zlib and OpenMP
+#
+# Pushing a tag like v2.0.0 builds all three and publishes them on a release.
+# Running it by hand builds them and leaves them as workflow artifacts, so the
+# packaging can be exercised without tagging anything.
+#
+# Every binary is made to stand alone, because a user who downloads one has no
+# toolchain: the Linux and Windows builds are statically linked, and the macOS
+# one depends on nothing outside /usr/lib. OpenMP is left out of the macOS
+# build deliberately -- linking it would tie the binary to a Homebrew libomp
+# that the machine downloading it will not have. `--threads` there needs a
+# local build, which the README says.
+#
+# Each build verifies the artifact it produced rather than trusting the
+# compiler: it runs the binary, re-runs the distributed example and compares
+# against the committed output, runs the format suite against it, and reports
+# what it links against.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+          - name: macos-universal2
+            os: macos-latest
+          - name: windows-x86_64
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2
+        if: matrix.name == 'windows-x86_64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-python
+
+      - name: Install dependencies
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          # The static link needs the archive, which this package carries
+          # alongside the shared library.
+          sudo apt-get install -y zlib1g-dev
+
+      # The version comes from the tag when there is one, so the archive name
+      # and the binary's own --version cannot disagree about which build this
+      # is; a manual run is labelled by its commit instead.
+      - name: Work out the version
+        id: ver
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Linux)
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          set -euxo pipefail
+          make -C src ZLIB=1 OPENMP=1 EXTRA_LDFLAGS="-static"
+          # A statically linked binary is the point, so check it is one rather
+          # than assume: ldd says so, and a dynamic dependency here would mean
+          # the archive only runs on machines like this runner.
+          ldd src/adze 2>&1 | tee /tmp/deps.txt || true
+          grep -q "not a dynamic executable" /tmp/deps.txt
+
+      - name: Build (macOS)
+        if: matrix.name == 'macos-universal2'
+        run: |
+          set -euxo pipefail
+          # 11.0 is the floor because that is where arm64 starts; the x86_64
+          # slice would happily target older.
+          ARCH="-arch x86_64 -arch arm64 -mmacosx-version-min=11.0"
+          make -C src ZLIB=1 CXX=clang++ \
+            EXTRA_CXXFLAGS="$ARCH" EXTRA_LDFLAGS="$ARCH"
+          file src/adze
+          file src/adze | grep -q "universal binary with 2 architectures"
+          # Every library it loads must live in /usr/lib, or the download
+          # will not run on a machine without Homebrew.
+          otool -L src/adze | awk '/\.dylib/ {print $1}' | sort -u | tee /tmp/deps.txt
+          # Non-empty first: an empty list would satisfy the next test without
+          # meaning anything.
+          test -s /tmp/deps.txt
+          ! grep -qv '^/usr/lib/' /tmp/deps.txt
+
+      - name: Build (Windows)
+        if: matrix.name == 'windows-x86_64'
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          # Static, or the .exe needs libstdc++-6.dll, libgcc_s_seh-1.dll,
+          # libwinpthread-1.dll and zlib1.dll from an MSYS2 installation the
+          # downloader does not have. If the static OpenMP link ever breaks,
+          # dropping OPENMP=1 here is the fallback and costs only --threads.
+          make -C src ZLIB=1 OPENMP=1 TARGET=adze.exe EXTRA_LDFLAGS="-static"
+          ldd src/adze.exe > /tmp/deps.txt 2>&1 || true
+          cat /tmp/deps.txt
+          # Nothing from the MSYS2 tree: those DLLs are what a downloader
+          # would not have.
+          ! grep -qiE "mingw64|msys" /tmp/deps.txt
+
+      # The artifact is checked by using it: the example is the one dataset
+      # whose correct output is committed, and the format suite holds the
+      # readers to each other. A binary that links but computes wrongly --
+      # a mis-set flag, a broken static libstdc++ -- fails here.
+      - name: Verify the binary that will ship
+        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
+        run: |
+          set -euxo pipefail
+          BIN=src/adze
+          if [ -f src/adze.exe ]; then BIN=src/adze.exe; fi
+          "./$BIN" --version
+          "./$BIN" --help > /dev/null
+          ( cd example && "../$BIN" small_paramfile.txt )
+          git diff --exit-code -- example/ ':(exclude)example/*summary*'
+          git checkout -- example/
+          python3 test/formats.py --candidate "$BIN"
+          # --threads is only meaningful where OpenMP is in; a build without it
+          # accepts the flag and stays serial, so this is a smoke test either way.
+          "./$BIN" --data example/small_data.stru --group-col 5 --threads 2 \
+            --out-prefix /tmp/threads > /dev/null
+
+      - name: Package
+        id: pack
+        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
+        run: |
+          set -euxo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          DIR="adze-$V-${{ matrix.name }}"
+          mkdir -p "dist/$DIR"
+          if [ -f src/adze.exe ]; then cp src/adze.exe "dist/$DIR/";
+          else cp src/adze "dist/$DIR/"; fi
+          cp README.md ADZE_Manual.pdf "dist/$DIR/"
+          cp -R example "dist/$DIR/example"
+          cd dist
+          if [ "${{ matrix.name }}" = "windows-x86_64" ]; then
+            zip -qr "$DIR.zip" "$DIR"
+            echo "asset=dist/$DIR.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar czf "$DIR.tar.gz" "$DIR"
+            echo "asset=dist/$DIR.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adze-${{ matrix.name }}
+          path: ${{ steps.pack.outputs.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Checksums are computed here, over the archives as uploaded, so they
+      # describe what a user actually downloads.
+      - name: Checksums
+        run: |
+          set -euxo pipefail
+          cd dist
+          ls -l
+          sha256sum *.tar.gz *.zip | tee SHA256SUMS
+
+      # gh is already on the runner, so no third-party action is involved in
+      # publishing. The release is created if the tag has none yet, and the
+      # assets are attached either way.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          V="${GITHUB_REF_NAME}"
+          if ! gh release view "$V" >/dev/null 2>&1; then
+            gh release create "$V" --title "adze $V" --generate-notes
+          fi
+          gh release upload "$V" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --clobber

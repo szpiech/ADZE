@@ -8,6 +8,30 @@ ADZE is a program that implements the rarefaction method for analyzing allelic d
 
 ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for counting alleles private to combinations of populations. Bioinformatics 24: 2498-2504. 
 
+## Binaries
+
+Tagged releases carry pre-built archives, built and checked by
+`.github/workflows/release.yml` on the tag itself:
+
+| archive | contents |
+|---|---|
+| `adze-<version>-linux-x86_64.tar.gz` | statically linked, with zlib and OpenMP |
+| `adze-<version>-macos-universal2.tar.gz` | x86\_64 and arm64 in one binary, with zlib |
+| `adze-<version>-windows-x86_64.zip` | statically linked, with zlib and OpenMP |
+
+Each holds the binary, this README, the manual and the `example/` directory,
+and needs nothing installed: the Linux and Windows binaries are static, and
+the macOS one loads only libraries in `/usr/lib`. `SHA256SUMS` covers all
+three.
+
+The macOS build is serial. Linking OpenMP there would tie the binary to a
+Homebrew `libomp` that a machine downloading it will not have, so `--threads`
+on macOS wants a local build — the third `make` line below.
+
+Every archive is checked before it is published, with the binary that will
+ship: it re-runs the distributed example and compares against the committed
+output, and runs the format suite against itself.
+
 ## Building
 
 On Windows, MSYS2's MINGW64 shell works with the same commands; install
@@ -36,6 +60,21 @@ make -C src OPENMP=1 ZLIB=1        # GCC or Linux clang
 make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
                                    # Apple clang, with libomp installed
 ```
+
+`EXTRA_CXXFLAGS` and `EXTRA_LDFLAGS` add flags that belong to a build rather
+than to the program — a static link, or several architectures — and are how
+the release archives are built:
+
+```sh
+make -C src ZLIB=1 OPENMP=1 EXTRA_LDFLAGS=-static
+make -C src ZLIB=1 EXTRA_CXXFLAGS="-arch x86_64 -arch arm64" \
+                   EXTRA_LDFLAGS="-arch x86_64 -arch arm64"
+```
+
+Setting `CXXFLAGS` itself on the command line would replace the value in the
+Makefile, and make then ignores the `+=` lines that `ZLIB=1` and `OPENMP=1`
+rely on — so `ZLIB=1 CXXFLAGS=...` builds without compressed-input support and
+says nothing about it. The `EXTRA_` hooks exist to avoid that.
 
 ## Running
 
