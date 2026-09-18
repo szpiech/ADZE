@@ -67,11 +67,22 @@ def run_one(binary, workdir, dataset_file, meta, prefix, kwargs, extra_argv=()):
     gen_data.write_paramfile(par, meta, os.path.basename(dataset_file), prefix, **kwargs)
     proc = subprocess.run([os.path.abspath(binary), "case.par", *extra_argv],
                           cwd=workdir, capture_output=True, text=True)
+
+    # Kept beside the outputs: when a run misbehaves on a machine you cannot
+    # reach, what it said about itself is usually the answer, and the scratch
+    # directory is what CI uploads.
+    with open(os.path.join(workdir, "console.out"), "w", newline="\n") as fh:
+        fh.write(proc.stdout)
+    with open(os.path.join(workdir, "console.err"), "w", newline="\n") as fh:
+        fh.write(proc.stderr)
+
     return proc
 
 
 def outputs(workdir, dataset_file):
-    skip = {os.path.basename(dataset_file), "case.par"}
+    """Result files the run wrote, excluding the inputs and captured console."""
+    skip = {os.path.basename(dataset_file), "case.par",
+            "console.out", "console.err"}
     return sorted(f for f in os.listdir(workdir) if f not in skip)
 
 
@@ -193,6 +204,24 @@ def is_results_file(name):
                 or name.endswith("deletedloci"))
 
 
+def said_about_itself(directory, width=120):
+    """The last thing a run printed, for a file it wrote nothing into.
+
+    An empty result file is not a numerical disagreement, it is a run that
+    declined to report -- and in the legacy layout an undefined row is omitted
+    rather than marked, so the file goes empty without anything in it saying
+    why. What the run printed is where the reason is.
+    """
+    for name in ("console.err", "console.out"):
+        path = os.path.join(directory, name)
+        if not os.path.exists(path):
+            continue
+        said = [l.strip() for l in open(path, errors="replace") if l.strip()]
+        if said:
+            return "; it said: %r" % said[-1][:width]
+    return ""
+
+
 def first_difference(ref_bytes, cnd_bytes, width=64):
     """Where two masked files first disagree, short enough to sit in a log.
 
@@ -234,7 +263,13 @@ def compare(ref_dir, cnd_dir, files):
         ref_bytes = masked(a)
         cnd_bytes = masked(b, drop_g1=is_results_file(f))
         if ref_bytes != cnd_bytes:
-            diffs.append("%s (%s)" % (f, first_difference(ref_bytes, cnd_bytes)))
+            if not ref_bytes.strip() and cnd_bytes.strip():
+                why = "reference wrote no rows%s" % said_about_itself(ref_dir)
+            elif not cnd_bytes.strip() and ref_bytes.strip():
+                why = "candidate wrote no rows%s" % said_about_itself(cnd_dir)
+            else:
+                why = first_difference(ref_bytes, cnd_bytes)
+            diffs.append("%s (%s)" % (f, why))
             continue
 
         if is_results_file(f):
