@@ -22,10 +22,16 @@ name: CI
 #   manual    the manual builds from source, and its generated option
 #             reference agrees with the option table.
 
+# Pushes to the two long-lived branches, and any pull request proposing to
+# merge into one of them. Work on a topic branch therefore runs CI when it is
+# proposed rather than on every push, and `master` is named explicitly because
+# a branch filter cannot read the repository's default branch -- renaming it
+# means editing this list.
 on:
   push:
-    branches: ['**']
+    branches: [master, devel]
   pull_request:
+    branches: [master, devel]
   workflow_dispatch:
 
 permissions:

@@ -85,7 +85,8 @@ a deliberately wrong README.
 
 ## In CI
 
-`.github/workflows/ci.yml` runs all four on every push and pull request, and
+`.github/workflows/ci.yml` runs all four on pushes to `master` and `devel` and
+on pull requests into either, and
 builds the 1.0 reference from `master` in the same run rather than carrying a
 binary around, so `regress.py` always has something to compare against. The
 suites job runs them through `ctest` on Linux and macOS; the Makefile job runs

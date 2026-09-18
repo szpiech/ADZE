@@ -216,7 +216,9 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+`.github/workflows/ci.yml` runs on pushes to `master` and `devel`, and on any
+pull request proposing to merge into either — so a topic branch is checked when
+it is proposed rather than on every push:
 
 | job | what it establishes |
 |---|---|
