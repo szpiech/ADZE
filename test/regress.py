@@ -150,16 +150,17 @@ def g1_rows(path):
     return n, labels
 
 
-# ADZE 1.0 returned -1 (exit status 255) for every failure. The candidate
-# distinguishes usage, I/O and data-validation errors, so a 255 from the
-# reference matches any of those.
+# ADZE 1.0 returned -1 for every failure -- 255 as an exit code, and
+# 4294967295 unsigned on Windows. The candidate distinguishes usage, I/O and
+# data-validation errors, so that one reference status matches any of those.
 CANDIDATE_FAILURE_CODES = (2, 3, 4, 255)
 
 
 def comparable_status(ref_rc, cnd_rc):
     if ref_rc == cnd_rc:
         return True
-    return ref_rc == 255 and cnd_rc in CANDIDATE_FAILURE_CODES
+    return (normal_status(ref_rc) == 255
+            and normal_status(cnd_rc) in CANDIDATE_FAILURE_CODES)
 
 
 def reference_has_no_loci(directory, files):
@@ -186,17 +187,34 @@ def reference_has_no_loci(directory, files):
 
 
 # Files that carry statistics rows, and so gain a g = 1 row in the candidate.
+def normal_status(returncode):
+    """A process status as an exit code, with Windows' unsigned image undone.
+
+    A program that calls exit(-1) -- which is how 1.0 reports every ordinary
+    failure -- exits 255 on POSIX and 4294967295 on Windows, the same value
+    seen as unsigned. Anything in the top 256 of the unsigned range is that,
+    not a crash.
+    """
+    if returncode >= 0xFFFFFF00:
+        return (returncode - 0x100000000) & 0xFF
+    return returncode
+
+
 def died(returncode):
     """True when the process was killed rather than exiting on its own.
 
     POSIX reports a signal as a negative status. Windows has no signals: a
-    crash surfaces as the NTSTATUS value itself, far above the 0-255 an exit
-    status can hold (an access violation is 0xC0000005 = 3221225477). Both are
-    "it died", and the difference is why ADZE 1.0's abort on a locus with no
-    observed allele read as a signal on Linux and as an ordinary failing exit
-    status on Windows.
+    crash surfaces as the NTSTATUS value itself, and the failure severity
+    occupies 0xC0000000 upward -- an access violation is 0xC0000005 =
+    3221225477. That is why 1.0's abort on a locus with no observed allele
+    reads as a signal on Linux and as a large positive status on Windows.
+
+    The top 256 values are excluded deliberately: 4294967295 is exit(-1) seen
+    as unsigned, an ordinary failure, and reading it as a crash made three
+    one_group cases -- where both builds correctly refuse k > 1 for a single
+    grouping -- fail on Windows while passing everywhere else.
     """
-    return returncode < 0 or returncode > 255
+    return returncode < 0 or 0xC0000000 <= returncode < 0xFFFFFF00
 
 
 def is_results_file(name):
