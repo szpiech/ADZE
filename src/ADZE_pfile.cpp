@@ -7,7 +7,7 @@ bool wantsVCF(const string& format,const string& path);
 
 using namespace std;
 
-const char* ADZE_VERSION = "2.0-dev";
+const char* ADZE_VERSION = "2.0";
 
 /*
  * The single description of every parameter.  The command-line parser, the
