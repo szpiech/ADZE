@@ -19,3 +19,5 @@ doc/*.out
 doc/*.toc
 doc/options.tex
 doc/ADZE_Manual.pdf
+# reference binary built from master (the CI steps do this too)
+/ref10/

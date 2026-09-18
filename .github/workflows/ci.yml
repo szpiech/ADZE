@@ -1,0 +1,210 @@
+name: CI
+
+# What this checks, and why each job exists:
+#
+#   suites    the four test suites under ctest, on Linux and macOS. The
+#             differential suite needs a version 1.0 binary to compare
+#             against, which is built here from the master branch -- so the
+#             "byte identical to 1.0" claim is re-established on every push
+#             rather than resting on a binary someone built once.
+#   makefile  the plain Makefile paths. CMake is what the suites job uses, so
+#             without this job `make -C src` could rot unnoticed, and it is
+#             what a user without CMake will reach for.
+#   example   the distributed example reproduces its own tracked output. This
+#             catches a change in what the program writes before a reader
+#             finds the shipped example disagreeing with the program.
+#   manual    the manual builds from source, and its generated option
+#             reference agrees with the option table.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suites:
+    name: suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # Full history: the 1.0 reference is built from the master branch, so a
+      # shallow clone of the feature branch alone is not enough.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            # gsl is for the 1.0 reference only; 2.0 requires none of it.
+            sudo apt-get install -y libgsl-dev zlib1g-dev
+          else
+            brew install gsl
+          fi
+
+      # 1.0 predates the include-what-you-use tightening in current standard
+      # libraries, so the headers it relied on transitively are forced in and
+      # its warnings silenced. The shim adds nothing where they are already
+      # included, and it does not patch master.
+      - name: Build the version 1.0 reference binary
+        run: |
+          set -eux
+          mkdir -p ref10
+          git archive origin/master src | tar -x -C ref10
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            GSL_INC=/usr/include
+            GSL_LIB=/usr/lib/x86_64-linux-gnu
+          else
+            GSL_INC="$(brew --prefix gsl)/include"
+            GSL_LIB="$(brew --prefix gsl)/lib"
+          fi
+          # LINK_OPTS is overridden to record an rpath: 1.0's Makefile links
+          # with -L alone, which is enough to link but not always to run --
+          # a libgsl whose install name is rpath-relative (Homebrew, conda)
+          # then fails at load time. Running the binary below is the check.
+          make -C ref10/src \
+            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            I_PATH="$GSL_INC" \
+            L_PATH="$GSL_LIB" \
+            LINK_OPTS="-L$GSL_LIB -Wl,-rpath,$GSL_LIB -lgsl -lgslcblas"
+          ./ref10/src/adze-1.0 2>&1 | head -1
+
+      # OpenMP is optional. The Linux runner has it through GCC, so the
+      # thread-invariance case runs there; macOS AppleClang carries no libomp
+      # by default, and that case reports itself skipped rather than failing.
+      - name: Configure and build
+        run: |
+          set -eux
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DADZE_REFERENCE="$PWD/ref10/src/adze-1.0"
+          cmake --build build -j
+          ./build/adze --version
+
+      - name: Run the suites
+        run: ctest --test-dir build --output-on-failure
+
+  makefile:
+    name: plain make
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y libgsl-dev zlib1g-dev
+
+      # Three configurations, because the optional features are compiled in
+      # rather than detected at runtime: a bare build, one with zlib, and one
+      # with both zlib and OpenMP.
+      - name: Build every configuration
+        run: |
+          set -eux
+          make -C src
+          ./src/adze --version
+          make -C src clean
+          make -C src ZLIB=1
+          make -C src clean
+          make -C src ZLIB=1 OPENMP=1
+          ./src/adze --version
+
+      - name: Build the version 1.0 reference binary
+        run: |
+          set -eux
+          git fetch --no-tags --depth=1 origin master
+          mkdir -p ref10
+          git archive FETCH_HEAD src | tar -x -C ref10
+          make -C ref10/src \
+            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            I_PATH=/usr/include \
+            L_PATH=/usr/lib/x86_64-linux-gnu \
+            LINK_OPTS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu -lgsl -lgslcblas"
+          ./ref10/src/adze-1.0 2>&1 | head -1
+
+      # Run directly rather than through ctest, so this job needs nothing but
+      # make and python3.
+      - name: Run the suites against the Makefile build
+        run: |
+          set -eux
+          python3 test/docs.py
+          python3 test/regress.py --candidate src/adze --reference ref10/src/adze-1.0
+          python3 test/formats.py --candidate src/adze
+          python3 test/windows.py --candidate src/adze
+
+  example:
+    name: distributed example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev
+
+      - name: Build
+        run: make -C src ZLIB=1
+
+      # The run summary records how long each phase took, so it cannot match
+      # between machines; every file whose contents are results is compared.
+      - name: The example reproduces its tracked output
+        run: |
+          set -eux
+          cd example
+          ../src/adze small_paramfile.txt
+          cd ..
+          git diff --exit-code -- example/ ':(exclude)example/*summary*'
+
+      - name: Show what differs, when something does
+        if: failure()
+        run: git diff -- example/
+
+  manual:
+    name: manual
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install a LaTeX toolchain
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+            texlive-fonts-recommended
+
+      # docs.py needs no binary: it holds the README's option table to the
+      # OPTIONS table in the source.
+      - name: The documentation agrees with the option table
+        run: python3 test/docs.py
+
+      - name: Build the manual
+        run: |
+          set -eux
+          make -C doc
+          test -f doc/ADZE_Manual.pdf
+          # Informational: line breaking depends on the TeX version, so this is
+          # reported rather than enforced.
+          echo "overfull lines: $(grep -cE '^Overfull' doc/ADZE_Manual.log || true)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ADZE_Manual
+          path: doc/ADZE_Manual.pdf
+          if-no-files-found: error

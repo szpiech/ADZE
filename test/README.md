@@ -82,3 +82,14 @@ about wording and strict about the value, and it is one-directional on purpose
 -- accepting the README's text inside the table's default instead would pass a
 README saying `1` where the program uses `0.1`. Confirmed by running it against
 a deliberately wrong README.
+
+## In CI
+
+`.github/workflows/ci.yml` runs all four on every push and pull request, and
+builds the 1.0 reference from `master` in the same run rather than carrying a
+binary around, so `regress.py` always has something to compare against. The
+suites job runs them through `ctest` on Linux and macOS; the Makefile job runs
+them directly, so it needs nothing but `make` and `python3`. OpenMP is present
+on the Linux runner and absent on the macOS one, which is how the
+thread-invariance case gets exercised in one place and reports itself skipped
+in the other.

@@ -1,4 +1,7 @@
 # ADZE
+
+[![CI](https://github.com/szpiech/ADZE/actions/workflows/ci.yml/badge.svg)](https://github.com/szpiech/ADZE/actions/workflows/ci.yml)
+
 Allelic Diversity Analyzer
 
 ADZE is a program that implements the rarefaction method for analyzing allelic diversity across populations while correcting for sample size differences. Using individual multilocus genotype data on genetic polymorphisms, ADZE computes estimates of allelic richness, private allelic richness, and private allelic richness for combinations of populations. 
@@ -163,6 +166,21 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 | `--quiet` | suppress progress and informational messages | off |
 | `--dry-run` | report the detected layout, groupings and feasible `MAX_G`, then stop | off |
 | `--write-template [FILE]` | generate a commented parameter file | — |
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+| job | what it establishes |
+|---|---|
+| `suites` | all four suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
+| `plain make` | the three Makefile configurations (bare, `ZLIB=1`, `ZLIB=1 OPENMP=1`) build and pass the suites |
+| `distributed example` | `adze small_paramfile.txt` in `example/` reproduces the tracked result files |
+| `manual` | the manual builds from source and its generated option reference agrees with the option table |
+
+The 1.0 reference is rebuilt from `master` on every run rather than kept as a
+binary, so the byte-identity claim is re-established rather than inherited. It
+is the only thing in CI that needs GSL.
 
 Results do not depend on `--threads`: loci are processed independently and
 reduced in locus order, so any thread count gives bit-identical output.
