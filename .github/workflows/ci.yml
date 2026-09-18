@@ -50,7 +50,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          set -eux
+          set -euxo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
             # gsl is for the 1.0 reference only; 2.0 requires none of it.
@@ -65,7 +65,7 @@ jobs:
       # included, and it does not patch master.
       - name: Build the version 1.0 reference binary
         run: |
-          set -eux
+          set -euxo pipefail
           mkdir -p ref10
           git archive origin/master src | tar -x -C ref10
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -84,14 +84,27 @@ jobs:
             I_PATH="$GSL_INC" \
             L_PATH="$GSL_LIB" \
             LINK_OPTS="-L$GSL_LIB -Wl,-rpath,$GSL_LIB -lgsl -lgslcblas"
-          ./ref10/src/adze-1.0 2>&1 | head -1
+          REF=ref10/src/adze-1.0
+          # 1.0 exits nonzero when run with no arguments (it wants a paramfile),
+          # so its exit status cannot be the check that it loaded -- and under
+          # pipefail, piping it into head would fail the step. The banner is the
+          # evidence: a binary that cannot find its libgsl prints a loader error
+          # instead.
+          out=$("./$REF" 2>&1 || true)
+          echo "${out%%$'\n'*}"                       # first line, no pipe
+          case "$out" in
+            *"Allelic Diversity Analyzer"*) ;;
+            *) echo "the reference binary did not run:"
+               printf '%s\n' "$out" | head -3
+               exit 1 ;;
+          esac
 
       # OpenMP is optional. The Linux runner has it through GCC, so the
       # thread-invariance case runs there; macOS AppleClang carries no libomp
       # by default, and that case reports itself skipped rather than failing.
       - name: Configure and build
         run: |
-          set -eux
+          set -euxo pipefail
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DADZE_REFERENCE="$PWD/ref10/src/adze-1.0"
@@ -109,7 +122,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          set -eux
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y libgsl-dev zlib1g-dev
 
@@ -118,7 +131,7 @@ jobs:
       # with both zlib and OpenMP.
       - name: Build every configuration
         run: |
-          set -eux
+          set -euxo pipefail
           make -C src
           ./src/adze --version
           make -C src clean
@@ -129,7 +142,7 @@ jobs:
 
       - name: Build the version 1.0 reference binary
         run: |
-          set -eux
+          set -euxo pipefail
           git fetch --no-tags --depth=1 origin master
           mkdir -p ref10
           git archive FETCH_HEAD src | tar -x -C ref10
@@ -138,13 +151,26 @@ jobs:
             I_PATH=/usr/include \
             L_PATH=/usr/lib/x86_64-linux-gnu \
             LINK_OPTS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu -lgsl -lgslcblas"
-          ./ref10/src/adze-1.0 2>&1 | head -1
+          REF=ref10/src/adze-1.0
+          # 1.0 exits nonzero when run with no arguments (it wants a paramfile),
+          # so its exit status cannot be the check that it loaded -- and under
+          # pipefail, piping it into head would fail the step. The banner is the
+          # evidence: a binary that cannot find its libgsl prints a loader error
+          # instead.
+          out=$("./$REF" 2>&1 || true)
+          echo "${out%%$'\n'*}"                       # first line, no pipe
+          case "$out" in
+            *"Allelic Diversity Analyzer"*) ;;
+            *) echo "the reference binary did not run:"
+               printf '%s\n' "$out" | head -3
+               exit 1 ;;
+          esac
 
       # Run directly rather than through ctest, so this job needs nothing but
       # make and python3.
       - name: Run the suites against the Makefile build
         run: |
-          set -eux
+          set -euxo pipefail
           python3 test/docs.py
           python3 test/regress.py --candidate src/adze --reference ref10/src/adze-1.0
           python3 test/formats.py --candidate src/adze
@@ -158,7 +184,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          set -eux
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y zlib1g-dev
 
@@ -169,7 +195,7 @@ jobs:
       # between machines; every file whose contents are results is compared.
       - name: The example reproduces its tracked output
         run: |
-          set -eux
+          set -euxo pipefail
           cd example
           ../src/adze small_paramfile.txt
           cd ..
@@ -213,7 +239,7 @@ jobs:
       # still the check that it loads.
       - name: Build the version 1.0 reference binary
         run: |
-          set -eux
+          set -euxo pipefail
           mkdir -p ref10
           git archive origin/master src | tar -x -C ref10
           make -C ref10/src \
@@ -221,17 +247,33 @@ jobs:
             I_PATH=/mingw64/include \
             L_PATH=/mingw64/lib \
             LINK_OPTS="-L/mingw64/lib -lgsl -lgslcblas"
-          # gcc appends .exe when the output name carries no suffix, so the
-          # 1.0 Makefile's target lands under a name it does not mention.
-          REF=$(ls ref10/src/adze-1.0.exe ref10/src/adze-1.0 2>/dev/null | head -1)
-          "./$REF" 2>&1 | head -1
+          # gcc appends .exe only when the output name has no suffix, and
+          # "adze-1.0" already looks suffixed, so the binary keeps that name
+          # here. Both are accepted rather than assumed: `ls` on the missing
+          # one of the pair returns nonzero, which under pipefail fails the
+          # step before anything has gone wrong.
+          REF=ref10/src/adze-1.0
+          if [ -f "$REF.exe" ]; then REF="$REF.exe"; fi
+          # 1.0 exits nonzero when run with no arguments (it wants a paramfile),
+          # so its exit status cannot be the check that it loaded -- and under
+          # pipefail, piping it into head would fail the step. The banner is the
+          # evidence: a binary that cannot find its libgsl prints a loader error
+          # instead.
+          out=$("./$REF" 2>&1 || true)
+          echo "${out%%$'\n'*}"                       # first line, no pipe
+          case "$out" in
+            *"Allelic Diversity Analyzer"*) ;;
+            *) echo "the reference binary did not run:"
+               printf '%s\n' "$out" | head -3
+               exit 1 ;;
+          esac
           echo "ADZE_REFERENCE=$(cygpath -m "$PWD/$REF")" >> "$GITHUB_ENV"
 
       # cygpath converts the MSYS path to one CMake understands; a bare
       # /d/a/... path reaches it as a relative directory.
       - name: Configure and build
         run: |
-          set -eux
+          set -euxo pipefail
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DADZE_REFERENCE="$ADZE_REFERENCE"
@@ -245,7 +287,7 @@ jobs:
       # reach for make, and CMake's Ninja generator hides Makefile breakage.
       - name: Build with the plain Makefile
         run: |
-          set -eux
+          set -euxo pipefail
           make -C src ZLIB=1 TARGET=adze.exe
           ./src/adze.exe --version
           python3 test/formats.py --candidate src/adze.exe
@@ -258,7 +300,7 @@ jobs:
 
       - name: Install a LaTeX toolchain
         run: |
-          set -eux
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             texlive-latex-base texlive-latex-recommended texlive-latex-extra \
@@ -271,7 +313,7 @@ jobs:
 
       - name: Build the manual
         run: |
-          set -eux
+          set -euxo pipefail
           make -C doc
           test -f doc/ADZE_Manual.pdf
           # Informational: line breaking depends on the TeX version, so this is
