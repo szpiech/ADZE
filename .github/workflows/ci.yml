@@ -13,10 +13,12 @@ name: CI
 #   example   the distributed example reproduces its own tracked output. This
 #             catches a change in what the program writes before a reader
 #             finds the shipped example disagreeing with the program.
-#   windows   the same suites under MSYS2/MINGW64, the toolchain a Windows
-#             user actually has. Line endings are the thing that breaks there
-#             and nowhere else, which is why the format suite carries a CRLF
-#             case on every platform.
+#   windows   the suites that do not need a 1.0 reference, under MSYS2/MINGW64
+#             -- the toolchain a Windows user actually has -- plus the
+#             distributed example, whose committed output was generated
+#             elsewhere and so pins this build's numbers to another platform's.
+#             The differential suite is skipped there for a reason given in
+#             the job.
 #   manual    the manual builds from source, and its generated option
 #             reference agrees with the option table.
 
@@ -228,93 +230,63 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          # git and tar are for the reference build; gsl is for it alone.
+          # No gsl: the differential suite does not run here (see below), and
+          # 2.0 itself needs no external library.
           install: >-
             git
             make
-            tar
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-gsl
             mingw-w64-x86_64-python
 
-      # No rpath here: Windows has no such concept, and the GSL DLLs sit in
-      # /mingw64/bin, which is on PATH in this shell. Running the binary is
-      # still the check that it loads.
-      - name: Build the version 1.0 reference binary
-        run: |
-          set -euxo pipefail
-          mkdir -p ref10
-          git archive origin/master src | tar -x -C ref10
-          # __USE_MINGW_ANSI_STDIO: mingw-w64 turns its own POSIX-conformant
-          # printf on for C++11 and later and leaves the MSVCRT one in place
-          # below that, and the two disagree about exponents -- 8.2173e-033
-          # against 8.2173e-33. 2.0 is built as C++17 and gets the conformant
-          # one; 1.0 is C++03 and would not, which makes identical numbers
-          # compare as different bytes. Asking for it explicitly puts both
-          # builds on the same formatting.
-          make -C ref10/src \
-            G++FLAG="-O2 -std=c++03 -w -D__USE_MINGW_ANSI_STDIO=1 -include cstring -include cstdlib -include climits" \
-            I_PATH=/mingw64/include \
-            L_PATH=/mingw64/lib \
-            LINK_OPTS="-L/mingw64/lib -lgsl -lgslcblas"
-          # gcc appends .exe only when the output name has no suffix, and
-          # "adze-1.0" already looks suffixed, so the binary keeps that name
-          # here. Both are accepted rather than assumed: `ls` on the missing
-          # one of the pair returns nonzero, which under pipefail fails the
-          # step before anything has gone wrong.
-          REF=ref10/src/adze-1.0
-          if [ -f "$REF.exe" ]; then REF="$REF.exe"; fi
-          # 1.0 exits nonzero when run with no arguments (it wants a paramfile),
-          # so its exit status cannot be the check that it loaded -- and under
-          # pipefail, piping it into head would fail the step. The banner is the
-          # evidence: a binary that cannot find its libgsl prints a loader error
-          # instead.
-          out=$("./$REF" 2>&1 || true)
-          echo "${out%%$'\n'*}"                       # first line, no pipe
-          case "$out" in
-            *"Allelic Diversity Analyzer"*) ;;
-            *) echo "the reference binary did not run:"
-               printf '%s\n' "$out" | head -3
-               exit 1 ;;
-          esac
-          echo "ADZE_REFERENCE=$(cygpath -m "$PWD/$REF")" >> "$GITHUB_ENV"
-
-      # cygpath converts the MSYS path to one CMake understands; a bare
-      # /d/a/... path reaches it as a relative directory.
+      # No ADZE_REFERENCE, so ctest runs docs, formats and windows and skips
+      # the differential suite. That is deliberate. ADZE 1.0's
+      # Population::putNj stores its value and then falls off the end of a
+      # bool function -- undefined behaviour, which its own Makefile hides with
+      # -w ("non-void function does not return a value in all control paths").
+      # In the mingw-w64 build the store does not survive, so every Nj stays 0,
+      # every statistic is undefined at every g, and the legacy layout omits
+      # undefined rows: 1.0 there writes headers and no numbers, reports no
+      # error, and the run summary still matches. Removing that store from a
+      # local 1.0 build reproduces the Windows output exactly, console line
+      # included. There is nothing to compare against, so 2.0's agreement with
+      # 1.0 is established on Linux and macOS, where 1.0's arithmetic is
+      # well defined. (A Windows differential run is possible against a 1.0
+      # patched to return -- but that is a patched reference, and the claim
+      # would have to say so.)
       - name: Configure and build
         run: |
           set -euxo pipefail
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DADZE_REFERENCE="$ADZE_REFERENCE"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j
           ./build/adze.exe --version
 
       - name: Run the suites
         run: ctest --test-dir build --output-on-failure
 
-      # The suites leave their scratch directories in place on failure; both
-      # sides of every differing file are in there, which is the difference
-      # between diagnosing a remote failure and guessing at it.
-      - uses: actions/upload-artifact@v4
+      # What the differential suite cannot check here, this does: the numbers
+      # this build writes are compared with committed output generated on
+      # another platform. example/ is `text eol=lf` in .gitattributes, so git
+      # normalizes the CRLF this build writes and the comparison is about
+      # content. The run summary records per-phase durations and is excluded.
+      - name: The distributed example reproduces its tracked output
+        run: |
+          set -euxo pipefail
+          cd example
+          ../build/adze.exe small_paramfile.txt
+          cd ..
+          git diff --exit-code -- example/ ':(exclude)example/*summary*'
+
+      - name: Show what differs, when something does
         if: failure()
-        with:
-          name: scratch-windows
-          path: |
-            build/regress
-            build/formats
-            build/windows
-          if-no-files-found: ignore
+        run: git diff -- example/
 
       # The Makefile path matters more on Windows than elsewhere: MSYS2 users
       # reach for make, and CMake's Ninja generator hides Makefile breakage.
@@ -324,6 +296,15 @@ jobs:
           make -C src ZLIB=1 TARGET=adze.exe
           ./src/adze.exe --version
           python3 test/formats.py --candidate src/adze.exe
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: scratch-windows
+          path: |
+            build/formats
+            build/windows
+          if-no-files-found: ignore
 
   manual:
     name: manual

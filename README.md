@@ -183,13 +183,22 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 |---|---|
 | `suites` | all four suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
 | `plain make` | the three Makefile configurations (bare, `ZLIB=1`, `ZLIB=1 OPENMP=1`) build and pass the suites |
-| `MSYS2 MINGW64` | the same suites on Windows, through the toolchain an MSYS2 user has |
+| `MSYS2 MINGW64` | builds and runs on Windows through MSYS2, and reproduces the distributed example's committed output |
 | `distributed example` | `adze small_paramfile.txt` in `example/` reproduces the tracked result files |
 | `manual` | the manual builds from source and its generated option reference agrees with the option table |
 
 The 1.0 reference is rebuilt from `master` on every run rather than kept as a
 binary, so the byte-identity claim is re-established rather than inherited. It
 is the only thing in CI that needs GSL.
+
+The differential comparison runs on Linux and macOS only. ADZE 1.0's
+`Population::putNj` stores its value and then falls off the end of a `bool`
+function, which its own build hides with `-w`; in a mingw-w64 build that store
+does not survive, so every sample size stays 0, every statistic is undefined,
+and 1.0 writes headers without numbers while reporting success. There is
+nothing to compare against there, so Windows instead re-runs the distributed
+example and compares against output committed from another platform, which
+pins this build's numbers without involving 1.0.
 
 Results do not depend on `--threads`: loci are processed independently and
 reduced in locus order, so any thread count gives bit-identical output.

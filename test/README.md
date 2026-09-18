@@ -89,7 +89,12 @@ a deliberately wrong README.
 builds the 1.0 reference from `master` in the same run rather than carrying a
 binary around, so `regress.py` always has something to compare against. The
 suites job runs them through `ctest` on Linux and macOS; the Makefile job runs
-them directly, so it needs nothing but `make` and `python3`. OpenMP is present
+them directly, so it needs nothing but `make` and `python3`. On Windows
+`regress.py` does not run: 1.0 built with mingw-w64 reports no statistics at
+all — its `putNj` stores its value and then falls off the end of a `bool`
+function, and in that build the store does not survive — so there is no usable
+reference there. The Windows job runs the other three and re-runs the
+distributed example against its committed output instead. OpenMP is present
 on the Linux runner and absent on the macOS one, which is how the
 thread-invariance case gets exercised in one place and reports itself skipped
 in the other.
