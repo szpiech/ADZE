@@ -10,6 +10,9 @@ run through the same binary. Two comparisons are made:
                       way (grouping, then position within it, then gene copy),
                       so Nji comes out in the same layout and every statistic
                       sums its terms in the same order
+  lf vs crlf          byte-identical: a file with Windows line endings is the
+                      same data, so the trailing carriage return must not
+                      reach an allele label
 
 Byte equality is the point. Two readers that merely agreed to within rounding
 would leave it open whether a later change had altered the numbers or only the
@@ -118,6 +121,32 @@ def main():
         else:
             nfail += 1
             failures.append(("%s.gz" % name, outs["gz"].stderr.strip()[-200:]))
+
+        # CRLF input: the same genotypes with Windows line endings. Without
+        # the reader stripping the carriage return, the last allele on each
+        # row interns as its own label and every count at that locus shifts --
+        # so this is checked on every platform, not only where CRLF is native.
+        crlf_in = os.path.join(args.workdir, "%s_crlf.stru" % name)
+        with open(os.path.join(args.workdir, "%s.stru" % name), "rb") as fh:
+            raw = fh.read()
+        with open(crlf_in, "wb") as fh:
+            fh.write(raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        outs["crlf"] = run(args.candidate, args.workdir,
+                           ["--data", "%s_crlf.stru" % name, "--group-col", "2"]
+                           + common + ["--out-prefix", "%s_crlf" % name])
+        for stat in ("richness", "private", "richness_fulldata"):
+            label = "%s.lf==crlf.%s" % (name, stat)
+            why = same_bytes(path("stru", stat), path("crlf", stat))
+            if outs["crlf"].returncode != 0:
+                why = "exit %d: %s" % (outs["crlf"].returncode,
+                                       outs["crlf"].stderr.strip()[-160:])
+            if why is None:
+                npass += 1
+                if args.verbose:
+                    print("PASS  %s" % label)
+            else:
+                nfail += 1
+                failures.append((label, why))
 
         # structure vs vcf: identical output for identical genotypes
         for stat in ("richness", "private", "richness_fulldata",

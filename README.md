@@ -10,6 +10,14 @@ ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for c
 
 ## Building
 
+On Windows, MSYS2's MINGW64 shell works with the same commands; install
+`mingw-w64-x86_64-gcc`, and `mingw-w64-x86_64-cmake` with
+`mingw-w64-x86_64-ninja` for the CMake route. The compiler appends `.exe` to an
+output name that has none, so the Makefile route wants
+`make -C src TARGET=adze.exe`. Input files with Windows line endings are read
+as they are; the carriage return never reaches an allele label, which the
+format suite checks on every platform.
+
 Nothing is required beyond a C++17 compiler. OpenMP (for `--threads`) and zlib
 (for compressed input) are used when the toolchain provides them, and the
 program builds and runs without either.
@@ -175,6 +183,7 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 |---|---|
 | `suites` | all four suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
 | `plain make` | the three Makefile configurations (bare, `ZLIB=1`, `ZLIB=1 OPENMP=1`) build and pass the suites |
+| `MSYS2 MINGW64` | the same suites on Windows, through the toolchain an MSYS2 user has |
 | `distributed example` | `adze small_paramfile.txt` in `example/` reproduces the tracked result files |
 | `manual` | the manual builds from source and its generated option reference agrees with the option table |
 

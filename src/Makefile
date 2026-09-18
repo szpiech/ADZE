@@ -41,6 +41,10 @@ ifdef L_PATH
 LDFLAGS  += -L$(L_PATH)
 endif
 
+# On Windows (MSYS2/MinGW) the compiler appends .exe to an output name that
+# carries no suffix, so make never sees the target it just built and relinks
+# on every invocation. Naming it explicitly avoids that:
+#   make TARGET=adze.exe
 TARGET  = adze
 SOURCES = ADZE_main.cpp ADZE_main_tools.cpp ADZE_pop.cpp ADZE_pfile.cpp \
           ADZE_stats.cpp ADZE_pbar.cpp ADZE_binom.cpp

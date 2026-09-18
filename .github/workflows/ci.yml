@@ -13,6 +13,10 @@ name: CI
 #   example   the distributed example reproduces its own tracked output. This
 #             catches a change in what the program writes before a reader
 #             finds the shipped example disagreeing with the program.
+#   windows   the same suites under MSYS2/MINGW64, the toolchain a Windows
+#             user actually has. Line endings are the thing that breaks there
+#             and nowhere else, which is why the format suite carries a CRLF
+#             case on every platform.
 #   manual    the manual builds from source, and its generated option
 #             reference agrees with the option table.
 
@@ -174,6 +178,77 @@ jobs:
       - name: Show what differs, when something does
         if: failure()
         run: git diff -- example/
+
+  windows:
+    name: MSYS2 MINGW64
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Every run block below is MSYS2 bash, so the shell is the same one a
+        # user following the build instructions on Windows would be in.
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          # git and tar are for the reference build; gsl is for it alone.
+          install: >-
+            git
+            make
+            tar
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-gsl
+            mingw-w64-x86_64-python
+
+      # No rpath here: Windows has no such concept, and the GSL DLLs sit in
+      # /mingw64/bin, which is on PATH in this shell. Running the binary is
+      # still the check that it loads.
+      - name: Build the version 1.0 reference binary
+        run: |
+          set -eux
+          mkdir -p ref10
+          git archive origin/master src | tar -x -C ref10
+          make -C ref10/src \
+            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            I_PATH=/mingw64/include \
+            L_PATH=/mingw64/lib \
+            LINK_OPTS="-L/mingw64/lib -lgsl -lgslcblas"
+          # gcc appends .exe when the output name carries no suffix, so the
+          # 1.0 Makefile's target lands under a name it does not mention.
+          REF=$(ls ref10/src/adze-1.0.exe ref10/src/adze-1.0 2>/dev/null | head -1)
+          "./$REF" 2>&1 | head -1
+          echo "ADZE_REFERENCE=$(cygpath -m "$PWD/$REF")" >> "$GITHUB_ENV"
+
+      # cygpath converts the MSYS path to one CMake understands; a bare
+      # /d/a/... path reaches it as a relative directory.
+      - name: Configure and build
+        run: |
+          set -eux
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DADZE_REFERENCE="$ADZE_REFERENCE"
+          cmake --build build -j
+          ./build/adze.exe --version
+
+      - name: Run the suites
+        run: ctest --test-dir build --output-on-failure
+
+      # The Makefile path matters more on Windows than elsewhere: MSYS2 users
+      # reach for make, and CMake's Ninja generator hides Makefile breakage.
+      - name: Build with the plain Makefile
+        run: |
+          set -eux
+          make -C src ZLIB=1 TARGET=adze.exe
+          ./src/adze.exe --version
+          python3 test/formats.py --candidate src/adze.exe
 
   manual:
     name: manual
