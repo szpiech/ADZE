@@ -107,9 +107,9 @@ bool stderrIsTerminal();
 string combineNames(string names[],int k,char sep = ' ');
 bool validK(int numDivs,list<int> k);
 void filterLoci(Population pop[],int numDivs,double tol,string private_out,
-		bool pp,LocusMap& lmap,LocusNames& names);
+		bool pp,LocusMap& lmap,LocusTable& loci);
 Population* readDataset(ParamSet& p,vector<string>& groupNames,int& numDivs,
-			LocusNames& names,
+			LocusTable& loci,
 			LocusMap& lmap);
 bool wantsVCF(const string& format,const string& path);
 list<int> parseKVals(string str);

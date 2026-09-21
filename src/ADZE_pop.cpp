@@ -1,4 +1,5 @@
 #include "ADZE_pop.h"
+#include <algorithm>
 
 using namespace std;
 
@@ -8,7 +9,7 @@ using namespace std;
  * _deletedloci file. Called once for the run, not once per grouping, because
  * the filter condemns a locus for every grouping at once.
  */
-void LocusNames::compact(const vector<char>& del)
+void LocusTable::compact(const vector<char>& del)
 {
   for(int l = int(name.size()) - 1; l >= 0; l--)
     {
@@ -20,9 +21,11 @@ void LocusNames::compact(const vector<char>& del)
     {
       if(del[l]) continue;
       if(keep != l) name[keep].swap(name[l]);
+      offset[keep+1] = offset[keep] + (offset[l+1] - offset[l]);
       keep++;
     }
   name.resize(keep);
+  offset.resize(keep+1);
 
   return;
 }
@@ -37,7 +40,7 @@ string Population::deletedSummary() const
 {
   ostringstream out;
 
-  const size_t dropped = names ? names->deleted.size() : 0;
+  const size_t dropped = loci ? loci->deleted.size() : 0;
 
   out << dropped;
   out << ((dropped == 1) ? " locus has " : " loci have ");
@@ -50,10 +53,10 @@ string Population::deletedSummary() const
 
 void Population::printDeleted(ostream& out)
 {
-  if(!names) return;
+  if(!loci) return;
 
-  for(vector<string>::iterator i = names->deleted.begin();
-      i != names->deleted.end(); i++)
+  for(vector<string>::const_iterator i = loci->deleted.begin();
+      i != loci->deleted.end(); i++)
     {
       out << *i << endl;
     }
@@ -68,32 +71,39 @@ void Population::printDeleted(ostream& out)
  * ADZE 1.0 deleted one locus at a time, shifting every higher-indexed locus
  * down one slot and copying all of its genotype strings, so filtering D of L
  * loci cost O(D*L*rows) std::string assignments -- quadratic in the locus
- * count.  Compacting once is O(L), and the per-locus allele-count blocks move
- * by swapping pointers.  Swapping rather than assigning keeps every allocated
- * block reachable from Nji[0..numLociOrig), so the destructor still frees each
- * one exactly once.
+ * count.  Compacting once is O(L + slots).  The counts being one block, the
+ * kept loci move down within it and the block then shrinks, which returns the
+ * dropped loci's memory here rather than at exit.
  *
- * Deleted names are recorded from the highest index down, matching the order
- * that 1.0's reverse-iterating delete loop wrote to the _deletedloci file.
+ * The names and the new offsets are compacted once for the run, in
+ * filterLoci; oldOffset is where each locus used to start.
  */
-void Population::deleteLoci(const vector<char>& del)
+void Population::deleteLoci(const vector<char>& del, const vector<int>& oldOffset)
 {
   int keep = 0;
+  int at = 0; //write position in the compacted count block
+
   for(int l = 0; l < numLoci; l++)
     {
       if(del[l]) continue;
+
+      const int from = oldOffset[l];
+      const int slots = oldOffset[l+1] - oldOffset[l];
+
+      //The kept prefix is never longer than what it came from, so the write
+      //position trails the read position and a forward copy is safe in place.
+      if(at != from) copy(nji.begin()+from, nji.begin()+from+slots, nji.begin()+at);
+      at += slots;
+
       if(keep != l)
 	{
-	  int* tmp = Nji[keep];
-	  Nji[keep] = Nji[l];
-	  Nji[l] = tmp;
-	  NjiColLength[keep] = NjiColLength[l];
 	  Nj[keep] = Nj[l];
 	  missing[keep] = missing[l];
 	}
       keep++;
     }
 
+  nji.resize(at);
   numLoci = keep;
   return;
 }
@@ -130,7 +140,7 @@ int Population::getNjiColLength(int locus)
     }
   else
     {
-      return NjiColLength[locus];
+      return (*loci).offset[locus+1] - (*loci).offset[locus];
     }
 }
 
@@ -186,9 +196,11 @@ void Population::sumNj()
   for(int locus = 0; locus < numLoci; locus++)
     {
       int total = 0;
-      for(int i = 0; i < NjiColLength[locus]; i++)
+      const int base = (*loci).offset[locus];
+      const int slots = (*loci).offset[locus+1] - base;
+      for(int i = 0; i < slots; i++)
 	{
-	  total += Nji[locus][i];
+	  total += nji[base+i];
 	}
       putNj(total,locus);
     }
@@ -203,14 +215,14 @@ int Population::getNji(int row, int locus)
       //bad bounds
       return -9;
     }
-  else if(row > NjiColLength[locus]-1 || row < 0)
+  else if(row > getNjiColLength(locus)-1 || row < 0)
     {
       //bad bounds
       return -9;
     }
   else
     {
-      return Nji[locus][row];
+      return nji[(*loci).offset[locus] + row];
     }
 
 }
@@ -223,49 +235,35 @@ bool Population::putNji(int num, int row, int locus)
       //bad bounds
       return 0;
     }
-  else if(row > NjiColLength[locus]-1 || row < 0)
+  else if(row > getNjiColLength(locus)-1 || row < 0)
     {
       //bad bounds
       return 0;
     }
   else
     {
-      Nji[locus][row] = num;
+      nji[(*loci).offset[locus] + row] = num;
       return 1;
     }
 }
 
-//allocate size of Nji columns
-bool Population::setNjiColLength(int size,int locus)
+/*
+ * Size the count block from the shared offsets. One allocation per grouping,
+ * where a row per locus meant one per locus per grouping.
+ */
+void Population::allocNji()
 {
-  if(locus > numLoci-1 || locus < 0)
-    {
-      //bad bounds
-      return 0;
-    }
-  else
-    {
-      NjiColLength[locus] = size;
-      if(Nji[locus]) delete [] Nji[locus];
-      Nji[locus] = new int[size];
-      for(int i = 0; i < size;i++)
-	{
-	  Nji[locus][i] = 0;
-	}
-      return 1;
-    }
+  nji.assign(size_t(loci ? loci->offset.back() : 0),0);
+  return;
 }
 
 //Constructor: nothing is sized until setLoci() is called
 Population::Population()
 {
-  names = NULL;
-  Nji = NULL;
-  NjiColLength = NULL;
+  loci = NULL;
   Nj = NULL;
   missing = NULL;
   numLoci = 0;
-  numLociOrig = 0;
   rows = 0;
   name = "UNDEF";
   minG = INT_MAX;
@@ -275,17 +273,7 @@ Population::Population()
 //Memclean
 Population::~Population()
 {
-  if(Nji)
-    {
-      for (int i = 0; i < numLociOrig; i++)
-	{
-	  if(Nji[i]) delete [] Nji[i];
-	}
-    }
-
   if(Nj) delete [] Nj;
-  if(NjiColLength) delete [] NjiColLength;
-  if(Nji) delete [] Nji;
   if(missing) delete [] missing;
 }
 
@@ -300,17 +288,12 @@ Population::~Population()
 void Population::setLoci(int l)
 {
   numLoci = l;
-  numLociOrig = l;
 
   Nj = new int[numLoci];
   fillNj(0);
-  NjiColLength = new int[numLoci];
   missing = new int[numLoci];
-  Nji = new int*[numLoci];
   for(int i = 0; i < numLoci;i++)
     {
-      Nji[i] = NULL;
-      NjiColLength[i] = 0;
       missing[i] = 0;
     }
   return;
@@ -326,10 +309,10 @@ const string& Population::getLocusName(int pos) const
 {
   static const string bad = "BAD REF";
 
-  if(!names || pos < 0 || pos > numLoci-1 || size_t(pos) >= names->name.size())
+  if(!loci || pos < 0 || pos > numLoci-1 || size_t(pos) >= loci->name.size())
     {
       return bad;
     }
 
-  return names->name[pos];
+  return loci->name[pos];
 }

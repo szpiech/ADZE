@@ -1099,7 +1099,7 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
  * internally inconsistent.
  */
 Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
-			LocusNames& names, LocusMap& lmap)
+			LocusTable& loci, LocusMap& lmap)
 {
   const bool vcf = wantsVCF(p.format.val,p.dfile.val);
 
@@ -1173,9 +1173,17 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 
   groupNames = acc.groupName;
 
-  //The names move into the shared table rather than being copied per grouping.
-  names.name.swap(acc.locusName);
-  names.deleted.clear();
+  /*
+   * The shared per-locus table: names moved rather than copied, and the
+   * allele-slot offsets, which every grouping indexes its counts through.
+   */
+  loci.name.swap(acc.locusName);
+  loci.deleted.clear();
+  loci.offset.assign(size_t(declaredLoci)+1,0);
+  for(int l = 0; l < declaredLoci; l++)
+    {
+      loci.offset[l+1] = loci.offset[l] + int(acc.locus[l].firstSeen.size());
+    }
 
   Population* pop = new Population[numDivs];
   for(int j = 0; j < numDivs; j++)
@@ -1183,7 +1191,8 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
       pop[j].setLoci(declaredLoci);
       pop[j].setName(acc.groupName[j]);
       pop[j].setRows(acc.groupRows[j]);
-      pop[j].setNames(&names);
+      pop[j].setTable(&loci);
+      pop[j].allocNji();
     }
 
   /*
@@ -1207,7 +1216,6 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 
       for(int j = 0; j < numDivs; j++)
 	{
-	  pop[j].setNjiColLength(slots,l);
 	  for(int i = 0; i < slots; i++)
 	    {
 	      pop[j].putNji(t.count[size_t(order[i])*acc.groupCap + j],i,l);
@@ -1236,7 +1244,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 }
 
 void filterLoci(Population pop[],int numDivs, double tol, string file,
-		bool pp, LocusMap& lmap, LocusNames& names)
+		bool pp, LocusMap& lmap, LocusTable& loci)
 {
   vector<char> toDelete(pop[0].getNumLoci(),0);
 
@@ -1259,17 +1267,21 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
       bar.init();
     }
   
+  //Each grouping moves its counts down within its own block, reading from
+  //where the loci used to start; the shared offsets are rewritten afterwards.
+  const vector<int> oldOffset = loci.offset;
+
   for(int n = 0; n < numDivs; n++)
     {
-      pop[n].deleteLoci(toDelete);
+      pop[n].deleteLoci(toDelete,oldOffset);
       if(pp) bar.adv(size);
     }
   if(pp) bar.done();
 
-  //Names and coordinates are indexed by locus, so they follow the same
-  //compaction -- once for the run, the filter having condemned each locus in
-  //every grouping at once.
-  names.compact(toDelete);
+  //Names, offsets and coordinates are indexed by locus, so they follow the
+  //same compaction -- once for the run, the filter having condemned each
+  //locus in every grouping at once.
+  loci.compact(toDelete);
   lmap.compact(toDelete);
   cout << endl;
   
