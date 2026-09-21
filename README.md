@@ -138,10 +138,12 @@ header, space separators, undefined rows omitted rather than marked. That
 omission is why the default changed: a grouping undefined at every g disappears
 from the legacy file entirely, so a run can complete and report nothing with no
 visible reason. Window files were always tab-separated with a header, and `_deletedloci` and
-`_summary` are unaffected either way. The `_fulldata` files stay
-space-separated in both layouts, but follow the flag on undefined values: by
-default a locus undefined at that g is written as `NA`, naming the column
-responsible, where `--legacy` drops the whole row as 1.0 did.
+`_summary` are unaffected either way. The `_fulldata` files are **transposed with respect to 1.0** — one row per
+grouping and locus with a column per g, tab-separated with a header, `NA` where
+the value is undefined — in both layouts, so `--legacy` does not reproduce that
+file. 1.0's orientation (a row per g, a column per locus) cannot be written
+until the whole sweep is finished and is unreadable at genome scale; the
+manual's "Locus-specific output" section shows both and how to transpose back.
 
 The `--tolerance` default is 0.1, not 1.0's `1`. Keeping every locus means a
 single locus where one grouping scored nothing drives `MAX_G` to 1 and leaves

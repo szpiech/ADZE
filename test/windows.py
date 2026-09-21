@@ -103,16 +103,30 @@ def read_windows(path):
 
 
 def read_fulldata(path):
-    """Per-locus values as {(group, g): [floats]}, plus the locus names."""
+    """Per-locus values as {(label, g): [floats]}, plus the locus names.
+
+    The file is one row per label and locus with a column per g, so the
+    values for one g are a column read down the rows in locus order. NA is
+    carried through as a nan.
+    """
     with open(path) as fh:
         lines = [l.rstrip("\n") for l in fh if l.strip()]
-    head = lines[0].split()
-    names = head[3:-3]
-    out = {}
+    head = lines[0].split("\t")
+    gs = [int(h[1:]) for h in head[2:]]
+    names, out = [], {}
+    seen = set()
     for line in lines[1:]:
-        f = line.split()
-        n = int(f[2])
-        out[(f[0], int(f[1]))] = [float(x) for x in f[3:3 + n]]
+        f = line.split("\t")
+        label, locus = f[0], f[1]
+        if label not in seen:
+            seen.add(label)
+            if len(seen) == 1:
+                names = []
+        if len(seen) == 1:
+            names.append(locus)
+        for g, value in zip(gs, f[2:]):
+            out.setdefault((label, g), []).append(
+                float("nan") if value == "NA" else float(value))
     return names, out
 
 
@@ -395,17 +409,10 @@ def case_g1_closed_forms(s, adze, w):
             vals.append(tot)
         return vals
 
-    def per_locus(path, label_size):
-        """{label: [per-locus values]} for the g = 1 rows of a *_fulldata file."""
-        out = {}
-        for line in open(path):
-            f = line.split()
-            if not f or not f[label_size].isdigit() or int(f[label_size]) != 1:
-                continue
-            n = int(f[label_size + 1])
-            out[" ".join(f[:label_size])] = [float(x) for x in
-                                             f[label_size + 2:label_size + 2 + n]]
-        return out
+    def per_locus(path, label_size=1):
+        """{label: [per-locus values]} for g = 1, read down the G1 column."""
+        _, per = read_fulldata(path)
+        return {label: vals for (label, g), vals in per.items() if g == 1}
 
     # Richness: exactly 1 everywhere.
     rich = per_locus(os.path.join(w, "cf.richness_fulldata"), 1)
@@ -435,7 +442,7 @@ def case_g1_closed_forms(s, adze, w):
         got = per_locus(path, k)
         s.check("g1.tuples_k%d.rows" % k, len(got) > 0, "no g=1 rows")
         for label, vals in got.items():
-            want = expect(set(label.split()))
+            want = expect(set(label.split(",")))
             worst = max(abs(a - b) for a, b in zip(vals, want))
             s.check("g1.tuple.%s" % label.replace(" ", "+"), worst <= 1e-6,
                     "max deviation %.3g from the closed form" % worst)
@@ -480,19 +487,28 @@ def case_at_g(s, adze, w):
         run(adze, w, common + ["--at-g", str(g), "--out-prefix", "ag_%d" % g])
 
         for stat, label_size in (("richness", 1), ("private", 1)):
-            for suffix in ("", "_fulldata"):
-                full = os.path.join(w, "ag_full.%s%s" % (stat, suffix))
-                one = os.path.join(w, "ag_%d.%s%s" % (g, stat, suffix))
-                want = rows_at(full, g, label_size)
-                got = rows_at(one, g, label_size)
-                s.check("atg.%d.%s%s" % (g, stat, suffix), want == got and want,
-                        "%d rows wanted, %d found" % (len(want), len(got)))
-                # and nothing else is in the file
-                others = [l for l in open(one)
-                          if l.strip() and not l.startswith("POP_GROUPING")
-                          and l.rstrip("\n") not in got]
-                s.check("atg.%d.%s%s.only" % (g, stat, suffix), not others,
-                        "%d rows at other g" % len(others))
+            full = os.path.join(w, "ag_full.%s" % stat)
+            one = os.path.join(w, "ag_%d.%s" % (g, stat))
+            want = rows_at(full, g, label_size)
+            got = rows_at(one, g, label_size)
+            s.check("atg.%d.%s" % (g, stat), want == got and want,
+                    "%d rows wanted, %d found" % (len(want), len(got)))
+            others = [l for l in open(one)
+                      if l.strip() and not l.startswith("POP_GROUPING")
+                      and l.rstrip("\n") not in got]
+            s.check("atg.%d.%s.only" % (g, stat), not others,
+                    "%d rows at other g" % len(others))
+
+            # _fulldata holds one column per g, so --at-g is that column
+            _, wfull = read_fulldata(os.path.join(w, "ag_full.%s_fulldata" % stat))
+            _, wone = read_fulldata(os.path.join(w, "ag_%d.%s_fulldata" % (g, stat)))
+            cols = {k[1] for k in wone}
+            s.check("atg.%d.%s_fulldata.only" % (g, stat), cols == {g},
+                    "columns %s, expected just g=%d" % (sorted(cols), g))
+            same = all(repr(wfull[(label, g)]) == repr(vals)
+                       for (label, gg), vals in wone.items() if gg == g)
+            s.check("atg.%d.%s_fulldata" % (g, stat), same and wone,
+                    "the g=%d column differs from the ladder run" % g)
 
         # tuple file: the label is two groupings wide
         full = os.path.join(w, "ag_full.tuples_2")
@@ -666,29 +682,45 @@ def case_format_default(s, adze, w):
     run(adze, w, flargs + ["--out-prefix", "fl_def"], pin_format=False)
     run(adze, w, flargs + ["--legacy", "--out-prefix", "fl_leg"])
 
-    def rows_for(path, label):
-        return [l.split() for l in open(path)
-                if l.startswith(label + " ")]
+    def fd(path):
+        names, per = read_fulldata(path)
+        return names, {k: v for k, v in per.items() if k[0] == "POP1"}
 
-    d = rows_for(os.path.join(w, "fl_def.richness_fulldata"), "POP1")
-    l = rows_for(os.path.join(w, "fl_leg.richness_fulldata"), "POP1")
-    s.check("fmt.fulldata.default_keeps_rows", len(d) == 4,
-            "expected g = 1..4, got %d rows" % len(d))
-    s.check("fmt.fulldata.legacy_drops_rows", len(l) == 2,
-            "expected --legacy to keep only g = 1,2; got %d rows" % len(l))
-    s.check("fmt.fulldata.defined_rows_match", d[:2] == l[:2],
-            "the rows both layouts write disagree")
-    # NA lands in the offending locus column, not just the summary columns
-    g3 = [r for r in d if r[1] == "3"]
+    dn, d = fd(os.path.join(w, "fl_def.richness_fulldata"))
+    ln, l = fd(os.path.join(w, "fl_leg.richness_fulldata"))
+
+    # One column per g, in both modes: the _fulldata layout does not depend on
+    # --legacy, which governs the statistics files.
+    s.check("fmt.fulldata.default_keeps_g", sorted(g for _, g in d) == [1, 2, 3, 4],
+            "expected columns g = 1..4, got %s" % sorted(g for _, g in d))
+    s.check("fmt.fulldata.legacy_same_layout", sorted(d) == sorted(l) and dn == ln,
+            "--legacy changed the _fulldata layout")
+    s.check("fmt.fulldata.defined_values_match",
+            all(repr(d[k]) == repr(l[k]) for k in d if k[1] <= 2),
+            "the two modes disagree on the values both report")
+
+    # A locus undefined at this g is NA in its own row, in that g's column --
+    # where 1.0 dropped the whole row and said nothing about which locus.
+    raw = [line.rstrip("\n").split("\t")
+           for line in open(os.path.join(w, "fl_def.richness_fulldata"))
+           if line.startswith("POP1\t")]
+    third = [r for r in raw if r[1] == dn[2]]
     s.check("fmt.fulldata.na_names_the_locus",
-            bool(g3) and g3[0][3:7].count("NA") == 1 and g3[0][5] == "NA",
-            "expected NA in the third locus column only: %s" % (g3[0][3:7] if g3 else None))
-    s.check("fmt.fulldata.na_summary",
-            bool(g3) and g3[0][-3:] == ["NA", "NA", "NA"],
-            "summary columns not NA: %s" % (g3[0][-3:] if g3 else None))
-    s.check("fmt.fulldata.spaces_in_both",
-            "\t" not in open(os.path.join(w, "fl_def.richness_fulldata")).read(),
-            "_fulldata gained tabs; it is space-separated in both layouts")
+            bool(third) and third[0][2 + 2] == "NA",
+            "expected NA at g = 3 for the third locus: %s" % (third[0] if third else None))
+    s.check("fmt.fulldata.other_loci_defined",
+            all(r[2 + 2] != "NA" for r in raw if r[1] != dn[2]),
+            "another locus went NA at g = 3")
+
+    # The summary belongs to the statistics file; _fulldata carries values only.
+    head = open(os.path.join(w, "fl_def.richness_fulldata")).readline().split("\t")
+    s.check("fmt.fulldata.no_summary_columns",
+            [h.strip() for h in head[-3:]] == ["G2", "G3", "G4"],
+            "expected the last columns to be g values, got %s" % head[-3:])
+    s.check("fmt.fulldata.tabs_in_both",
+            all("\t" in open(os.path.join(w, f)).readline()
+                for f in ("fl_def.richness_fulldata", "fl_leg.richness_fulldata")),
+            "_fulldata is tab-separated in both modes")
 
     # There is one layout flag. --tsv named the default during development and
     # was removed unreleased, so it must now be an unknown option rather than a

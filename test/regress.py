@@ -266,6 +266,78 @@ def first_difference(ref_bytes, cnd_bytes, width=64):
     return "%d vs %d bytes, no differing line" % (len(ref_bytes), len(cnd_bytes))
 
 
+def ref_fulldata_cells(path):
+    """{(label, g, locus): printed value} from version 1.0's _fulldata layout.
+
+    1.0 wrote one row per label and g, with a column per locus: the locus
+    names are in the header, between the label columns and MEAN VAR STD_ERR.
+    Tuple files carry one label column per tuple member; they are joined with
+    a comma to match the single label column the candidate writes.
+    """
+    lines = open(path).read().splitlines()
+    if not lines:
+        return {}
+    head = lines[0].split()
+    if "G" not in head or "NUM_LOCI" not in head:
+        return {}
+    k = head.index("G")                     # label columns before it
+    names = head[k + 2:-3]                  # ... G NUM_LOCI <loci> MEAN VAR STD_ERR
+    cells = {}
+    for line in lines[1:]:
+        f = line.split()
+        if len(f) < k + 3 + len(names):
+            continue
+        label = ",".join(f[:k])
+        g = f[k]
+        for name, value in zip(names, f[k + 2:k + 2 + len(names)]):
+            cells[(label, g, name)] = value
+    return cells
+
+
+def cnd_fulldata_cells(path):
+    """The same, from the candidate's layout: one row per label and locus."""
+    lines = open(path).read().splitlines()
+    if not lines:
+        return {}
+    head = lines[0].split("\t")
+    if len(head) < 3 or head[1] != "LOCUS":
+        return {}
+    gs = [h[1:] for h in head[2:]]          # G1, G2, ... -> 1, 2, ...
+    cells = {}
+    for line in lines[1:]:
+        f = line.split("\t")
+        if len(f) != len(head):
+            continue
+        for g, value in zip(gs, f[2:]):
+            cells[(f[0], g, f[1])] = value
+    return cells
+
+
+def compare_fulldata(a, b):
+    """Every per-locus value 1.0 printed, found unchanged in the candidate.
+
+    The two layouts are transposes of each other (see the manual, "Changes
+    from version 1.0"), so this compares cells rather than bytes. The
+    candidate holds cells the reference does not -- g = 1, and the rows 1.0
+    dropped because some locus was undefined -- which are not evidence of
+    disagreement and are not compared here.
+    """
+    ref, cnd = ref_fulldata_cells(a), cnd_fulldata_cells(b)
+    if not ref:
+        return "reference _fulldata has no rows to compare"
+    absent = [k for k in ref if k not in cnd]
+    if absent:
+        k = sorted(absent)[0]
+        return "%d of %d cells absent from the candidate, e.g. %s g=%s %s" % (
+            len(absent), len(ref), k[0], k[1], k[2])
+    bad = [k for k in ref if ref[k] != cnd[k]]
+    if bad:
+        k = sorted(bad)[0]
+        return "%d of %d cells differ, e.g. %s g=%s %s: %s vs %s" % (
+            len(bad), len(ref), k[0], k[1], k[2], ref[k], cnd[k])
+    return None
+
+
 def compare(ref_dir, cnd_dir, files):
     """Files that differ beyond what is expected, and missing g = 1 rows.
 
@@ -277,6 +349,12 @@ def compare(ref_dir, cnd_dir, files):
     diffs, missing = [], []
     for f in files:
         a, b = os.path.join(ref_dir, f), os.path.join(cnd_dir, f)
+
+        if f.endswith("_fulldata"):
+            why = compare_fulldata(a, b)
+            if why:
+                diffs.append("%s (%s)" % (f, why))
+            continue
 
         ref_bytes = masked(a)
         cnd_bytes = masked(b, drop_g1=is_results_file(f))

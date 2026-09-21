@@ -1632,19 +1632,7 @@ void calcPgTuples(Population pop[], int numDivs,
       name = nameCreate(comb_out,"_fulldata");
       full_out.open(name.c_str());
 
-      if(namedTuples) full_out << "TUPLE ";
-      else
-	{
-	  for(size_t i = 1; i <= widest; i++) full_out << "POP_GROUPING" << i << " ";
-	}
-
-      full_out << "G NUM_LOCI ";
-      for(int l = 0; l < numLoci; l++)
-	{
-	  full_out << pop[0].getLocusName(l) << " ";
-	}
-      
-      full_out << "MEAN VAR STD_ERR\n";
+      //Header once the g ceiling is known, below.
     }
 
   reg_out.open(comb_out.c_str());
@@ -1701,6 +1689,13 @@ void calcPgTuples(Population pop[], int numDivs,
   const int gBase = param.at_g_val ? param.at_g_val : 0;
   const int gRows = param.at_g_val ? 1 : gStride;
   vector<double> pgcomb(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
+
+  if(full_comb)
+    {
+      writeFullDataHeader(full_out,"TUPLE",
+			  param.at_g_val ? param.at_g_val : 1,
+			  param.at_g_val ? param.at_g_val : gCeil);
+    }
 
   for(int m = 0; m < tot_m; m++)
     {
@@ -1789,10 +1784,14 @@ void calcPgTuples(Population pop[], int numDivs,
 
 	  comb_stats.printStats(reg_out,all_names,g,param.tabbed());
 
-	  if(full_comb)
-	    {
-	      comb_stats.printData(full_out,all_names,g,param.tabbed());
-	    }
+	}
+
+      if(full_comb)
+	{
+	  //The tuple label is comma-joined here so it stays one field.
+	  writeFullDataRows(full_out,combineNames(&names[0],k,','),pgcomb,numLoci,
+			    param.at_g_val ? param.at_g_val : 1,
+			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
 	}
 
       if(!windows.empty())
@@ -1844,6 +1843,49 @@ void writeWindowHeader(ostream& out, const char* groupColumn)
   return;
 }
 
+/*
+ * The _fulldata layout: one row per grouping and locus, one column per g.
+ *
+ * Version 1.0 wrote the transpose of this -- a row per (grouping, g) holding
+ * every locus across it -- which put the locus names in the header and made
+ * the file as wide as the dataset: a million-locus run produced a handful of
+ * rows of a million fields, which no ordinary tool will read, and which
+ * cannot be written until every locus has been computed. One row per locus
+ * streams, stays within column limits, and joins to a locus table the way a
+ * reader expects. See the manual, "Changes from version 1.0".
+ *
+ * A value undefined at that g is NA, in both output modes; the row is kept
+ * either way, so a locus that is undefined everywhere is still visible.
+ */
+void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo)
+{
+  out << labelCols << "\tLOCUS";
+  for(int g = gFrom; g <= gTo; g++) out << "\tG" << g;
+  out << "\n";
+  return;
+}
+
+void writeFullDataRows(ostream& out,const string& label,const vector<double>& buf,
+		       int numLoci,int gFrom,int gTo,int gBase,const Population& pop)
+{
+  for(int l = 0; l < numLoci; l++)
+    {
+      out << label << "\t" << pop.getLocusName(l);
+
+      for(int g = gFrom; g <= gTo; g++)
+	{
+	  const double v = buf[size_t(g-gBase)*numLoci + l];
+	  out << "\t";
+	  if(v == -9) out << "NA";
+	  else out << v;
+	}
+
+      out << "\n";
+    }
+
+  return;
+}
+
 void writeWindowStats(ostream& out, vector<double>& perLocus, int numLoci,
 		      const vector<Window>& windows, const LocusMap& lmap,
 		      const string& label, int gFirst, int gLast, int gBase)
@@ -1888,13 +1930,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
       name = nameCreate(private_out,"_fulldata");
       pg_full_out.open(name.c_str());
       
-      pg_full_out << "POP_GROUPING G NUM_LOCI ";
-      for(int l = 0; l < numLoci; l++)
-	{
-	  pg_full_out << pop[0].getLocusName(l) << " ";
-	}
-      
-      pg_full_out << "MEAN VAR STD_ERR\n";
+      //gLast is not known yet; the header is written once the ceiling is.
     }
 
   pg_out.open(private_out.c_str());
@@ -1952,6 +1988,13 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   const int gBase = param.at_g_val ? param.at_g_val : 0;
   const int gRows = param.at_g_val ? 1 : gStride;
   vector<double> pg(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
+
+  if(full_priv)
+    {
+      writeFullDataHeader(pg_full_out,"POP_GROUPING",
+			  param.at_g_val ? param.at_g_val : 1,
+			  param.at_g_val ? param.at_g_val : gCeil);
+    }
 
   ProgressBar bar(&adzelog(),double(numDivs)*(param.at_g_val ? 1 : gLast)*numLoci,BARLEN[0]);
   if(param.pp.val)
@@ -2034,10 +2077,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  pg_stats.printStats(pg_out,pop[j].getName(),g,param.tabbed());
 
-	  if(full_priv)
-	    {
-	      pg_stats.printData(pg_full_out,pop[j].getName(),g,param.tabbed());
-	    }
+
 	}
 
       if(!windows.empty())
@@ -2049,8 +2089,14 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 			   gBase);
 	}
 
+      if(full_priv)
+	{
+	  writeFullDataRows(pg_full_out,pop[j].getName(),pg,numLoci,
+			    param.at_g_val ? param.at_g_val : 1,
+			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
+	}
+
       if(!param.tabbed()) pg_out << endl;
-      pg_full_out << endl;
     }
 
   if(param.pp.val) bar.done();
@@ -2089,13 +2135,9 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       name = nameCreate(richness_out,"_fulldata");
       ag_full_out.open(name.c_str());
 
-      ag_full_out << "POP_GROUPING G NUM_LOCI ";
-      for(int l = 0; l < numLoci; l++)
-	{
-	  ag_full_out << pop[0].getLocusName(l) << " ";
-	}
-      
-      ag_full_out << "MEAN VAR STD_ERR\n";
+      writeFullDataHeader(ag_full_out,"POP_GROUPING",
+			  param.at_g_val ? param.at_g_val : 1,
+			  param.at_g_val ? param.at_g_val : gTop);
     }
 
   ag_out.open(richness_out.c_str());
@@ -2201,10 +2243,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  ag_stats.printStats(ag_out,pop[j].getName(),g,param.tabbed());
 
-	  if(full_rich)
-	    {
-	      ag_stats.printData(ag_full_out,pop[j].getName(),g,param.tabbed());
-	    }
+
 	}
 
       if(!windows.empty())
@@ -2216,8 +2255,14 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 			   gBase);
 	}
 
+      if(full_rich)
+	{
+	  writeFullDataRows(ag_full_out,pop[j].getName(),ag,numLoci,
+			    param.at_g_val ? param.at_g_val : 1,
+			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
+	}
+
       if(!param.tabbed()) ag_out << endl;
-      ag_full_out << endl;
     }
 
   if(param.pp.val) bar.done();

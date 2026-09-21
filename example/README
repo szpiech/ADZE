@@ -71,10 +71,10 @@ small_p			private allelic richness	(--out-private)
 small_c_2		private alleles of grouping pairs (--out-tuples)
 small_p_deletedloci	the loci dropped by TOLERANCE 0.2
 
-The three *_fulldata files carry the same statistics at every locus. They
-differ from a current run in one word of their header line: the distributed
-copies say AVG where the source says MEAN, so they were produced by a build
-that predates that rename. small_r_summary echoes the parameters and the
+The three *_fulldata files carry the same statistics at every locus, one row
+per grouping and locus with a column per g. That is the transpose of what 1.0
+wrote, and the copies here are regenerated: the distributed 1.0 files had a
+row per g with a column per locus. small_r_summary echoes the parameters and the
 timing of each phase, and so differs from run to run.
 
 Section 5 of the manual documents all of these formats.

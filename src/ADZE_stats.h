@@ -20,7 +20,6 @@ private:
 public:
   //  void allocate(int,int);
   void printStats(ostream&,string,int,bool tabbed = 0);
-  void printData(ostream&,string,int,bool tabbed = 0);
   void calcAvg();
   void calcVar();
   void calcStdErr();

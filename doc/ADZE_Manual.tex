@@ -525,24 +525,45 @@ file per $k$; with \flag{--tuples} the named tuples all go to one file.
 \label{sec:fulldata}
 
 \flag{--full-richness}, \flag{--full-private} and \flag{--full-tuples} add a
-\texttt{\_fulldata} file that carries, in addition to the summary columns, the
-statistic at every locus used. The first line names the columns, including one
-column per locus.
+\texttt{\_fulldata} file carrying the statistic at every locus: one row per
+grouping and locus, one column per $g$, tab-separated with a header. A value
+undefined at that $g$ is \texttt{NA}.
 
-This file is space-separated in both layouts --- version 1.0 wrote it that way,
-and one column per locus does not become easier to read under tabs --- but
-\flag{--legacy} does change what happens to an undefined value. By default a
-locus at which the statistic is undefined at this $g$ is written as
-\texttt{NA}, which names the locus responsible: the reader can see which column
-went missing and at which $g$ it did so.
+\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+POP_GROUPING    LOCUS   G1      G2      G3
+POP1            L0      1       1.53571 1.80357
+POP1            L1      1       1.60714 2
+POP1            L2      1       1       NA
+POP1            L3      1       1.67857 2.125
+\end{Verbatim}
+
+\textbf{This is the transpose of what version 1.0 wrote}, and the one output
+format that 2.0 deliberately breaks. 1.0 put a row per grouping and $g$ with a
+column per locus, the locus names in the header and the summary appended at the
+end of each row:
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 POP_GROUPING G NUM_LOCI L0 L1 L2 L3 MEAN VAR STD_ERR
 POP1 2 4 1.53571 1.60714 1 1.67857 1.45536 0.095557 0.154561
-POP1 3 4 1.80357 2 NA 2.125 NA NA NA
 \end{Verbatim}
 
-\noindent Here \texttt{POP1} scored only two gene copies at \texttt{L2}, so
+\noindent A file as wide as the dataset is unreadable by ordinary tools at
+genome scale --- a million loci gave a handful of rows of a million fields,
+past the column limit of every spreadsheet and most parsers --- and it cannot
+be written until every locus has been computed, which is what forced the whole
+ladder of per-locus values to be held in memory (section~\ref{sec:changes}).
+One row per locus streams as the sweep runs, and joins to a locus table the way
+a reader expects. The layout is the same under \flag{--legacy}, which governs
+the statistics files; the summary columns are not repeated here, being the
+statistics file's business. To recover 1.0's orientation, transpose it:
+
+\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+awk -F'\t' 'NR>1 {print $1, $2, $3}' out.richness_fulldata    # label, locus, g=1
+\end{Verbatim}
+
+\noindent In the example above \texttt{POP1} scored only two gene copies at
+\texttt{L2}, so its richness there is undefined at $g = 3$ and the whole
+grouping is undefined at that $g$; 
 that locus is undefined from $g = 3$ up, and the summary columns with it.
 Version 1.0 dropped the whole row as soon as one locus was undefined, so a
 grouping with a single badly scored locus disappeared from the file at every
@@ -585,7 +606,9 @@ The window files (section~\ref{sec:windows}) have always been tab-separated
 with a header, whichever layout is in force: they are new in 2.0 and have no
 earlier consumer to stay compatible with. The \texttt{\_fulldata},
 \texttt{\_deletedloci} and \texttt{\_summary} files are likewise unaffected by
-the flag.
+the flag --- and note that \texttt{\_fulldata} is transposed with respect to
+1.0 in both modes (section~\ref{sec:fulldata}), so \flag{--legacy} does not
+reproduce that file.
 
 \subsection{Exit status}
 
@@ -984,6 +1007,10 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
+\item The \texttt{\_fulldata} files are transposed: one row per grouping and
+  locus with a column per $g$, where 1.0 wrote a row per $g$ with a column per
+  locus (section~\ref{sec:fulldata}). This is the one output format 2.0 does
+  not reproduce, in either mode.
 \item Result files are tab-separated with a header and \texttt{NA} for
   undefined rows (section~\ref{sec:legacy}), and the \texttt{\_fulldata} files
   mark an undefined locus \texttt{NA} rather than dropping the row
