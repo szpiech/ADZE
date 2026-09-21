@@ -1636,7 +1636,14 @@ void calcPgTuples(Population pop[], int numDivs,
       writeWindowHeader(comb_win_out,"TUPLE");
     }
 
-  vector<double> pgcomb(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  /*
+   * One row per g, or a single row under --at-g: the recurrence in g still
+   * has to climb to the requested g, but the values below it are read by
+   * nothing. gBase is the g that row 0 holds.
+   */
+  const int gBase = param.at_g_val ? param.at_g_val : 0;
+  const int gRows = param.at_g_val ? 1 : gStride;
+  vector<double> pgcomb(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
 
   for(int m = 0; m < tot_m; m++)
     {
@@ -1670,7 +1677,7 @@ void calcPgTuples(Population pop[], int numDivs,
 	  const int numAlleles = pop[0].getNjiColLength(locus);
 	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gCeil; g++)
+	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
 	    {
 	      double pg = 0;
 
@@ -1698,7 +1705,7 @@ void calcPgTuples(Population pop[], int numDivs,
 		  pg += (P*Q);
 		}
 
-	      pgcomb[size_t(g)*numLoci + locus] = pg;
+	      pgcomb[size_t(g-gBase)*numLoci + locus] = pg;
 	    }
 
 	  if(param.pp.val)
@@ -1711,14 +1718,14 @@ void calcPgTuples(Population pop[], int numDivs,
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gCeil; g++)
+      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
 	  if(param.at_g_val && g != param.at_g_val) continue;
 
 	  Stats comb_stats;
-	  comb_stats.putData(&pgcomb[size_t(g)*numLoci],numLoci);
+	  comb_stats.putData(&pgcomb[size_t(g-gBase)*numLoci],numLoci);
 	  comb_stats.calcAvg();
 	  comb_stats.calcVar();
 	  comb_stats.calcStdErr();
@@ -1742,7 +1749,8 @@ void calcPgTuples(Population pop[], int numDivs,
 	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
 			   win_names,
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil);
+			   param.at_g_val ? param.at_g_val : gCeil,
+			   gBase);
 	}
 
       if(!param.tabbed()) reg_out << endl;
@@ -1781,8 +1789,10 @@ void writeWindowHeader(ostream& out, const char* groupColumn)
 
 void writeWindowStats(ostream& out, vector<double>& perLocus, int numLoci,
 		      const vector<Window>& windows, const LocusMap& lmap,
-		      const string& label, int gFirst, int gLast)
+		      const string& label, int gFirst, int gLast, int gBase)
 {
+  //gBase is the g held by row 0: 0 for a full ladder, and the requested g
+  //when --at-g means only that row was kept.
   for(int g = gFirst; g <= gLast; g++)
     {
       for(size_t w = 0; w < windows.size(); w++)
@@ -1790,7 +1800,7 @@ void writeWindowStats(ostream& out, vector<double>& perLocus, int numLoci,
 	  const Window& win = windows[w];
 
 	  Stats st;
-	  st.putData(&perLocus[size_t(g)*numLoci + win.first],win.numLoci());
+	  st.putData(&perLocus[size_t(g-gBase)*numLoci + win.first],win.numLoci());
 	  st.calcAvg();
 	  st.calcVar();
 	  st.calcStdErr();
@@ -1877,7 +1887,14 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   const int gCeil = param.at_g_val ? param.at_g_val : gLast;
   const int gStride = gCeil + 1;
 
-  vector<double> pg(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  /*
+   * One row per g, or a single row under --at-g: the recurrence in g still
+   * has to climb to the requested g, but the values below it are read by
+   * nothing. gBase is the g that row 0 holds.
+   */
+  const int gBase = param.at_g_val ? param.at_g_val : 0;
+  const int gRows = param.at_g_val ? 1 : gStride;
+  vector<double> pg(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
 
   ProgressBar bar(&adzelog(),double(numDivs)*(param.at_g_val ? 1 : gLast)*numLoci,BARLEN[0]);
   if(param.pp.val)
@@ -1912,11 +1929,11 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  const int numAlleles = pop[j].getNjiColLength(locus);
 	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gCeil; g++)
+	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
 	    {
 	      if(minNjLocus[locus] < g)
 		{
-		  pg[size_t(g)*numLoci + locus] = -9;
+		  pg[size_t(g-gBase)*numLoci + locus] = -9;
 		  continue;
 		}
 
@@ -1933,7 +1950,7 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 		  total += P*Q;
 		}
 
-	      pg[size_t(g)*numLoci + locus] = total;
+	      pg[size_t(g-gBase)*numLoci + locus] = total;
 	    }
 
 	  if(param.pp.val)
@@ -1946,14 +1963,14 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gCeil; g++)
+      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
 	  if(param.at_g_val && g != param.at_g_val) continue;
 
 	  Stats pg_stats;
-	  pg_stats.putData(&pg[size_t(g)*numLoci],numLoci);
+	  pg_stats.putData(&pg[size_t(g-gBase)*numLoci],numLoci);
 	  pg_stats.calcAvg();
 	  pg_stats.calcVar();
 	  pg_stats.calcStdErr();
@@ -1971,7 +1988,8 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
 	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
 			   pop[j].getName(),
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil);
+			   param.at_g_val ? param.at_g_val : gCeil,
+			   gBase);
 	}
 
       if(!param.tabbed()) pg_out << endl;
@@ -2040,7 +2058,14 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
       bar.init();
     }
 
-  vector<double> ag(size_t(gStride) * numLoci, 0.0); //[g][locus]
+  /*
+   * One row per g, or a single row under --at-g: the recurrence in g still
+   * has to climb to the requested g, but the values below it are read by
+   * nothing. gBase is the g that row 0 holds.
+   */
+  const int gBase = param.at_g_val ? param.at_g_val : 0;
+  const int gRows = param.at_g_val ? 1 : gStride;
+  vector<double> ag(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
 
   /*
    * Calculate the allelic richness
@@ -2078,11 +2103,11 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 
 	  buildQTable(&pop[j],1,locus,numAlleles,gCeil,gStride,q);
 
-	  for(int g = 1; g <= gCeil; g++)
+	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
 	    {
 	      if(g > Nj)
 		{
-		  ag[size_t(g)*numLoci + locus] = -9;
+		  ag[size_t(g-gBase)*numLoci + locus] = -9;
 		  continue;
 		}
 
@@ -2092,7 +2117,7 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 		  total += 1 - q[size_t(i)*gStride + g];
 		}
 
-	      ag[size_t(g)*numLoci + locus] = total;
+	      ag[size_t(g-gBase)*numLoci + locus] = total;
 	    }
 
 	  if(param.pp.val)
@@ -2105,14 +2130,14 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	}
       } //end parallel region
 
-      for(int g = 1; g <= gCeil; g++)
+      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
 	{
 	  //--at-g: one row, not the ladder.  The sweep above still had to
 	  //climb to it, the recurrence in g being sequential.
 	  if(param.at_g_val && g != param.at_g_val) continue;
 
 	  Stats ag_stats;
-	  ag_stats.putData(&ag[size_t(g)*numLoci],numLoci);
+	  ag_stats.putData(&ag[size_t(g-gBase)*numLoci],numLoci);
 	  ag_stats.calcAvg();
 	  ag_stats.calcVar();
 	  ag_stats.calcStdErr();
@@ -2130,7 +2155,8 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
 	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
 			   pop[j].getName(),
 			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil);
+			   param.at_g_val ? param.at_g_val : gCeil,
+			   gBase);
 	}
 
       if(!param.tabbed()) ag_out << endl;

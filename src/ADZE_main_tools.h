@@ -84,7 +84,7 @@ void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
 void writeWindowHeader(ostream& out,const char* groupColumn);
 void writeWindowStats(ostream& out,vector<double>& perLocus,int numLoci,
 		      const vector<Window>& windows,const LocusMap& lmap,
-		      const string& label,int gFirst,int gLast);
+		      const string& label,int gFirst,int gLast,int gBase);
 void calcAllAgs(Population[],int,const ParamSet&,bool,string,
 		const vector<Window>&,const LocusMap&);
 void calcAllPgs(Population[],int,const ParamSet&,bool,string,
