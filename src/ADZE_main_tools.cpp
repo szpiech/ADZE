@@ -173,9 +173,22 @@ namespace {
 	  if(label[i] == allele) return int(i);
 	}
 
+      /*
+       * Exact growth, not geometric: a locus holds two alleles for a SNP and
+       * tens for a microsatellite, so the copying is trivial, while the
+       * doubling these vectors do by default left each locus holding up to
+       * twice the counts it needed -- across a genome, the largest single
+       * thing the reader carried.
+       */
+      label.reserve(label.size() + 1);
       label.push_back(allele);
+
+      firstSeen.reserve(firstSeen.size() + 1);
       firstSeen.push_back(firstKey);
+
+      count.reserve(count.size() + groupCap);
       count.resize(count.size() + groupCap, 0);
+
       return int(label.size()) - 1;
     }
   };
@@ -1182,6 +1195,17 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
   groupNames = acc.groupName;
 
   /*
+   * The allele labels are not needed once the file is read: they exist to
+   * give an allele its slot, and the slot is what gets published. Released
+   * before any grouping's count block is allocated, so the two do not have
+   * to coexist.
+   */
+  for(size_t l = 0; l < acc.locus.size(); l++)
+    {
+      vector<string>().swap(acc.locus[l].label);
+    }
+
+  /*
    * The shared per-locus table: names moved rather than copied, and the
    * allele-slot offsets, which every grouping indexes its counts through.
    */
@@ -1232,7 +1256,6 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 	}
 
       //Release this locus's bookkeeping as soon as it is published.
-      vector<string>().swap(t.label);
       vector<int>().swap(t.count);
       vector<long long>().swap(t.firstSeen);
     }
