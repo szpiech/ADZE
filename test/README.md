@@ -9,10 +9,27 @@ table. All four run under `ctest` when the tree is configured with CMake
 
 ## regress.py
 
-A differential test: it runs a candidate build and a reference
-build over the same inputs and requires the outputs to be byte-identical. It is
-how the 2.0 performance and interface work is kept numerically faithful to
-ADZE 1.0.
+A differential test: it runs a candidate build and a reference build over the
+same inputs and requires the outputs to agree. It is how the 2.0 performance
+and interface work is kept numerically faithful to ADZE 1.0.
+
+"Agree" is exact wherever the two builds are supposed to produce the same
+bytes, and explicitly not where they are not:
+
+| part of the output | compared |
+|---|---|
+| labels, g, locus counts | exactly |
+| per-locus values in `_fulldata` | exactly, cell by cell — the layouts are transposes |
+| MEAN, VAR, STD_ERR | `1e-9` relative, values below `1e-12` treated as zero |
+| `_deletedloci` | byte-for-byte |
+| rows at g = 1 | not compared: 1.0 has none. Counted instead — one per label per file |
+
+The summary tolerance exists because 2.0 accumulates the mean and variance in
+one pass where 1.0 summed twice over the stored per-locus values: 1.0 prints a
+variance of `2.95823e-31` on the distributed example where every deviation is
+zero, and 2.0 prints `0`. `1e-9` is four orders tighter than the six
+significant digits that are printed, so any visible disagreement still fails —
+checked by perturbing the sixth digit of a mean and of a variance, both caught.
 
 Build a reference binary once from the 1.0 sources (tag/commit `a70f765`), then:
 
@@ -48,7 +65,8 @@ invariant:
 
 A single window over a single-chromosome dataset must reproduce the
 genome-wide output exactly; every window's mean, variance and standard error
-must match a recomputation from the per-locus `*_fulldata` columns; windows
+must match a recomputation from the per-locus `*_fulldata` values (read down
+that g's column); windows
 must tile as asked, stay inside one chromosome, and hold each interior locus
 twice when the step is half the width; evenly spaced loci must give the same
 statistics whether the window is set in basepairs or in loci; VCF and

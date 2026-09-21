@@ -244,7 +244,9 @@ example and compares against output committed from another platform, which
 pins this build's numbers without involving 1.0.
 
 Results do not depend on `--threads`: loci are processed independently and
-reduced in locus order, so any thread count gives bit-identical output.
+accumulated in locus order, so any thread count gives bit-identical output —
+checked at 1, 2, 4 and 8 threads over the statistics, `_fulldata` and window
+files.
 
 ## Documentation
 
@@ -261,8 +263,10 @@ make -C doc install    # refresh ADZE_Manual.pdf at the repository root
 ## Testing
 
 `test/regress.py` is a differential test against a reference build: it runs
-both binaries over the same inputs and requires every output file to match
-byte-for-byte. Build a binary from the 1.0 sources, then:
+both binaries over the same inputs and requires the outputs to agree — labels,
+locus counts and per-locus values exactly, the three summary columns to `1e-9`
+relative (2.0 accumulates them in one pass, so the last bits of a variance can
+differ; see `test/README.md`). Build a binary from the 1.0 sources, then:
 
 ```sh
 ./test/regress.py --candidate src/adze --reference /path/to/adze-1.0

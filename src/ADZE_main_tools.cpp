@@ -1,4 +1,5 @@
 #include "ADZE_main_tools.h"
+#include <limits>
 #include <unistd.h>
 
 /*
@@ -1595,6 +1596,129 @@ bool readTupleFile(const string& file, Population pop[], int numDivs,
 }
 
 /*
+ * A running mean and sum of squared deviations, one pair per g (and per
+ * window per g, for the window files).
+ *
+ * The passes used to fill a (gCeil+1) x numLoci array of doubles and read it
+ * twice -- once for the mean, once for the deviations -- which is 8 bytes per
+ * locus per g of memory for arithmetic that needs none: 168 MB for a million
+ * loci swept to g = 20. Welford's recurrence forms both in one pass, so
+ * nothing per-locus is stored. The cost is that the last bits of a variance
+ * no longer match version 1.0's two-pass sum; see test/regress.py and the
+ * manual's Verification section for what is compared instead.
+ *
+ * add() is called in ascending locus order, from the ordered region of the
+ * pass, so the result does not depend on the thread count.
+ */
+struct Running
+{
+  vector<long long> n;
+  vector<double> mean, m2;
+  vector<char> bad;   //some value was undefined at this g
+
+  void init(size_t slots)
+  {
+    n.assign(slots,0);
+    mean.assign(slots,0.0);
+    m2.assign(slots,0.0);
+    bad.assign(slots,0);
+  }
+
+  void add(size_t i, double x)
+  {
+    if(x == -9) { bad[i] = 1; return; }
+
+    n[i]++;
+    const double d = x - mean[i];
+    mean[i] += d/double(n[i]);
+    m2[i] += d*(x - mean[i]);
+  }
+
+  /*
+   * The divisor is the number of loci the statistic covers, not the number
+   * of values that turned out to be defined: one undefined locus makes the
+   * whole grouping undefined at that g, which is what bad records.
+   */
+  void into(Stats& st, size_t i, int numLoci) const
+  {
+    if(bad[i] || numLoci < 1)
+      {
+	st.putSummary(-9,-9,-9,numLoci);
+	return;
+      }
+
+    const double var = (numLoci < 2)
+      ? numeric_limits<double>::quiet_NaN()
+      : m2[i]/double(numLoci-1);
+
+    st.putSummary(mean[i],var,sqrt(var/double(numLoci)),numLoci);
+  }
+};
+
+/*
+ * Window rows, in the order the buffered writer produced them: g outer,
+ * window inner. Slot (w,g) of the accumulator is w*gStride + g.
+ */
+void writeWindowRunning(ostream& out,const Running& acc,int gStride,
+			const vector<Window>& windows,const LocusMap& lmap,
+			const string& label,int gFrom,int gTo)
+{
+  for(int g = gFrom; g <= gTo; g++)
+    {
+      for(size_t w = 0; w < windows.size(); w++)
+	{
+	  const Window& win = windows[w];
+
+	  Stats st;
+	  acc.into(st,w*size_t(gStride) + size_t(g),win.numLoci());
+
+	  ostringstream head;
+	  head << lmap.chromName[win.chrom] << '\t' << win.start << '\t'
+	       << win.end << '\t' << label;
+
+	  //Tabbed: a window undefined at this g is reported as NA rather
+	  //than dropped, so a scan keeps one row per window per g.
+	  st.printStats(out,head.str(),g,1);
+	}
+    }
+
+  return;
+}
+
+/*
+ * The windows covering each locus, as the sweep reaches it. Windows are laid
+ * out in ascending locus order and may overlap, so the set is maintained by
+ * opening windows whose first locus has arrived and closing those whose last
+ * has passed.
+ */
+struct WindowCursor
+{
+  const vector<Window>* windows;
+  size_t next;
+  vector<size_t> open;
+
+  void init(const vector<Window>& w) { windows = &w; next = 0; open.clear(); }
+
+  const vector<size_t>& at(int locus)
+  {
+    while(next < windows->size() && (*windows)[next].first <= locus)
+      {
+	open.push_back(next);
+	next++;
+      }
+
+    size_t keep = 0;
+    for(size_t i = 0; i < open.size(); i++)
+      {
+	if((*windows)[open[i]].last > locus) open[keep++] = open[i];
+      }
+    open.resize(keep);
+
+    return open;
+  }
+};
+
+/*
  * Private allelic richness of grouping tuples.
  *
  *  __(T)      m /                          \
@@ -1686,16 +1810,15 @@ void calcPgTuples(Population pop[], int numDivs,
    * has to climb to the requested g, but the values below it are read by
    * nothing. gBase is the g that row 0 holds.
    */
-  const int gBase = param.at_g_val ? param.at_g_val : 0;
-  const int gRows = param.at_g_val ? 1 : gStride;
-  vector<double> pgcomb(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
+  //See calcAllAgs: nothing per-locus is stored.
+  const int gFrom = param.at_g_val ? param.at_g_val : 1;
+  const int gTo = param.at_g_val ? param.at_g_val : gCeil;
 
-  if(full_comb)
-    {
-      writeFullDataHeader(full_out,"TUPLE",
-			  param.at_g_val ? param.at_g_val : 1,
-			  param.at_g_val ? param.at_g_val : gCeil);
-    }
+  if(full_comb) writeFullDataHeader(full_out,"TUPLE",gFrom,gTo);
+
+  Running acc, wacc;
+  const int BLOCK = 4096;
+  const int nBlocks = (numLoci + BLOCK - 1)/BLOCK;
 
   for(int m = 0; m < tot_m; m++)
     {
@@ -1715,83 +1838,106 @@ void calcPgTuples(Population pop[], int numDivs,
       const string all_names =
 	combineNames(&names[0],k,param.tabbed() ? ',' : ' ');
 
+      acc.init(size_t(gStride));
+      if(!windows.empty()) wacc.init(windows.size()*size_t(gStride));
+
+      WindowCursor cursor;
+      cursor.init(windows);
+
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
       {
-      vector<double> q; //one per thread
+      vector<double> q;
+      vector<double> vals(size_t(BLOCK)*gStride);
 
 #ifdef _OPENMP
-#pragma omp for schedule(static)
+#pragma omp for ordered schedule(static,1)
 #endif
-      for(int locus = 0; locus < numLoci; locus++)
+      for(int b = 0; b < nBlocks; b++)
 	{
-	  const int numAlleles = pop[0].getNjiColLength(locus);
-	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
+	  const int lo = b*BLOCK;
+	  const int hi = (lo + BLOCK < numLoci) ? lo + BLOCK : numLoci;
 
-	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
+	  for(int locus = lo; locus < hi; locus++)
 	    {
-	      double pg = 0;
+	      const int numAlleles = pop[0].getNjiColLength(locus);
+	      buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	      //Sum over all alleles
-	      for(int i = 0; i < numAlleles; i++)
+	      for(int g = gFrom; g <= gTo; g++)
 		{
-		  double P = 1, Q = 1;
+		  double pg = 0;
 
-		  //Calc P's over the groupings in the tuple
-		  for(int j = 0; j < k; j++)
+		  //Sum over all alleles
+		  for(int i = 0; i < numAlleles; i++)
 		    {
-		      P *= (1-q[(size_t(tuple[j])*numAlleles + i)*gStride + g]);
-		    }
+		      double P = 1, Q = 1;
 
-		  //Calc Q's over the groupings outside it
-		  for(int j_p = 0; j_p < numDivs; j_p++)
-		    {
-		      if(!inTuple[j_p])
+		      //Calc P's over the groupings in the tuple
+		      for(int j = 0; j < k; j++)
 			{
-			  Q *= q[(size_t(j_p)*numAlleles + i)*gStride + g];
+			  P *= (1-q[(size_t(tuple[j])*numAlleles + i)*gStride + g]);
 			}
+
+		      //Calc Q's over the groupings outside it
+		      for(int j_p = 0; j_p < numDivs; j_p++)
+			{
+			  if(!inTuple[j_p])
+			    {
+			      Q *= q[(size_t(j_p)*numAlleles + i)*gStride + g];
+			    }
+			}
+
+		      //Multiply together and add to total
+		      pg += (P*Q);
 		    }
 
-		  //Multiply together and add to total
-		  pg += (P*Q);
+		  vals[size_t(locus-lo)*gStride + g] = pg;
+		}
+	    }
+
+#ifdef _OPENMP
+#pragma omp ordered
+#endif
+	  {
+	  for(int locus = lo; locus < hi; locus++)
+	    {
+	      for(int g = gFrom; g <= gTo; g++)
+		{
+		  acc.add(size_t(g),vals[size_t(locus-lo)*gStride + g]);
 		}
 
-	      pgcomb[size_t(g-gBase)*numLoci + locus] = pg;
+	      if(!windows.empty())
+		{
+		  const vector<size_t>& here = cursor.at(locus);
+		  for(size_t i = 0; i < here.size(); i++)
+		    {
+		      for(int g = gFrom; g <= gTo; g++)
+			{
+			  wacc.add(here[i]*size_t(gStride) + size_t(g),
+				   vals[size_t(locus-lo)*gStride + g]);
+			}
+		    }
+		}
 	    }
 
-	  if(param.pp.val)
+	  if(full_comb)
 	    {
-#ifdef _OPENMP
-#pragma omp critical(progress)
-#endif
-	      bar.adv(param.at_g_val ? 1 : gLast);
+	      //The tuple label is comma-joined here so it stays one field.
+	      writeFullDataRows(full_out,combineNames(&names[0],k,','),vals,lo,hi,
+				gFrom,gTo,gStride,pop[0]);
 	    }
+
+	  if(param.pp.val) bar.adv((hi-lo)*(param.at_g_val ? 1 : gLast));
+	  }
 	}
       } //end parallel region
 
-      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
+      for(int g = gFrom; g <= gTo; g++)
 	{
-	  //--at-g: one row, not the ladder.  The sweep above still had to
-	  //climb to it, the recurrence in g being sequential.
-	  if(param.at_g_val && g != param.at_g_val) continue;
-
 	  Stats comb_stats;
-	  comb_stats.putData(&pgcomb[size_t(g-gBase)*numLoci],numLoci);
-	  comb_stats.calcAvg();
-	  comb_stats.calcVar();
-	  comb_stats.calcStdErr();
-
+	  acc.into(comb_stats,size_t(g),numLoci);
 	  comb_stats.printStats(reg_out,all_names,g,param.tabbed());
-
-	}
-
-      if(full_comb)
-	{
-	  //The tuple label is comma-joined here so it stays one field.
-	  writeFullDataRows(full_out,combineNames(&names[0],k,','),pgcomb,numLoci,
-			    param.at_g_val ? param.at_g_val : 1,
-			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
 	}
 
       if(!windows.empty())
@@ -1801,16 +1947,11 @@ void calcPgTuples(Population pop[], int numDivs,
 	   * format, since window output is always tab-separated and the label
 	   * has to stay one field.
 	   */
-	  const string win_names = combineNames(&names[0],k,',');
-	  writeWindowStats(comb_win_out,pgcomb,numLoci,windows,lmap,
-			   win_names,
-			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil,
-			   gBase);
+	  writeWindowRunning(comb_win_out,wacc,gStride,windows,lmap,
+			     combineNames(&names[0],k,','),gFrom,gTo);
 	}
 
       if(!param.tabbed()) reg_out << endl;
-      full_out << endl;
     }
 
   if(param.pp.val) bar.done();
@@ -1865,16 +2006,17 @@ void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo)
   return;
 }
 
-void writeFullDataRows(ostream& out,const string& label,const vector<double>& buf,
-		       int numLoci,int gFrom,int gTo,int gBase,const Population& pop)
+void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
+		       int lo,int hi,int gFrom,int gTo,int gStride,
+		       const Population& pop)
 {
-  for(int l = 0; l < numLoci; l++)
+  for(int l = lo; l < hi; l++)
     {
       out << label << "\t" << pop.getLocusName(l);
 
       for(int g = gFrom; g <= gTo; g++)
 	{
-	  const double v = buf[size_t(g-gBase)*numLoci + l];
+	  const double v = vals[size_t(l-lo)*gStride + g];
 	  out << "\t";
 	  if(v == -9) out << "NA";
 	  else out << v;
@@ -1980,21 +2122,15 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
   const int gCeil = param.at_g_val ? param.at_g_val : gLast;
   const int gStride = gCeil + 1;
 
-  /*
-   * One row per g, or a single row under --at-g: the recurrence in g still
-   * has to climb to the requested g, but the values below it are read by
-   * nothing. gBase is the g that row 0 holds.
-   */
-  const int gBase = param.at_g_val ? param.at_g_val : 0;
-  const int gRows = param.at_g_val ? 1 : gStride;
-  vector<double> pg(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
+  //See calcAllAgs: nothing per-locus is stored.
+  const int gFrom = param.at_g_val ? param.at_g_val : 1;
+  const int gTo = param.at_g_val ? param.at_g_val : gCeil;
 
-  if(full_priv)
-    {
-      writeFullDataHeader(pg_full_out,"POP_GROUPING",
-			  param.at_g_val ? param.at_g_val : 1,
-			  param.at_g_val ? param.at_g_val : gCeil);
-    }
+  if(full_priv) writeFullDataHeader(pg_full_out,"POP_GROUPING",gFrom,gTo);
+
+  Running acc, wacc;
+  const int BLOCK = 4096;
+  const int nBlocks = (numLoci + BLOCK - 1)/BLOCK;
 
   ProgressBar bar(&adzelog(),double(numDivs)*(param.at_g_val ? 1 : gLast)*numLoci,BARLEN[0]);
   if(param.pp.val)
@@ -2013,87 +2149,104 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
    */
   for(int j = 0; j < numDivs; j++)
     {
-      //Independent per locus; see calcAllAgs on why threading cannot move a
-      //reported value.
+      acc.init(size_t(gStride));
+      if(!windows.empty()) wacc.init(windows.size()*size_t(gStride));
+
+      WindowCursor cursor;
+      cursor.init(windows);
+
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
       {
-      vector<double> q; //one per thread
+      vector<double> q;
+      vector<double> vals(size_t(BLOCK)*gStride);
 
 #ifdef _OPENMP
-#pragma omp for schedule(static)
+#pragma omp for ordered schedule(static,1)
 #endif
-      for(int locus = 0; locus < numLoci; locus++)
+      for(int b = 0; b < nBlocks; b++)
 	{
-	  const int numAlleles = pop[j].getNjiColLength(locus);
-	  buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
+	  const int lo = b*BLOCK;
+	  const int hi = (lo + BLOCK < numLoci) ? lo + BLOCK : numLoci;
 
-	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
+	  for(int locus = lo; locus < hi; locus++)
 	    {
-	      if(minNjLocus[locus] < g)
-		{
-		  pg[size_t(g-gBase)*numLoci + locus] = -9;
-		  continue;
-		}
+	      const int numAlleles = pop[j].getNjiColLength(locus);
+	      buildQTable(pop,numDivs,locus,numAlleles,gCeil,gStride,q);
 
-	      double total = 0;
-	      for(int i = 0; i < numAlleles; i++)
+	      for(int g = gFrom; g <= gTo; g++)
 		{
-		  double Q = 1;
-		  for(int p = 0; p < numDivs; p++)
+		  if(minNjLocus[locus] < g)
 		    {
-		      if(p != j) Q *= q[(size_t(p)*numAlleles + i)*gStride + g];
+		      vals[size_t(locus-lo)*gStride + g] = -9;
+		      continue;
 		    }
 
-		  double P = 1 - q[(size_t(j)*numAlleles + i)*gStride + g];
-		  total += P*Q;
+		  double total = 0;
+		  for(int i = 0; i < numAlleles; i++)
+		    {
+		      double Q = 1;
+		      for(int p = 0; p < numDivs; p++)
+			{
+			  if(p != j) Q *= q[(size_t(p)*numAlleles + i)*gStride + g];
+			}
+
+		      double P = 1 - q[(size_t(j)*numAlleles + i)*gStride + g];
+		      total += P*Q;
+		    }
+
+		  vals[size_t(locus-lo)*gStride + g] = total;
+		}
+	    }
+
+#ifdef _OPENMP
+#pragma omp ordered
+#endif
+	  {
+	  for(int locus = lo; locus < hi; locus++)
+	    {
+	      for(int g = gFrom; g <= gTo; g++)
+		{
+		  acc.add(size_t(g),vals[size_t(locus-lo)*gStride + g]);
 		}
 
-	      pg[size_t(g-gBase)*numLoci + locus] = total;
+	      if(!windows.empty())
+		{
+		  const vector<size_t>& here = cursor.at(locus);
+		  for(size_t i = 0; i < here.size(); i++)
+		    {
+		      for(int g = gFrom; g <= gTo; g++)
+			{
+			  wacc.add(here[i]*size_t(gStride) + size_t(g),
+				   vals[size_t(locus-lo)*gStride + g]);
+			}
+		    }
+		}
 	    }
 
-	  if(param.pp.val)
+	  if(full_priv)
 	    {
-#ifdef _OPENMP
-#pragma omp critical(progress)
-#endif
-	      bar.adv(param.at_g_val ? 1 : gLast);
+	      writeFullDataRows(pg_full_out,pop[j].getName(),vals,lo,hi,
+				gFrom,gTo,gStride,pop[0]);
 	    }
+
+	  if(param.pp.val) bar.adv((hi-lo)*(param.at_g_val ? 1 : gLast));
+	  }
 	}
       } //end parallel region
 
-      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
+      for(int g = gFrom; g <= gTo; g++)
 	{
-	  //--at-g: one row, not the ladder.  The sweep above still had to
-	  //climb to it, the recurrence in g being sequential.
-	  if(param.at_g_val && g != param.at_g_val) continue;
-
 	  Stats pg_stats;
-	  pg_stats.putData(&pg[size_t(g-gBase)*numLoci],numLoci);
-	  pg_stats.calcAvg();
-	  pg_stats.calcVar();
-	  pg_stats.calcStdErr();
-
+	  acc.into(pg_stats,size_t(g),numLoci);
 	  pg_stats.printStats(pg_out,pop[j].getName(),g,param.tabbed());
-
-
 	}
 
       if(!windows.empty())
 	{
-	  writeWindowStats(pg_win_out,pg,numLoci,windows,lmap,
-			   pop[j].getName(),
-			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil,
-			   gBase);
-	}
-
-      if(full_priv)
-	{
-	  writeFullDataRows(pg_full_out,pop[j].getName(),pg,numLoci,
-			    param.at_g_val ? param.at_g_val : 1,
-			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
+	  writeWindowRunning(pg_win_out,wacc,gStride,windows,lmap,
+			     pop[j].getName(),gFrom,gTo);
 	}
 
       if(!param.tabbed()) pg_out << endl;
@@ -2158,13 +2311,17 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
     }
 
   /*
-   * One row per g, or a single row under --at-g: the recurrence in g still
-   * has to climb to the requested g, but the values below it are read by
-   * nothing. gBase is the g that row 0 holds.
+   * Nothing per-locus is stored: each g carries a running mean and sum of
+   * squared deviations, updated as the sweep passes each locus, and the
+   * windows carry one such pair each. --at-g narrows the sweep to the one g
+   * asked for; the recurrence in g still has to climb to it.
    */
-  const int gBase = param.at_g_val ? param.at_g_val : 0;
-  const int gRows = param.at_g_val ? 1 : gStride;
-  vector<double> ag(size_t(gRows) * numLoci, 0.0); //[g-gBase][locus]
+  const int gFrom = param.at_g_val ? param.at_g_val : 1;
+  const int gTo = param.at_g_val ? param.at_g_val : gCeil;
+
+  Running acc, wacc;
+  const int BLOCK = 4096;
+  const int nBlocks = (numLoci + BLOCK - 1)/BLOCK;
 
   /*
    * Calculate the allelic richness
@@ -2177,89 +2334,109 @@ void calcAllAgs(Population pop[],int numDivs,const ParamSet &param,
    * One grouping and one locus at a time, so the Qjig table for that locus is
    * built once (by the recurrence in g) and read by every g, instead of being
    * recomputed from scratch for each g as in 1.0.  Loci where g exceeds the
-   * grouping's sample size keep the -9 sentinel that calcAg returned.
+   * grouping's sample size are undefined, and one such locus makes the
+   * grouping undefined at that g.
    */
   for(int j = 0; j < numDivs; j++)
     {
+      acc.init(size_t(gStride));
+      if(!windows.empty()) wacc.init(windows.size()*size_t(gStride));
+
+      WindowCursor cursor;
+      cursor.init(windows);
+
       /*
-       * Loci are independent, and each writes only its own column of ag, so
-       * the results do not depend on the thread count: the reductions over
-       * loci happen afterwards, in ascending locus order, inside Stats.
+       * Loci are computed in parallel in blocks, and every accumulation
+       * happens in the ordered region below, in ascending locus order -- so
+       * a reported value does not depend on the thread count.
        */
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
       {
-      vector<double> q; //one per thread
+      vector<double> q;                       //one per thread
+      vector<double> vals(size_t(BLOCK)*gStride);
 
 #ifdef _OPENMP
-#pragma omp for schedule(static)
+#pragma omp for ordered schedule(static,1)
 #endif
-      for(int locus = 0; locus < numLoci; locus++)
+      for(int b = 0; b < nBlocks; b++)
 	{
-	  const int numAlleles = pop[j].getNjiColLength(locus);
-	  const int Nj = pop[j].getNj(locus);
+	  const int lo = b*BLOCK;
+	  const int hi = (lo + BLOCK < numLoci) ? lo + BLOCK : numLoci;
 
-	  buildQTable(&pop[j],1,locus,numAlleles,gCeil,gStride,q);
-
-	  for(int g = (gBase ? gBase : 1); g <= gCeil; g++)
+	  for(int locus = lo; locus < hi; locus++)
 	    {
-	      if(g > Nj)
-		{
-		  ag[size_t(g-gBase)*numLoci + locus] = -9;
-		  continue;
-		}
+	      const int numAlleles = pop[j].getNjiColLength(locus);
+	      const int Nj = pop[j].getNj(locus);
 
-	      double total = 0;
-	      for(int i = 0; i < numAlleles; i++)
-		{
-		  total += 1 - q[size_t(i)*gStride + g];
-		}
+	      buildQTable(&pop[j],1,locus,numAlleles,gCeil,gStride,q);
 
-	      ag[size_t(g-gBase)*numLoci + locus] = total;
+	      for(int g = gFrom; g <= gTo; g++)
+		{
+		  if(g > Nj)
+		    {
+		      vals[size_t(locus-lo)*gStride + g] = -9;
+		      continue;
+		    }
+
+		  double total = 0;
+		  for(int i = 0; i < numAlleles; i++)
+		    {
+		      total += 1 - q[size_t(i)*gStride + g];
+		    }
+
+		  vals[size_t(locus-lo)*gStride + g] = total;
+		}
 	    }
 
-	  if(param.pp.val)
-	    {
 #ifdef _OPENMP
-#pragma omp critical(progress)
+#pragma omp ordered
 #endif
-	      bar.adv(param.at_g_val ? 1 : gTop);
+	  {
+	  for(int locus = lo; locus < hi; locus++)
+	    {
+	      for(int g = gFrom; g <= gTo; g++)
+		{
+		  acc.add(size_t(g),vals[size_t(locus-lo)*gStride + g]);
+		}
+
+	      if(!windows.empty())
+		{
+		  const vector<size_t>& here = cursor.at(locus);
+		  for(size_t i = 0; i < here.size(); i++)
+		    {
+		      for(int g = gFrom; g <= gTo; g++)
+			{
+			  wacc.add(here[i]*size_t(gStride) + size_t(g),
+				   vals[size_t(locus-lo)*gStride + g]);
+			}
+		    }
+		}
 	    }
+
+	  if(full_rich)
+	    {
+	      writeFullDataRows(ag_full_out,pop[j].getName(),vals,lo,hi,
+				gFrom,gTo,gStride,pop[0]);
+	    }
+
+	  if(param.pp.val) bar.adv((hi-lo)*(param.at_g_val ? 1 : gTop));
+	  }
 	}
       } //end parallel region
 
-      for(int g = gBase ? gBase : 1; g <= gCeil; g++)
+      for(int g = gFrom; g <= gTo; g++)
 	{
-	  //--at-g: one row, not the ladder.  The sweep above still had to
-	  //climb to it, the recurrence in g being sequential.
-	  if(param.at_g_val && g != param.at_g_val) continue;
-
 	  Stats ag_stats;
-	  ag_stats.putData(&ag[size_t(g-gBase)*numLoci],numLoci);
-	  ag_stats.calcAvg();
-	  ag_stats.calcVar();
-	  ag_stats.calcStdErr();
-
+	  acc.into(ag_stats,size_t(g),numLoci);
 	  ag_stats.printStats(ag_out,pop[j].getName(),g,param.tabbed());
-
-
 	}
 
       if(!windows.empty())
 	{
-	  writeWindowStats(ag_win_out,ag,numLoci,windows,lmap,
-			   pop[j].getName(),
-			   param.at_g_val ? param.at_g_val : 1,
-			   param.at_g_val ? param.at_g_val : gCeil,
-			   gBase);
-	}
-
-      if(full_rich)
-	{
-	  writeFullDataRows(ag_full_out,pop[j].getName(),ag,numLoci,
-			    param.at_g_val ? param.at_g_val : 1,
-			    param.at_g_val ? param.at_g_val : gCeil,gBase,pop[0]);
+	  writeWindowRunning(ag_win_out,wacc,gStride,windows,lmap,
+			     pop[j].getName(),gFrom,gTo);
 	}
 
       if(!param.tabbed()) ag_out << endl;

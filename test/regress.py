@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Differential regression test: candidate ADZE build vs. a reference build.
 
-Every case is run twice, in separate scratch directories, and all output files
-are compared byte-for-byte.  A case passes only if the two builds produce the
+Every case is run twice, in separate scratch directories, and the outputs are
+compared: byte-for-byte for the deleted-loci list, cell by cell for the
+transposed _fulldata files (the two layouts are transposes -- see the manual),
+and field by field for the statistics files, where the label and locus-count
+columns must match exactly and the three summary columns to a tolerance well
+inside the printed precision (see SUMMARY_RTOL).  A case passes only if the two builds produce the
 same file set with the same bytes (after masking the wall-clock lines that are
 expected to differ between runs) and the same exit status.
 
@@ -338,6 +342,50 @@ def compare_fulldata(a, b):
     return None
 
 
+#Summary columns: how close is "the same number".
+#
+#The candidate forms the mean and variance in one pass (Welford) where 1.0
+#summed twice over the stored per-locus values, so the last bits of a variance
+#can differ. SUMMARY_RTOL is well below the six significant digits that get
+#printed, so a genuine disagreement still fails; SUMMARY_ATOL is what lets
+#"both are zero to within rounding" pass -- 1.0 printed 2.96e-31 for a
+#variance whose every deviation was zero, where the one-pass form gives 0.
+SUMMARY_RTOL = 1e-9
+SUMMARY_ATOL = 1e-12
+SUMMARY_COLUMNS = 3
+
+
+def same_number(x, y):
+    if x == y:
+        return True
+    try:
+        a, b = float(x), float(y)
+    except ValueError:
+        return False
+    if a != a and b != b:                      # both nan
+        return True
+    if abs(a) <= SUMMARY_ATOL and abs(b) <= SUMMARY_ATOL:
+        return True
+    return abs(a - b) <= SUMMARY_RTOL * max(abs(a), abs(b))
+
+
+def compare_stats(ref_bytes, cnd_bytes):
+    """Rows of a statistics file: labels exact, the summary to tolerance."""
+    ref = [l for l in ref_bytes.decode().splitlines() if l.strip()]
+    cnd = [l for l in cnd_bytes.decode().splitlines() if l.strip()]
+    if len(ref) != len(cnd):
+        return "%d rows vs %d" % (len(ref), len(cnd))
+
+    for i, (a, b) in enumerate(zip(ref, cnd)):
+        fa, fb = a.split(), b.split()
+        if len(fa) != len(fb) or fa[:-SUMMARY_COLUMNS] != fb[:-SUMMARY_COLUMNS]:
+            return "line %d: ref %r vs cnd %r" % (i + 1, a[:64], b[:64])
+        for x, y in zip(fa[-SUMMARY_COLUMNS:], fb[-SUMMARY_COLUMNS:]):
+            if not same_number(x, y):
+                return "line %d: ref %r vs cnd %r" % (i + 1, a[:64], b[:64])
+    return None
+
+
 def compare(ref_dir, cnd_dir, files):
     """Files that differ beyond what is expected, and missing g = 1 rows.
 
@@ -358,6 +406,17 @@ def compare(ref_dir, cnd_dir, files):
 
         ref_bytes = masked(a)
         cnd_bytes = masked(b, drop_g1=is_results_file(f))
+
+        if is_results_file(f) and ref_bytes.strip() and cnd_bytes.strip():
+            why = compare_stats(ref_bytes, cnd_bytes)
+            if why:
+                diffs.append("%s (%s)" % (f, why))
+            else:
+                n, labels = g1_rows(b)
+                if n != len(labels):
+                    missing.append("%s: %d g=1 rows for %d labels" % (f, n, len(labels)))
+            continue
+
         if ref_bytes != cnd_bytes:
             if not ref_bytes.strip() and cnd_bytes.strip():
                 why = "reference wrote no rows%s" % said_about_itself(ref_dir)

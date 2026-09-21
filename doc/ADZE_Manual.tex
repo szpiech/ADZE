@@ -1059,21 +1059,35 @@ gave an answer that could not be used:
 \subsection{Verification}
 
 Every change was checked with a differential test that runs version 2.0 and a
-version 1.0 build over the same inputs and compares every output file byte for
-byte: nine synthetic data sets --- spanning allele-count range, missingness, a
-single locus, a single grouping, unequal sample sizes, haploid data, and a
-locus with no observed alleles --- crossed with nine parameter settings, plus
-the distributed example. All 69 comparable cases are byte-identical; the
-remaining cases are those in which version 1.0 crashes or reports statistics
-over zero loci, and so has no output to compare. The test is in
-\texttt{test/regress.py} and needs a version 1.0 binary to compare against.
+version 1.0 build over the same inputs and compares their output: nine
+synthetic data sets --- spanning allele-count range, missingness, a single
+locus, a single grouping, unequal sample sizes, haploid data, and a locus with
+no observed alleles --- crossed with nine parameter settings, plus the
+distributed example. All 69 comparable cases agree; the remaining cases are
+those in which version 1.0 crashes or reports statistics over zero loci, and so
+has no output to compare. The test is in \texttt{test/regress.py} and needs a
+version 1.0 binary to compare against.
 
-Since $g = 1$ was added, that comparison is stated more precisely: 1.0 cannot
-produce a $g = 1$ row, so whole files no longer match. Every row at
-$g \geq 2$ is compared byte-for-byte, which is the guarantee that matters, and
-the $g = 1$ rows are accounted for separately --- each results file must carry
-exactly one per grouping or tuple, so a build that quietly stopped writing
-them fails.
+What ``agree'' means has been stated more precisely twice, and both
+qualifications are deliberate.
+
+\begin{itemize}
+\item Version 1.0 cannot produce a $g = 1$ row, so whole files do not match.
+  Every row at $g \geq 2$ is compared, and the $g = 1$ rows are accounted for
+  separately: each results file must carry exactly one per grouping or tuple,
+  so a build that quietly stopped writing them fails.
+\item The per-locus values, the labels and the locus counts are compared
+  exactly --- for \texttt{\_fulldata}, cell by cell, the two layouts being
+  transposes of each other (section~\ref{sec:fulldata}). The three summary
+  columns are compared to a tolerance of $10^{-9}$ relative, with values below
+  $10^{-12}$ treated as zero. Version 2.0 forms the mean and variance in one
+  pass as it sweeps, rather than summing twice over stored per-locus values,
+  so the last bits of a variance can differ: on the distributed example,
+  version 1.0 reports a variance of $2.96 \times 10^{-31}$ where every
+  deviation is zero and 2.0 reports $0$. The tolerance is four orders of
+  magnitude tighter than the six significant digits that are printed, so a
+  disagreement in any printed digit still fails the test.
+\end{itemize}
 
 The windowed statistics have no version 1.0 counterpart either, so
 \texttt{test/windows.py} checks them against the layout they claim to cover:
