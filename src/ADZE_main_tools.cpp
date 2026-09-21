@@ -150,10 +150,34 @@ namespace {
   //Per-locus allele bookkeeping while the file streams past.
   struct LocusTally
   {
-    unordered_map<string,int> slotOf;  //allele label -> dense slot
+    vector<string> label;              //allele label per slot, first-seen order
     vector<long long> firstSeen;       //per slot: (grouping, row) of first sighting
     vector<int> count;                 //slot-major, stride groupCap
     vector<int> missing;               //per grouping
+
+    /*
+     * The slot for an allele label, appended if this is the first sighting.
+     *
+     * A scan, not a hash. A locus carries two alleles for a SNP and tens for
+     * a microsatellite, and an unordered_map per locus cost far more in
+     * bucket array and node headers than the counts it indexed -- about 200
+     * bytes per locus, which at genome scale was the largest single thing
+     * the reader held. The scan also orders itself: slots are created in
+     * first-seen order, so a locus's common alleles sit at the front, where
+     * the scan reaches them first.
+     */
+    int slot(const string& allele, long long firstKey, int groupCap)
+    {
+      for(size_t i = 0; i < label.size(); i++)
+	{
+	  if(label[i] == allele) return int(i);
+	}
+
+      label.push_back(allele);
+      firstSeen.push_back(firstKey);
+      count.resize(count.size() + groupCap, 0);
+      return int(label.size()) - 1;
+    }
   };
 
   struct Accumulator
@@ -631,16 +655,8 @@ static void readStructureInto(ParamSet& p, Accumulator& acc, LineSource& in,
 	      continue;
 	    }
 
-	  pair<unordered_map<string,int>::iterator,bool> found =
-	    t.slotOf.insert(make_pair(token,int(t.firstSeen.size())));
-
-	  if(found.second)
-	    {
-	      t.firstSeen.push_back(firstKey);
-	      t.count.resize(t.count.size() + acc.groupCap, 0);
-	    }
-
-	  t.count[size_t(found.first->second)*acc.groupCap + g]++;
+	  const int sl = t.slot(token,firstKey,acc.groupCap);
+	  t.count[size_t(sl)*acc.groupCap + g]++;
 	}
     }
   return;
@@ -1031,16 +1047,8 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 		{
 		  token.assign(f + a, b - a);
 
-		  pair<unordered_map<string,int>::iterator,bool> found =
-		    t.slotOf.insert(make_pair(token,int(t.firstSeen.size())));
-
-		  if(found.second)
-		    {
-		      t.firstSeen.push_back(sampleKey + (copies - 1));
-		      t.count.resize(t.count.size() + acc.groupCap, 0);
-		    }
-
-		  t.count[size_t(found.first->second)*acc.groupCap + g]++;
+		  const int sl = t.slot(token,sampleKey + (copies - 1),acc.groupCap);
+		  t.count[size_t(sl)*acc.groupCap + g]++;
 		  t.missing[g]++;               //observed for now
 		}
 
@@ -1224,7 +1232,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 	}
 
       //Release this locus's bookkeeping as soon as it is published.
-      unordered_map<string,int>().swap(t.slotOf);
+      vector<string>().swap(t.label);
       vector<int>().swap(t.count);
       vector<long long>().swap(t.firstSeen);
     }
