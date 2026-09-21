@@ -11,6 +11,24 @@ using namespace std;
 
 
 /*
+ * The locus names, held once for the whole run.
+ *
+ * Every Population used to own a string[numLoci] of its own, so J groupings
+ * held J copies of identical names -- 32 bytes each even for a name short
+ * enough to live inside the string object, and more when it is not. At a
+ * million loci and ten groupings that was some 290 MB of duplicates. One
+ * table, pointed at by every grouping, costs the same as one grouping used
+ * to.
+ */
+struct LocusNames
+{
+  vector<string> name;     //one per locus, compacted with the data
+  vector<string> deleted;  //what the missing-data filter dropped, in report order
+
+  void compact(const vector<char>& del);
+};
+
+/*
   A Class to handle diversity data in structure format
 */
 class Population
@@ -22,8 +40,7 @@ class Population
   int numLoci; //The number of loci in the data
   int rows; //The number of gene copies (data rows) in this grouping
   string name; //The name of the population
-  string* locusName; //A vector to hold all the loci names
-  vector<string> deletedLocus;//to hold the names of the deleted loci
+  LocusNames* names; //Shared across groupings; not owned here
   void fillNj(int);
 
   int** Nji; //A matrix whose entries correspond to the number of i alleles in the jth population
@@ -42,7 +59,7 @@ class Population
   void setLoci(int numLoci);
   void setName(string str) {name = str;};
   void setRows(int r) {rows = r;};
-  bool setLocusName(string str, int pos);
+  void setNames(LocusNames* table) {names = table;};
   bool setNjiColLength(int,int);
   bool putNji(int,int,int);
   bool putNj(int,int);
@@ -55,7 +72,7 @@ class Population
   string getName() {return name;};
   int getNumLoci() {return numLoci;};
   int getNumRows() {return rows;};
-  string getLocusName(int);
+  const string& getLocusName(int) const;
 
   string deletedSummary() const;
   void printDeleted(ostream&);

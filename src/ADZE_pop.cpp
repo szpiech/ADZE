@@ -3,6 +3,31 @@
 using namespace std;
 
 /*
+ * Drop the flagged loci from the name table, recording them from the highest
+ * index down -- the order 1.0's reverse-iterating delete loop wrote to the
+ * _deletedloci file. Called once for the run, not once per grouping, because
+ * the filter condemns a locus for every grouping at once.
+ */
+void LocusNames::compact(const vector<char>& del)
+{
+  for(int l = int(name.size()) - 1; l >= 0; l--)
+    {
+      if(del[l]) deleted.push_back(name[l]);
+    }
+
+  size_t keep = 0;
+  for(size_t l = 0; l < name.size(); l++)
+    {
+      if(del[l]) continue;
+      if(keep != l) name[keep].swap(name[l]);
+      keep++;
+    }
+  name.resize(keep);
+
+  return;
+}
+
+/*
  * One-line account of what the missing-data filter removed.  1.0 built this
  * inside printDeleted and wrote it to cout as well as to the file, with
  * different stream flags on each, so the console and the _deletedloci file
@@ -12,8 +37,10 @@ string Population::deletedSummary() const
 {
   ostringstream out;
 
-  out << deletedLocus.size();
-  out << ((deletedLocus.size() == 1) ? " locus has " : " loci have ");
+  const size_t dropped = names ? names->deleted.size() : 0;
+
+  out << dropped;
+  out << ((dropped == 1) ? " locus has " : " loci have ");
   out << "at least one grouping with";
   if(tol > 0) out << " more than " << 100*tol << "%";
   out << " missing data.\n";
@@ -23,8 +50,10 @@ string Population::deletedSummary() const
 
 void Population::printDeleted(ostream& out)
 {
-  for(vector<string>::iterator i = deletedLocus.begin();
-      i != deletedLocus.end(); i++)
+  if(!names) return;
+
+  for(vector<string>::iterator i = names->deleted.begin();
+      i != names->deleted.end(); i++)
     {
       out << *i << endl;
     }
@@ -49,18 +78,12 @@ void Population::printDeleted(ostream& out)
  */
 void Population::deleteLoci(const vector<char>& del)
 {
-  for(int l = numLoci-1; l >= 0; l--)
-    {
-      if(del[l]) deletedLocus.push_back(locusName[l]);
-    }
-
   int keep = 0;
   for(int l = 0; l < numLoci; l++)
     {
       if(del[l]) continue;
       if(keep != l)
 	{
-	  locusName[keep].swap(locusName[l]);
 	  int* tmp = Nji[keep];
 	  Nji[keep] = Nji[l];
 	  Nji[l] = tmp;
@@ -236,7 +259,7 @@ bool Population::setNjiColLength(int size,int locus)
 //Constructor: nothing is sized until setLoci() is called
 Population::Population()
 {
-  locusName = NULL;
+  names = NULL;
   Nji = NULL;
   NjiColLength = NULL;
   Nj = NULL;
@@ -264,7 +287,6 @@ Population::~Population()
   if(NjiColLength) delete [] NjiColLength;
   if(Nji) delete [] Nji;
   if(missing) delete [] missing;
-  if(locusName) delete [] locusName;
 }
 
 /*
@@ -291,7 +313,6 @@ void Population::setLoci(int l)
       NjiColLength[i] = 0;
       missing[i] = 0;
     }
-  locusName = new string[numLoci];
   return;
 }
 
@@ -301,28 +322,14 @@ void Population::putMissing(int count, int locus)
   return;
 }
 
-bool Population::setLocusName(string str, int pos)
+const string& Population::getLocusName(int pos) const
 {
-  if (pos > numLoci-1 || pos < 0)
-    {
-      //error
-      return 0;
-    }
-  else
-    {
-      locusName[pos] = str;
-      return 1;
-    }
-}
+  static const string bad = "BAD REF";
 
-string Population::getLocusName(int pos)
-{
-  if (pos > numLoci-1 || pos < 0)
+  if(!names || pos < 0 || pos > numLoci-1 || size_t(pos) >= names->name.size())
     {
-      return "BAD REF";
+      return bad;
     }
-  else
-    {
-      return locusName[pos];
-    }
+
+  return names->name[pos];
 }

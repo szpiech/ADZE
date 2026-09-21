@@ -1099,7 +1099,7 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
  * internally inconsistent.
  */
 Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
-			LocusMap& lmap)
+			LocusNames& names, LocusMap& lmap)
 {
   const bool vcf = wantsVCF(p.format.val,p.dfile.val);
 
@@ -1173,16 +1173,17 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 
   groupNames = acc.groupName;
 
+  //The names move into the shared table rather than being copied per grouping.
+  names.name.swap(acc.locusName);
+  names.deleted.clear();
+
   Population* pop = new Population[numDivs];
   for(int j = 0; j < numDivs; j++)
     {
       pop[j].setLoci(declaredLoci);
       pop[j].setName(acc.groupName[j]);
       pop[j].setRows(acc.groupRows[j]);
-      for(int l = 0; l < declaredLoci; l++)
-	{
-	  pop[j].setLocusName(acc.locusName[l],l);
-	}
+      pop[j].setNames(&names);
     }
 
   /*
@@ -1235,7 +1236,7 @@ Population* readDataset(ParamSet& p, vector<string>& groupNames, int& numDivs,
 }
 
 void filterLoci(Population pop[],int numDivs, double tol, string file,
-		bool pp, LocusMap& lmap)
+		bool pp, LocusMap& lmap, LocusNames& names)
 {
   vector<char> toDelete(pop[0].getNumLoci(),0);
 
@@ -1265,7 +1266,10 @@ void filterLoci(Population pop[],int numDivs, double tol, string file,
     }
   if(pp) bar.done();
 
-  //Coordinates are indexed by locus, so they follow the same compaction.
+  //Names and coordinates are indexed by locus, so they follow the same
+  //compaction -- once for the run, the filter having condemned each locus in
+  //every grouping at once.
+  names.compact(toDelete);
   lmap.compact(toDelete);
   cout << endl;
   
