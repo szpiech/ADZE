@@ -76,6 +76,18 @@ CASES = [
                                "--min-window-loci", "2"]),
     ("vcfgz.default",   VCFGZ, ["--tolerance", "1"]),
     ("vcf.dryrun",      VCF,  ["--dry-run"]),
+    # The dry run is served from the scan rather than from a loaded dataset,
+    # so each thing it reports needs a case: dimensions, the window layout,
+    # the tuple count, the clamped --at-g, and a filtered set of groupings.
+    ("stru.dryrun",     STRU, ["--dry-run"]),
+    ("stru.dryrun.pops", STRU, ["--pops", "POP0,POP1", "--dry-run"]),
+    ("stru.dryrun.win", STRU, ["--tolerance", "1", "--loci-map", "f.map",
+                               "--window-loci", "5", "--step-loci", "5", "--dry-run"]),
+    ("vcf.dryrun.win",  VCF,  ["--window-bp", "4000", "--step-bp", "2000",
+                               "--min-window-loci", "2", "--dry-run"]),
+    ("vcf.dryrun.tuples", VCF, ["--combinations", "--tuples-k", "1,2", "--dry-run"]),
+    ("vcf.dryrun.atg",  VCF,  ["--at-g", "max", "--dry-run"]),
+    ("vcf.dryrun.notol", VCF, ["--tolerance", "1", "--dry-run"]),
 ]
 
 

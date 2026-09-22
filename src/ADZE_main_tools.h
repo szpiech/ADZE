@@ -129,7 +129,10 @@ struct ScanResult
   void resolve(double tol);
 };
 
-void scanDataset(ParamSet& p,ScanResult& out);
+void scanDataset(ParamSet& p,ScanResult& out,bool announce = true);
+void printDryRun(const ParamSet& p,const ScanResult& scan,
+		 const vector< vector<int> >& tuples,list<int>& k,
+		 bool do_rich,bool do_priv,bool do_tuple);
 
 void dumpCounts(const char* path,Population pop[],int numDivs,int numLoci,
 		const LocusMap& lmap);
@@ -151,6 +154,8 @@ void calcAllPgs(Population[],int,const ParamSet&,bool,string,
 string nameCreate(string,string);
 double displayTime(ostream& out);
 void buildKTuples(int numDivs,int k,vector< vector<int> >& out);
+bool readTupleFile(const string& file,const vector<string>& groupName,
+		   vector< vector<int> >& out);
 bool readTupleFile(const string& file,Population pop[],int numDivs,
 		   vector< vector<int> >& out);
 void calcPgTuples(Population pop[],int numDivs,

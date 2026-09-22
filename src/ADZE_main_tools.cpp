@@ -1139,6 +1139,178 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 }
 
 /*
+ * The dry run: what the program would do with this dataset, from the counts
+ * alone. Every figure here -- the dimensions, each grouping's sample size and
+ * the range of Nj it scored, the largest feasible MAX_G, the window layout
+ * and the row counts -- follows from the scan, so a dry run never reads the
+ * dataset into memory.
+ */
+void printDryRun(const ParamSet& p,const ScanResult& scan,
+		 const vector< vector<int> >& tuples,list<int>& k,
+		 bool do_rich,bool do_priv,bool do_tuple)
+{
+  const int numDivs = int(scan.groupName.size());
+
+  const bool vcf = wantsVCF(p.format.val,p.dfile.val);
+
+  cout << "Data file:        " << p.dfile.val
+         << (vcf ? "  (VCF)\n" : "  (STRUCTURE)\n")
+         << "Loci:             " << p.loci.val << "\n"
+         << "Gene copies:      " << p.dlines.val << "\n";
+
+  if(vcf)
+      {
+        cout << "Sample map:       " << p.samples.val << "\n";
+      }
+  else
+      {
+        cout << "Label columns:    " << p.nd_cols.val
+             << " (grouping from column " << p.sort_by.val << ")\n"
+             << "Header rows:      " << p.nd_rows.val << "\n"
+             << "Missing code:     " << p.miss.val << "\n";
+      }
+
+  cout << "Groupings:        " << numDivs << "\n";
+
+  for(int j = 0; j < numDivs; j++)
+      {
+        int minNj = 0, maxNj = 0;
+        for(long long l = 0; l < scan.numLoci; l++)
+          {
+            const int Nj = scan.nj(j,l);
+            if(l == 0 || Nj < minNj) minNj = Nj;
+            if(l == 0 || Nj > maxNj) maxNj = Nj;
+          }
+        cout << "  " << scan.groupName[j] << ": " << scan.groupRows[j]
+             << " gene copies, Nj per locus " << minNj << "-" << maxNj << "\n";
+      }
+
+  cout << "Largest feasible MAX_G: " << scan.feasibleGAll << "\n";
+  if(p.g.set) cout << "MAX_G to be used:       " << p.g.val << "\n";
+  else cout << "MAX_G to be used:       " << "the largest feasible\n";
+  if(p.tol.val != 1)
+      {
+        cout << "  (TOLERANCE " << p.tol.val << " will drop loci first, "
+             << "which can raise both numbers)\n";
+      }
+
+  /*
+   * The g that will actually be reported, against the ceilings known
+   * before filtering: the same rule the run itself applies, so the dry
+   * run says what the run will do rather than what was asked for.
+   */
+  if(p.at_g.set)
+      {
+        const int sweepTop = p.g.set ? p.g.val : ((scan.feasibleGAll < 1) ? 1 : scan.feasibleGAll);
+        int ceiling = (scan.feasibleGAll < sweepTop) ? scan.feasibleGAll : sweepTop;
+        if(ceiling < 1) ceiling = 1;
+
+        const int asked = (p.at_g.val == "max") ? sweepTop : p.at_g_val;
+        cout << "Reporting at g:         " << ((asked > ceiling) ? ceiling : asked);
+        if(asked > ceiling) cout << "  (--at-g " << p.at_g.val
+      			   << " clamped to the ceiling)";
+        cout << "\n";
+      }
+
+  if(p.windowed())
+      {
+        /*
+         * Windows are laid over the loci that survive filtering, so work
+         * out which those are -- without writing the report file, this
+         * being a dry run -- and lay the windows over a copy.
+         */
+        LocusMap trial = scan.lmap;
+        trial.compact(scan.dropped);
+
+        vector<Window> windows;
+        const long long sparse = buildWindows(trial,p,windows);
+
+        int lo = 0, hi = 0;
+        for(size_t w = 0; w < windows.size(); w++)
+          {
+            const int n = windows[w].numLoci();
+            if(w == 0 || n < lo) lo = n;
+            if(w == 0 || n > hi) hi = n;
+          }
+
+        cout << "Windows:          " << windows.size();
+        if(p.win_bp.set)
+          {
+            cout << " of " << p.win_bp.val << " bp, step " << p.step_bp.val;
+          }
+        else
+          {
+            cout << " of " << p.win_loci.val << " loci, step "
+      	   << p.step_loci.val;
+          }
+        cout << "\n";
+
+        if(!windows.empty())
+          {
+            cout << "  loci per window: " << lo << "-" << hi << "\n";
+          }
+        if(sparse > 0)
+          {
+            cout << "  " << sparse << " window" << (sparse == 1 ? "" : "s")
+      	   << " below --min-window-loci " << p.min_win_loci.val
+      	   << ", not reported\n";
+          }
+
+        /*
+         * Windowed output is one row per window per g per grouping, and the
+         * tuple statistics multiply that by the number of tuples, so say how
+         * large the files will be before anyone waits for them.
+         */
+        //Rows per window: the whole ladder from g = 1, or one row for --at-g.
+        const int gRange = p.at_g.set
+          ? 1 : (p.g.set ? p.g.val : ((scan.feasibleGAll < 1) ? 1 : scan.feasibleGAll));
+        if(gRange > 0)
+          {
+            long long rows = (long long)(windows.size()) * gRange;
+            if(do_rich) cout << "  richness rows:   " << rows*numDivs << "\n";
+            if(do_priv) cout << "  private rows:    " << rows*numDivs << "\n";
+            if(do_tuple)
+      	{
+      	  double nTuples = double(tuples.size());
+      	  if(!p.tuple_file.set)
+      	    {
+      	      nTuples = 0;
+      	      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+      		{
+      		  nTuples += nCk(numDivs,*i);
+      		}
+      	    }
+      	  cout << "  tuple rows:      " << long(double(rows)*nTuples)
+      	       << " (over " << long(nTuples) << " tuple"
+      	       << (nTuples == 1 ? "" : "s") << ")\n";
+      	}
+          }
+      }
+
+  if(do_tuple)
+      {
+        if(p.tuple_file.set) cout << "Named tuples:           " << tuples.size() << "\n";
+        else
+          {
+            double total = 0;
+            for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+      	{
+      	  total += nCk(numDivs,*i);
+      	}
+            cout << "Tuples to evaluate:     " << long(total) << "\n";
+          }
+      }
+
+  cout << "Statistics:            ";
+  if(do_rich) cout << " richness";
+  if(do_priv) cout << " private";
+  if(do_tuple) cout << " tuples";
+  cout << "\n";
+
+    return;
+}
+
+/*
  * Everything the sweep needs to know about the dataset as a whole, derived
  * from the counts alone.
  *
@@ -1358,7 +1530,8 @@ static void scanStructure(ParamSet& p,ScanResult& out,LineSource& in,
 
 static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 		    const vector<string>& keepList,
-		    const vector<string>& dropList)
+		    const vector<string>& dropList,
+		    bool announce)
 {
   unordered_map<string,string> groupOfSample;
   vector<string> groupOrder;
@@ -1540,10 +1713,19 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
   p.loci.val = int(records);
   out.numLoci = records;
 
+  //The reader's words, since the scan can replace it for a dry run and the
+  //user should not be told something different about the same file.
+  if(announce)
+    {
+      adzelog() << "Read " << records << (records == 1 ? " record" : " records")
+		<< " for " << usedSamples
+		<< (usedSamples == 1 ? " sample" : " samples") << ".\n";
+    }
+
   return;
 }
 
-void scanDataset(ParamSet& p,ScanResult& out)
+void scanDataset(ParamSet& p,ScanResult& out,bool announce)
 {
   const bool vcf = wantsVCF(p.format.val,p.dfile.val);
 
@@ -1572,7 +1754,7 @@ void scanDataset(ParamSet& p,ScanResult& out)
   splitList(p.expops.val,dropList);
 
   long long dataRows = 0;
-  if(vcf) scanVCF(p,out,in,keepList,dropList);
+  if(vcf) scanVCF(p,out,in,keepList,dropList,announce);
   else scanStructure(p,out,in,keepList,dropList,p.loci_map.set,dataRows);
 
   if(!vcf)
@@ -1592,6 +1774,15 @@ void scanDataset(ParamSet& p,ScanResult& out)
     }
 
   if(out.groupName.empty()) badData("no grouping survived the filters.");
+
+  if(announce && !vcf && (!keepList.empty() || !dropList.empty()))
+    {
+      long long kept = 0;
+      for(size_t g = 0; g < out.groupRows.size(); g++) kept += out.groupRows[g];
+      adzelog() << "Using " << kept << " of " << dataRows
+		<< " gene copies in " << out.groupName.size()
+		<< ((out.groupName.size() == 1) ? " grouping.\n" : " groupings.\n");
+    }
 
   if(!vcf && p.loci_map.set) readLocusMap(p.loci_map.val,out.locusName,out.lmap);
 
@@ -2057,6 +2248,19 @@ void buildKTuples(int numDivs, int k, vector< vector<int> >& out)
 bool readTupleFile(const string& file, Population pop[], int numDivs,
 		   vector< vector<int> >& out)
 {
+  vector<string> groupNames;
+  for(int j = 0; j < numDivs; j++) groupNames.push_back(pop[j].getName());
+  return readTupleFile(file,groupNames,out);
+}
+
+/*
+ * The same, from the grouping names alone: the dry run knows them from the
+ * scan and has no Population to ask.
+ */
+bool readTupleFile(const string& file, const vector<string>& groupName,
+		   vector< vector<int> >& out)
+{
+  const int numDivs = int(groupName.size());
   ifstream in(file.c_str());
   if(in.fail())
     {
@@ -2085,7 +2289,7 @@ bool readTupleFile(const string& file, Population pop[], int numDivs,
 	  int found = -1;
 	  for(int j = 0; j < numDivs; j++)
 	    {
-	      if(pop[j].getName().compare(names[i]) == 0) found = j;
+	      if(groupName[j].compare(names[i]) == 0) found = j;
 	    }
 
 	  if(found < 0)

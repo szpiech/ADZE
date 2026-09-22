@@ -176,6 +176,49 @@ int main(int argc, char* argv[])
   adzelog() << "Reading " << p.dfile.val << "...\n";
 
   /*
+   * A dry run answers questions about the dataset -- its dimensions, each
+   * grouping's sample size, the largest feasible MAX_G, how many windows and
+   * rows the run would produce -- and every one of them follows from the
+   * counts. So it is served by the scan, and the dataset is never read into
+   * memory: asking what a 40 GB file would do no longer costs what doing it
+   * would.
+   */
+  if(p.dry_run.val)
+    {
+      ScanResult scan;
+
+      try
+	{
+	  scanDataset(p,scan);
+	}
+      catch(BAD_FILE x)
+	{
+	  return EXIT_IO;
+	}
+      catch(BAD_PARAM x)
+	{
+	  return EXIT_DATA;
+	}
+
+      const int numDivs = int(scan.groupName.size());
+
+      vector< vector<int> > tuples;
+      if(do_tuple)
+	{
+	  if(p.tuple_file.set)
+	    {
+	      if(!readTupleFile(p.tuple_file.val,scan.groupName,tuples)) return EXIT_USAGE;
+	    }
+	  else if(!validK(numDivs,k)) return EXIT_USAGE;
+	}
+
+      printDryRun(p,scan,tuples,k,do_rich,do_priv,do_tuple);
+      return EXIT_OK;
+    }
+
+  adzelog() << "Reading " << p.dfile.val << "...\n";
+
+  /*
    * One pass over the data file yields the groupings, the allele counts, the
    * sample sizes and the missing-data tallies. 1.0 read the file three times
    * (validate, discover groupings, load) and kept every genotype in memory.
@@ -199,7 +242,7 @@ int main(int argc, char* argv[])
 	{
 	  ParamSet scanParams = p;
 	  ScanResult scan;
-	  scanDataset(scanParams,scan);
+	  scanDataset(scanParams,scan,false);
 	}
       catch(BAD_FILE x) { return EXIT_IO; }
       catch(BAD_PARAM x) { return EXIT_DATA; }
@@ -252,170 +295,6 @@ int main(int argc, char* argv[])
 	}
     }
 
-  if(p.dry_run.val)
-    {
-      const bool vcf = wantsVCF(p.format.val,p.dfile.val);
-
-      cout << "Data file:        " << p.dfile.val
-	   << (vcf ? "  (VCF)\n" : "  (STRUCTURE)\n")
-	   << "Loci:             " << p.loci.val << "\n"
-	   << "Gene copies:      " << p.dlines.val << "\n";
-
-      if(vcf)
-	{
-	  cout << "Sample map:       " << p.samples.val << "\n";
-	}
-      else
-	{
-	  cout << "Label columns:    " << p.nd_cols.val
-	       << " (grouping from column " << p.sort_by.val << ")\n"
-	       << "Header rows:      " << p.nd_rows.val << "\n"
-	       << "Missing code:     " << p.miss.val << "\n";
-	}
-
-      cout << "Groupings:        " << numDivs << "\n";
-
-      for(int j = 0; j < numDivs; j++)
-	{
-	  int minNj = 0, maxNj = 0;
-	  for(int l = 0; l < p.loci.val; l++)
-	    {
-	      const int Nj = pop[j].getNj(l);
-	      if(l == 0 || Nj < minNj) minNj = Nj;
-	      if(l == 0 || Nj > maxNj) maxNj = Nj;
-	    }
-	  cout << "  " << pop[j].getName() << ": " << pop[j].getNumRows()
-	       << " gene copies, Nj per locus " << minNj << "-" << maxNj << "\n";
-	}
-
-      cout << "Largest feasible MAX_G: " << feasibleG << "\n";
-      if(p.g.set) cout << "MAX_G to be used:       " << p.g.val << "\n";
-      else cout << "MAX_G to be used:       " << "the largest feasible\n";
-      if(p.tol.val != 1)
-	{
-	  cout << "  (TOLERANCE " << p.tol.val << " will drop loci first, "
-	       << "which can raise both numbers)\n";
-	}
-
-      /*
-       * The g that will actually be reported, against the ceilings known
-       * before filtering: the same rule the run itself applies, so the dry
-       * run says what the run will do rather than what was asked for.
-       */
-      if(p.at_g.set)
-	{
-	  const int sweepTop = p.g.set ? p.g.val : ((feasibleG < 1) ? 1 : feasibleG);
-	  int ceiling = (feasibleG < sweepTop) ? feasibleG : sweepTop;
-	  if(ceiling < 1) ceiling = 1;
-
-	  const int asked = (p.at_g.val == "max") ? sweepTop : p.at_g_val;
-	  cout << "Reporting at g:         " << ((asked > ceiling) ? ceiling : asked);
-	  if(asked > ceiling) cout << "  (--at-g " << p.at_g.val
-				   << " clamped to the ceiling)";
-	  cout << "\n";
-	}
-
-      if(p.windowed())
-	{
-	  /*
-	   * Windows are laid over the loci that survive filtering, so work
-	   * out which those are -- without writing the report file, this
-	   * being a dry run -- and lay the windows over a copy.
-	   */
-	  vector<char> del(p.loci.val,0);
-	  for(int j = 0; j < numDivs; j++) pop[j].recLociDelete(p.tol.val,del);
-
-	  LocusMap trial = lmap;
-	  trial.compact(del);
-
-	  vector<Window> windows;
-	  const long long sparse = buildWindows(trial,p,windows);
-
-	  int lo = 0, hi = 0;
-	  for(size_t w = 0; w < windows.size(); w++)
-	    {
-	      const int n = windows[w].numLoci();
-	      if(w == 0 || n < lo) lo = n;
-	      if(w == 0 || n > hi) hi = n;
-	    }
-
-	  cout << "Windows:          " << windows.size();
-	  if(p.win_bp.set)
-	    {
-	      cout << " of " << p.win_bp.val << " bp, step " << p.step_bp.val;
-	    }
-	  else
-	    {
-	      cout << " of " << p.win_loci.val << " loci, step "
-		   << p.step_loci.val;
-	    }
-	  cout << "\n";
-
-	  if(!windows.empty())
-	    {
-	      cout << "  loci per window: " << lo << "-" << hi << "\n";
-	    }
-	  if(sparse > 0)
-	    {
-	      cout << "  " << sparse << " window" << (sparse == 1 ? "" : "s")
-		   << " below --min-window-loci " << p.min_win_loci.val
-		   << ", not reported\n";
-	    }
-
-	  /*
-	   * Windowed output is one row per window per g per grouping, and the
-	   * tuple statistics multiply that by the number of tuples, so say how
-	   * large the files will be before anyone waits for them.
-	   */
-	  //Rows per window: the whole ladder from g = 1, or one row for --at-g.
-	  const int gRange = p.at_g.set
-	    ? 1 : (p.g.set ? p.g.val : ((feasibleG < 1) ? 1 : feasibleG));
-	  if(gRange > 0)
-	    {
-	      long long rows = (long long)(windows.size()) * gRange;
-	      if(do_rich) cout << "  richness rows:   " << rows*numDivs << "\n";
-	      if(do_priv) cout << "  private rows:    " << rows*numDivs << "\n";
-	      if(do_tuple)
-		{
-		  double nTuples = double(tuples.size());
-		  if(!p.tuple_file.set)
-		    {
-		      nTuples = 0;
-		      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
-			{
-			  nTuples += nCk(numDivs,*i);
-			}
-		    }
-		  cout << "  tuple rows:      " << long(double(rows)*nTuples)
-		       << " (over " << long(nTuples) << " tuple"
-		       << (nTuples == 1 ? "" : "s") << ")\n";
-		}
-	    }
-	}
-
-      if(do_tuple)
-	{
-	  if(p.tuple_file.set) cout << "Named tuples:           " << tuples.size() << "\n";
-	  else
-	    {
-	      double total = 0;
-	      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
-		{
-		  total += nCk(numDivs,*i);
-		}
-	      cout << "Tuples to evaluate:     " << long(total) << "\n";
-	    }
-	}
-
-      cout << "Statistics:            ";
-      if(do_rich) cout << " richness";
-      if(do_priv) cout << " private";
-      if(do_tuple) cout << " tuples";
-      cout << "\n";
-
-      delete [] pop;
-      return EXIT_OK;
-    }
 
   ofstream summary;
   const string sum_out = p.summaryName();
