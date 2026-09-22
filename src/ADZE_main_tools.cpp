@@ -1,6 +1,7 @@
 #include "ADZE_main_tools.h"
 #include <limits>
 #include <unistd.h>
+#include <sys/stat.h>
 
 /*
  * Progress and informational messages go to stderr, so that redirecting
@@ -1396,6 +1397,27 @@ LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan)
  * count, then the counts, slot-major with stride J, in the same order
  * VCFSource yields and the reader published.
  */
+/*
+ * Size and last-modified time of a file, or -1 when it cannot be read. Both
+ * are recorded in a converted file so it can be refused when the data has
+ * moved on. Neither is a hash: a same-size edit made within the filesystem's
+ * timestamp resolution would go unnoticed, which is why doc/streaming.md
+ * says to name a converted file only when the input is settled.
+ */
+static long long fileSize(const string& path)
+{
+  ifstream f(path.c_str(),ios::binary|ios::ate);
+  if(!f.is_open()) return -1;
+  return (long long)(f.tellg());
+}
+
+static long long fileStamp(const string& path)
+{
+  struct stat st;
+  if(stat(path.c_str(),&st) != 0) return -1;
+  return (long long)(st.st_mtime);
+}
+
 namespace {
 
   const char COUNT_MAGIC[8] = {'A','D','Z','E','C','N','T','1'};
@@ -1452,6 +1474,15 @@ namespace {
       long long loci = 0;
       readInt(in,J);
       readLL(in,loci);
+
+      string s1;
+      long long l1 = 0;
+      int i1 = 0;
+      readStr(in,s1); readLL(in,l1); readLL(in,l1);  //source, size, timestamp
+      readStr(in,s1); readStr(in,s1);          //--pops, --exclude-pops
+      readStr(in,s1);                          //missing code
+      readInt(in,i1); readInt(in,i1);          //group column, header rows
+
       for(int g = 0; g < J; g++)
 	{
 	  string nm;
@@ -1537,6 +1568,23 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
   out.write(COUNT_MAGIC,8);
   writeInt(out,J);
   writeLL(out,numLoci);
+
+  /*
+   * Provenance, so a converted file cannot be used against data it did not
+   * come from. Everything here changes what the counts would be: the source
+   * file's identity and size, the grouping filters, the missing code, and
+   * which column names the grouping. A mismatch is reported and the file
+   * converted again -- never used with a warning.
+   */
+  writeStr(out,p.dfile.val);
+  writeLL(out,fileSize(p.dfile.val));
+  writeLL(out,fileStamp(p.dfile.val));
+  writeStr(out,p.pops.val);
+  writeStr(out,p.expops.val);
+  writeStr(out,p.miss.val);
+  writeInt(out,p.sort_by.val);
+  writeInt(out,p.nd_rows.val);
+
   for(int g = 0; g < J; g++)
     {
       writeStr(out,scan.groupName[g]);
@@ -1634,6 +1682,110 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
 
   out.close();
   return passes;
+}
+
+
+/*
+ * Where a conversion goes when the user has not named one: beside the
+ * output, not in a system temporary directory, because it can be the size of
+ * the counts and the output directory is the one the user chose for large
+ * files. It is removed when the run ends, successfully or not; only a file
+ * named with --counts is kept.
+ */
+string countFilePath(const ParamSet& p)
+{
+  return p.out_prefix.val + ".counts.tmp";
+}
+
+//How much disk a conversion of this dataset needs, near enough to warn with.
+long long countFileBytes(const ScanResult& scan)
+{
+  const long long J = (long long)(scan.groupName.size());
+  long long slots = 0;
+  for(long long l = 0; l < scan.numLoci; l++) slots += 1;   //at least one each
+  return scan.numLoci*(64 + 8) + slots*J*(long long)(sizeof(int));
+}
+
+/*
+ * Loci per conversion pass. A pass holds one tally per locus in the chunk --
+ * labels, first-sighting keys and a count per grouping per allele -- so the
+ * budget buys loci in inverse proportion to the groupings. 64 MB is enough
+ * for a microsatellite dataset many times over, and for a million SNPs at
+ * ten groupings it means a handful of passes rather than one enormous one.
+ */
+long long convertChunk(const ParamSet& p,const ScanResult& scan)
+{
+  const long long budget = 64LL*1024*1024;
+  const long long J = (long long)(scan.groupName.size());
+  const long long perLocus = 4*(long long)(sizeof(int))*(J > 0 ? J : 1) + 64;
+  long long chunk = budget/perLocus;
+  if(chunk < 1) chunk = 1;
+  if(chunk > scan.numLoci) chunk = scan.numLoci;
+  return chunk;
+}
+
+/*
+ * Whether a converted file on disk describes this run's data. Every field
+ * compared changes what the counts would be, so a mismatch means convert
+ * again -- the alternative, using it with a warning, is how a user ends up
+ * with yesterday's genotypes in today's table.
+ */
+bool countFileUsable(const string& path,const ParamSet& p,
+		     const ScanResult& scan,string& why)
+{
+  ifstream in(path.c_str(),ios::binary);
+  if(!in.is_open()) { why = "it does not exist"; return false; }
+
+  char magic[8];
+  in.read(magic,8);
+  if(!in.good() || memcmp(magic,COUNT_MAGIC,8) != 0)
+    {
+      why = "it is not an adze count file";
+      return false;
+    }
+
+  int J = 0;
+  long long loci = 0;
+  if(!readInt(in,J) || !readLL(in,loci)) { why = "its header is truncated"; return false; }
+
+  string src, pops, expops, miss;
+  long long bytes = 0, stamp = 0;
+  int groupCol = 0, ndRows = 0;
+  if(!readStr(in,src) || !readLL(in,bytes) || !readLL(in,stamp)
+     || !readStr(in,pops) || !readStr(in,expops)
+     || !readStr(in,miss) || !readInt(in,groupCol) || !readInt(in,ndRows))
+    {
+      why = "its header is truncated";
+      return false;
+    }
+
+  if(src != p.dfile.val) { why = "it was converted from " + src; return false; }
+  if(bytes != fileSize(p.dfile.val)) { why = "the data file has changed size since"; return false; }
+  if(stamp != fileStamp(p.dfile.val)) { why = "the data file has been modified since"; return false; }
+  if(pops != p.pops.val || expops != p.expops.val) { why = "the grouping filters differ"; return false; }
+  if(miss != p.miss.val) { why = "the missing-data code differs"; return false; }
+  if(groupCol != p.sort_by.val) { why = "a different column names the grouping"; return false; }
+  if(ndRows != p.nd_rows.val) { why = "a different number of header rows"; return false; }
+  if(loci != scan.numLoci || J != int(scan.groupName.size()))
+    {
+      why = "it holds a different number of loci or groupings";
+      return false;
+    }
+
+  for(int g = 0; g < J; g++)
+    {
+      string nm;
+      long long copies = 0;
+      if(!readStr(in,nm) || !readLL(in,copies)) { why = "its header is truncated"; return false; }
+      if(nm != scan.groupName[g] || copies != scan.groupRows[g])
+	{
+	  why = "its groupings differ from this run's";
+	  return false;
+	}
+    }
+
+  why = "";
+  return true;
 }
 
 LocusSource* openCountFileSource(const string& path,const ScanResult& scan)

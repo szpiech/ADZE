@@ -177,6 +177,17 @@ LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan);
 long long transposeStructure(ParamSet& p,const ScanResult& scan,
 			     const string& path,long long lociPerPass);
 LocusSource* openCountFileSource(const string& path,const ScanResult& scan);
+
+/*
+ * Where a conversion is written, how large it will be, whether one already
+ * on disk can be trusted, and how many loci to convert at a time. See
+ * doc/streaming.md, decision 3.
+ */
+string countFilePath(const ParamSet& p);
+long long countFileBytes(const ScanResult& scan);
+long long convertChunk(const ParamSet& p,const ScanResult& scan);
+bool countFileUsable(const string& path,const ParamSet& p,
+		     const ScanResult& scan,string& why);
 void printDryRun(const ParamSet& p,const ScanResult& scan,
 		 const vector< vector<int> >& tuples,list<int>& k,
 		 bool do_rich,bool do_priv,bool do_tuple);

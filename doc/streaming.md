@@ -91,8 +91,37 @@ which the sweep then consumes exactly as it consumes a VCF.
 Consequences worth stating: allele-label interning (the linear scan over
 labels, the first-seen ordering) lives in the converter and leaves the hot
 path; the conversion needs temporary disk, counts rather than genotypes; and
-a dataset analysed repeatedly can be converted once, which is why the
-converted file is offered as a first-class artifact rather than hidden in a
-temporary directory. Its lifecycle is settled with that step.
+a dataset analysed repeatedly can be converted once.
 
 VCF input pays none of this.
+
+### The converted file
+
+**What it holds.** A header naming the groupings and their gene copies, then
+one record per locus: the locus name, its allele count, and the counts
+slot-major with stride *J*. Coordinates are not repeated, the scan having
+them already. Counts rather than genotypes, so it is small: an 80 000-locus
+STRUCTURE file of 122 MB converts to 7.2 MB.
+
+**Where it goes, and when it disappears.** Beside the output, as
+`<out-prefix>.counts.tmp`, not in a system temporary directory — it can be
+large, and the output directory is the one the user chose for large files.
+It is removed when the run ends, whether or not the run succeeded. A file
+the user names explicitly is never removed.
+
+**Converting once for many runs.** A named file is reused when it describes
+this run's data, which means all of: the same source path, the same size,
+the same modification time, the same `--pops`/`--exclude-pops`, the same
+missing-data code, the same grouping column, and the same header-row count —
+plus the same groupings, in the same order, with the same gene copies. Every
+one of those changes what the counts would be.
+
+A mismatch is reported with its reason and the data converted again. It is
+never used with a warning: a stale count file is yesterday's genotypes in
+today's table, and no warning makes that acceptable.
+
+**What the check cannot see.** Size and modification time are not a hash. An
+edit that preserves both — rewriting a file in place within the filesystem's
+timestamp resolution — would go unnoticed. Name a converted file when the
+input is settled; while data is still moving, let the run convert into its
+temporary file each time.

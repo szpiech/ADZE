@@ -202,17 +202,35 @@ int main(int argc, char* argv[])
 	    }
 	  else
 	    {
-	      tmp = string(sourcePath) + ".counts.tmp";
-	      const long long budget = 64LL*1024*1024;
-	      const long long perLocus =
-		(long long)(sizeof(int))*4*int(scan.groupName.size()) + 64;
-	      long long chunk = budget/(perLocus > 0 ? perLocus : 1);
-	      //A development lever until --convert-chunk exists: force the
-	      //multi-pass path on a small fixture, where it can be checked.
-	      if(const char* forced = getenv("ADZE_CONVERT_CHUNK")) chunk = atoll(forced);
-	      if(chunk < 1) chunk = 1;
-	      passes = transposeStructure(sourceParams,scan,tmp,chunk);
-	      src = openCountFileSource(tmp,scan);
+	      /*
+	       * The lifecycle the sweep will use: a converted file that matches
+	       * this run's data is read as it stands, anything else is converted
+	       * again, and a conversion nobody asked to keep is removed.
+	       */
+	      const string kept = getenv("ADZE_COUNT_FILE")
+		? string(getenv("ADZE_COUNT_FILE")) : string();
+	      const string path = kept.empty() ? countFilePath(sourceParams) : kept;
+
+	      string why;
+	      if(countFileUsable(path,sourceParams,scan,why))
+		{
+		  adzelog() << "Reusing the converted counts in " << path << "\n";
+		  passes = 0;
+		}
+	      else
+		{
+		  if(!kept.empty() && why != "it does not exist")
+		    {
+		      adzelog() << "Converting again: " << path << " cannot be used, "
+				<< why << ".\n";
+		    }
+		  long long chunk = convertChunk(sourceParams,scan);
+		  if(const char* forced = getenv("ADZE_CONVERT_CHUNK")) chunk = atoll(forced);
+		  passes = transposeStructure(sourceParams,scan,path,chunk);
+		}
+
+	      if(kept.empty()) tmp = path;     //ours to remove
+	      src = openCountFileSource(path,scan);
 	    }
 	  adzelog() << "converted in " << passes
 		    << (passes == 1 ? " pass\n" : " passes\n");
