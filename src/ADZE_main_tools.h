@@ -195,6 +195,16 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
 void dumpCounts(const char* path,Population pop[],int numDivs,int numLoci,
 		const LocusMap& lmap);
 void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo);
+void writeFullDataRow(ostream& out,const string& locus,
+		      const vector<string>& label,const vector<double>& vals,
+		      int gFrom,int gTo,int gStride);
+void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
+	       const vector<Window>& windows,const LocusMap& lmap,
+	       const vector< vector<int> >& tuples,
+	       bool do_rich,bool do_priv,bool do_tuple,
+	       const string& richness_out,const string& private_out,
+	       const string& comb_out,
+	       bool full_rich,bool full_priv,bool full_comb);
 void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
 		       int lo,int hi,int gFrom,int gTo,int gStride,
 		       const Population& pop);

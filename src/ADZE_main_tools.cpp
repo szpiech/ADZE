@@ -3568,7 +3568,8 @@ void calcAllPgs(Population pop[],int numDivs,const ParamSet &param,
       bar.init();
     }
 
-  /*
+
+/*
    * Calculate the private allelic richness
    *            m              J
    *            _             ___ 
@@ -3908,4 +3909,431 @@ string nameCreate(string name,string toPut)
 
   return name;
   */
+}
+
+/*
+ * One locus's rows in the _fulldata file: a row per label, the locus first.
+ * The streaming sweep has a locus's values for every grouping at once and
+ * nothing afterwards, so this is where the file's row order comes from --
+ * doc/streaming.md, decision 1.
+ */
+void writeFullDataRow(ostream& out,const string& locus,
+		      const vector<string>& label,const vector<double>& vals,
+		      int gFrom,int gTo,int gStride)
+{
+  for(size_t x = 0; x < label.size(); x++)
+    {
+      out << locus << '\t' << label[x];
+      for(int g = gFrom; g <= gTo; g++)
+	{
+	  const double v = vals[x*size_t(gStride) + size_t(g)];
+	  out << '\t';
+	  if(v == -9) out << "NA";
+	  else out << v;
+	}
+      out << '\n';
+    }
+  return;
+}
+
+/*
+ * The sweep, over a stream of loci.
+ *
+ * Where calcAllAgs, calcAllPgs and calcPgTuples each walked the whole
+ * dataset once -- and each rebuilt the per-locus Q table as it went, the
+ * tuple pass rebuilding it once per tuple -- this walks it once in total and
+ * builds that table once per locus. Everything reads from the same table:
+ * allelic richness per grouping, private allelic richness per grouping, and
+ * each requested tuple.
+ *
+ * Nothing per-locus is kept. Each statistic carries a running mean and sum
+ * of squared deviations per g, and per window per g, exactly as the passes
+ * do now; the per-locus files stream as the loci go by, which is why their
+ * rows are locus-major (doc/streaming.md, decision 1).
+ *
+ * The arithmetic is the passes' arithmetic, term for term and in the same
+ * order, because the point of the rewrite is that no number changes:
+ *
+ *   richness   undefined where g exceeds that grouping's Nj at the locus
+ *   private    undefined where g exceeds the smallest Nj at the locus
+ *   tuples     never marked undefined; their ladder is capped instead, at
+ *              the smallest Nj anywhere
+ */
+void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
+	       const vector<Window>& windows,const LocusMap& lmap,
+	       const vector< vector<int> >& tuples,
+	       bool do_rich,bool do_priv,bool do_tuple,
+	       const string& richness_out,const string& private_out,
+	       const string& comb_out,
+	       bool full_rich,bool full_priv,bool full_comb)
+{
+  const int J = int(scan.groupName.size());
+  const int numLoci = int(scan.survivors);
+  const int T = int(tuples.size());
+
+  //Each statistic's ladder, as each pass computes it today.
+  const int gRich = param.g.val;
+  int gPair = param.g.val;
+  if(scan.feasibleG < gPair) gPair = scan.feasibleG;
+  if(gPair < 1) gPair = 1;
+
+  const int gCeilRich = param.at_g_val ? param.at_g_val : gRich;
+  const int gCeilPair = param.at_g_val ? param.at_g_val : gPair;
+  const int gCeil = (gCeilRich > gCeilPair) ? gCeilRich : gCeilPair;
+  const int gStride = gCeil + 1;
+
+  const int gFrom = param.at_g_val ? param.at_g_val : 1;
+  const int gToRich = param.at_g_val ? param.at_g_val : gCeilRich;
+  const int gToPair = param.at_g_val ? param.at_g_val : gCeilPair;
+
+  //Output files, opened in the order the passes open them.
+  ofstream ag_out,ag_full_out,ag_win_out;
+  ofstream pg_out,pg_full_out,pg_win_out;
+  ofstream cb_out,cb_full_out,cb_win_out;
+
+  if(do_rich)
+    {
+      ag_out.open(richness_out.c_str());
+      if(param.tabbed()) ag_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+      if(full_rich)
+	{
+	  const string name = nameCreate(richness_out,"_fulldata");
+	  ag_full_out.open(name.c_str());
+	  writeFullDataHeader(ag_full_out,"POP_GROUPING",gFrom,gToRich);
+	}
+      if(!windows.empty())
+	{
+	  const string name = nameCreate(richness_out,"_windows");
+	  ag_win_out.open(name.c_str());
+	  writeWindowHeader(ag_win_out,"POP_GROUPING");
+	}
+    }
+
+  if(do_priv)
+    {
+      pg_out.open(private_out.c_str());
+      if(param.tabbed()) pg_out << "POP_GROUPING\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+      if(full_priv)
+	{
+	  const string name = nameCreate(private_out,"_fulldata");
+	  pg_full_out.open(name.c_str());
+	  writeFullDataHeader(pg_full_out,"POP_GROUPING",gFrom,gToPair);
+	}
+      if(!windows.empty())
+	{
+	  const string name = nameCreate(private_out,"_windows");
+	  pg_win_out.open(name.c_str());
+	  writeWindowHeader(pg_win_out,"POP_GROUPING");
+	}
+    }
+
+  if(do_tuple && T > 0)
+    {
+      cb_out.open(comb_out.c_str());
+      if(param.tabbed())
+	{
+	  cb_out << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+	}
+      if(full_comb)
+	{
+	  const string name = nameCreate(comb_out,"_fulldata");
+	  cb_full_out.open(name.c_str());
+	  writeFullDataHeader(cb_full_out,"TUPLE",gFrom,gToPair);
+	}
+      if(!windows.empty())
+	{
+	  const string name = nameCreate(comb_out,"_windows");
+	  cb_win_out.open(name.c_str());
+	  writeWindowHeader(cb_win_out,"TUPLE");
+	}
+    }
+
+  //One accumulator per grouping, per grouping again, and per tuple.
+  vector<Running> rich(J), priv(J), comb(T);
+  vector<Running> richWin(J), privWin(J), combWin(T);
+  for(int j = 0; j < J; j++)
+    {
+      rich[j].init(size_t(gStride));
+      priv[j].init(size_t(gStride));
+      if(!windows.empty())
+	{
+	  richWin[j].init(windows.size()*size_t(gStride));
+	  privWin[j].init(windows.size()*size_t(gStride));
+	}
+    }
+  for(int m = 0; m < T; m++)
+    {
+      comb[m].init(size_t(gStride));
+      if(!windows.empty()) combWin[m].init(windows.size()*size_t(gStride));
+    }
+
+  //Tuple membership, hoisted out of the locus loop as the tuple pass does.
+  vector< vector<char> > inTuple(T,vector<char>(J,0));
+  vector<string> tupleLabel(T);
+  {
+    vector<string> names;
+    for(int m = 0; m < T; m++)
+      {
+	names.assign(tuples[m].size(),string());
+	for(size_t x = 0; x < tuples[m].size(); x++)
+	  {
+	    names[x] = scan.groupName[tuples[m][x]];
+	    inTuple[m][tuples[m][x]] = 1;
+	  }
+	tupleLabel[m] = combineNames(&names[0],int(names.size()),
+				     param.tabbed() ? ',' : ' ');
+      }
+  }
+
+  WindowCursor richCursor, privCursor, combCursor;
+  richCursor.init(windows);
+  privCursor.init(windows);
+  combCursor.init(windows);
+
+  ProgressBar bar(&adzelog(),double(numLoci),BARLEN[0]);
+  if(param.pp.val) bar.init();
+
+  vector<double> q;
+  vector<double> vRich(size_t(J)*gStride), vPriv(size_t(J)*gStride),
+    vComb(size_t(T > 0 ? T : 1)*gStride);
+  vector<double> rowRich(size_t(J)*gStride), rowPriv(size_t(J)*gStride);
+
+  LocusCounts locus;
+  long long index = 0;        //position among the surviving loci
+  long long seen = 0;         //position in the file, dropped loci included
+
+  while(src.next(locus))
+    {
+      const bool keep = (size_t(seen) >= scan.dropped.size()) || !scan.dropped[size_t(seen)];
+      seen++;
+      if(!keep) continue;
+
+      const int slots = locus.slots;
+      const int here = int(index);
+      index++;
+
+      //Q for every grouping at this locus, once.
+      q.assign(size_t(J)*slots*gStride,0.0);
+      int minNj = 0;
+      for(int j = 0; j < J; j++)
+	{
+	  const int Nj = locus.nj[j];
+	  if(j == 0 || Nj < minNj) minNj = Nj;
+
+	  const int gTop = (gCeil < Nj) ? gCeil : Nj;
+	  for(int i = 0; i < slots; i++)
+	    {
+	      const int Nji = locus.count[size_t(i)*J + j];
+	      double* qpi = &q[(size_t(j)*slots + i)*gStride];
+	      double Q = 1;
+	      for(int g = 1; g <= gTop; g++)
+		{
+		  Q *= double(Nj - Nji - (g-1))/double(Nj - (g-1));
+		  qpi[g] = Q;
+		}
+	    }
+	}
+
+      if(do_rich)
+	{
+	  for(int j = 0; j < J; j++)
+	    {
+	      const int Nj = locus.nj[j];
+	      for(int g = gFrom; g <= gToRich; g++)
+		{
+		  double v = -9;
+		  if(g <= Nj)
+		    {
+		      double total = 0;
+		      for(int i = 0; i < slots; i++)
+			{
+			  total += 1 - q[(size_t(j)*slots + i)*gStride + g];
+			}
+		      v = total;
+		    }
+		  rowRich[size_t(j)*gStride + g] = v;
+		  rich[j].add(size_t(g),v);
+		}
+	    }
+	}
+
+      if(do_priv)
+	{
+	  for(int j = 0; j < J; j++)
+	    {
+	      for(int g = gFrom; g <= gToPair; g++)
+		{
+		  double v = -9;
+		  if(minNj >= g)
+		    {
+		      double total = 0;
+		      for(int i = 0; i < slots; i++)
+			{
+			  double Q = 1;
+			  for(int pj = 0; pj < J; pj++)
+			    {
+			      if(pj != j) Q *= q[(size_t(pj)*slots + i)*gStride + g];
+			    }
+			  const double P = 1 - q[(size_t(j)*slots + i)*gStride + g];
+			  total += P*Q;
+			}
+		      v = total;
+		    }
+		  rowPriv[size_t(j)*gStride + g] = v;
+		  priv[j].add(size_t(g),v);
+		}
+	    }
+	}
+
+      if(do_tuple && T > 0)
+	{
+	  for(int m = 0; m < T; m++)
+	    {
+	      const vector<int>& tuple = tuples[m];
+	      const int k = int(tuple.size());
+
+	      for(int g = gFrom; g <= gToPair; g++)
+		{
+		  double pg = 0;
+		  for(int i = 0; i < slots; i++)
+		    {
+		      double P = 1, Q = 1;
+		      for(int x = 0; x < k; x++)
+			{
+			  P *= (1 - q[(size_t(tuple[x])*slots + i)*gStride + g]);
+			}
+		      for(int pj = 0; pj < J; pj++)
+			{
+			  if(!inTuple[m][pj]) Q *= q[(size_t(pj)*slots + i)*gStride + g];
+			}
+		      pg += (P*Q);
+		    }
+		  vComb[size_t(m)*gStride + g] = pg;
+		  comb[m].add(size_t(g),pg);
+		}
+	    }
+	}
+
+      //Windows: the same value, into whichever windows cover this locus.
+      if(!windows.empty())
+	{
+	  if(do_rich)
+	    {
+	      const vector<size_t>& open = richCursor.at(here);
+	      for(size_t w = 0; w < open.size(); w++)
+		{
+		  for(int j = 0; j < J; j++)
+		    {
+		      for(int g = gFrom; g <= gToRich; g++)
+			{
+			  richWin[j].add(open[w]*size_t(gStride) + size_t(g),
+					 rowRich[size_t(j)*gStride + g]);
+			}
+		    }
+		}
+	    }
+	  if(do_priv)
+	    {
+	      const vector<size_t>& open = privCursor.at(here);
+	      for(size_t w = 0; w < open.size(); w++)
+		{
+		  for(int j = 0; j < J; j++)
+		    {
+		      for(int g = gFrom; g <= gToPair; g++)
+			{
+			  privWin[j].add(open[w]*size_t(gStride) + size_t(g),
+					 rowPriv[size_t(j)*gStride + g]);
+			}
+		    }
+		}
+	    }
+	  if(do_tuple && T > 0)
+	    {
+	      const vector<size_t>& open = combCursor.at(here);
+	      for(size_t w = 0; w < open.size(); w++)
+		{
+		  for(int m = 0; m < T; m++)
+		    {
+		      for(int g = gFrom; g <= gToPair; g++)
+			{
+			  combWin[m].add(open[w]*size_t(gStride) + size_t(g),
+					 vComb[size_t(m)*gStride + g]);
+			}
+		    }
+		}
+	    }
+	}
+
+      //Per-locus rows, as the loci go by.
+      if(do_rich && full_rich)
+	{
+	  writeFullDataRow(ag_full_out,locus.name,scan.groupName,rowRich,
+			   gFrom,gToRich,gStride);
+	}
+      if(do_priv && full_priv)
+	{
+	  writeFullDataRow(pg_full_out,locus.name,scan.groupName,rowPriv,
+			   gFrom,gToPair,gStride);
+	}
+      if(do_tuple && full_comb && T > 0)
+	{
+	  writeFullDataRow(cb_full_out,locus.name,tupleLabel,vComb,
+			   gFrom,gToPair,gStride);
+	}
+
+      if(param.pp.val) bar.adv(1);
+    }
+
+  if(param.pp.val) bar.done();
+
+  //Summaries, in the order the passes wrote them: grouping outer, g inner.
+  for(int j = 0; do_rich && j < J; j++)
+    {
+      for(int g = gFrom; g <= gToRich; g++)
+	{
+	  Stats st;
+	  rich[j].into(st,size_t(g),numLoci);
+	  st.printStats(ag_out,scan.groupName[j],g,param.tabbed());
+	}
+      if(!windows.empty())
+	{
+	  writeWindowRunning(ag_win_out,richWin[j],gStride,windows,lmap,
+			     scan.groupName[j],gFrom,gToRich);
+	}
+      if(!param.tabbed()) ag_out << endl;
+    }
+
+  for(int j = 0; do_priv && j < J; j++)
+    {
+      for(int g = gFrom; g <= gToPair; g++)
+	{
+	  Stats st;
+	  priv[j].into(st,size_t(g),numLoci);
+	  st.printStats(pg_out,scan.groupName[j],g,param.tabbed());
+	}
+      if(!windows.empty())
+	{
+	  writeWindowRunning(pg_win_out,privWin[j],gStride,windows,lmap,
+			     scan.groupName[j],gFrom,gToPair);
+	}
+      if(!param.tabbed()) pg_out << endl;
+    }
+
+  for(int m = 0; do_tuple && m < T; m++)
+    {
+      for(int g = gFrom; g <= gToPair; g++)
+	{
+	  Stats st;
+	  comb[m].into(st,size_t(g),numLoci);
+	  st.printStats(cb_out,tupleLabel[m],g,param.tabbed());
+	}
+      if(!windows.empty())
+	{
+	  writeWindowRunning(cb_win_out,combWin[m],gStride,windows,lmap,
+			     tupleLabel[m],gFrom,gToPair);
+	}
+      if(!param.tabbed()) cb_out << endl;
+    }
+
+  return;
 }
