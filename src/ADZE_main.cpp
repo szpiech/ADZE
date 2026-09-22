@@ -177,6 +177,102 @@ int main(int argc, char* argv[])
   adzelog() << "Reading " << p.dfile.val << "...\n";
 
   /*
+   * The streaming path, while it is being brought up: scan, then one sweep
+   * over the loci, with nothing resident between them. It is behind
+   * ADZE_STREAM until it has been shown to produce what the current path
+   * produces -- the equivalence suite is the gate -- and then it becomes
+   * the only path and this switch goes away.
+   */
+  if(getenv("ADZE_STREAM"))
+    {
+      ScanResult scan;
+      string countPath;
+
+      try
+	{
+	  scanDataset(p,scan);
+	  scan.resolve(p.tol.val);
+
+	  const int numDivs = int(scan.groupName.size());
+	  if(scan.survivors < 1)
+	    {
+	      cerr << "ERROR: no locus survived the missing-data filter.\n";
+	      return EXIT_DATA;
+	    }
+
+	  if(!p.g.set)
+	    {
+	      p.g.val = (scan.feasibleG < 1) ? 1 : scan.feasibleG;
+	    }
+
+	  //Which tuples, and which file each belongs to.
+	  vector< vector<int> > tuples;
+	  vector<int> tupleFile;
+	  vector<string> tupleOut;
+	  if(do_tuple)
+	    {
+	      if(p.tuple_file.set)
+		{
+		  if(!readTupleFile(p.tuple_file.val,scan.groupName,tuples))
+		    {
+		      return EXIT_USAGE;
+		    }
+		  tupleOut.push_back(p.c_out.val);
+		  tupleFile.assign(tuples.size(),0);
+		}
+	      else
+		{
+		  if(!validK(numDivs,k)) return EXIT_USAGE;
+		  for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+		    {
+		      ostringstream suffix;
+		      suffix << "_" << *i;
+		      tupleOut.push_back(nameCreate(p.c_out.val,suffix.str()));
+
+		      vector< vector<int> > ofK;
+		      buildKTuples(numDivs,*i,ofK);
+		      for(size_t x = 0; x < ofK.size(); x++)
+			{
+			  tuples.push_back(ofK[x]);
+			  tupleFile.push_back(int(tupleOut.size())-1);
+			}
+		    }
+		}
+	    }
+
+	  vector<Window> windows;
+	  if(p.windowed()) buildWindows(scan.lmap,p,windows);
+
+	  LocusSource* src = 0;
+	  if(wantsVCF(p.format.val,p.dfile.val))
+	    {
+	      src = openVCFSource(p,scan);
+	    }
+	  else
+	    {
+	      countPath = countFilePath(p);
+	      string why;
+	      if(!countFileUsable(countPath,p,scan,why))
+		{
+		  transposeStructure(p,scan,countPath,convertChunk(p,scan));
+		}
+	      src = openCountFileSource(countPath,scan);
+	    }
+
+	  sweepLoci(*src,scan,p,windows,scan.lmap,tuples,tupleFile,tupleOut,
+		    do_rich,do_priv,do_tuple,p.r_out.val,p.p_out.val,
+		    p.full_r.val,p.full_p.val,p.full_c.val);
+
+	  delete src;
+	  if(!countPath.empty()) remove(countPath.c_str());
+	}
+      catch(BAD_FILE x) { return EXIT_IO; }
+      catch(BAD_PARAM x) { return EXIT_DATA; }
+
+      return EXIT_OK;
+    }
+
+  /*
    * Development facility: walk the locus source and write the counts it
    * yields in the same layout the reader's dump uses (see dumpCounts), so
    * the two can be diffed directly. The sweep will read exactly these.

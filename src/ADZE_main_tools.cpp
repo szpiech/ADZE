@@ -3428,9 +3428,17 @@ void dumpCounts(const char* path, Population pop[], int numDivs, int numLoci,
  * A value undefined at that g is NA, in both output modes; the row is kept
  * either way, so a locus that is undefined everywhere is still visible.
  */
-void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo)
+/*
+ * The _fulldata header. locusMajor puts the locus first, matching the row
+ * order the streaming sweep writes: a locus's values for every grouping
+ * arrive together and nothing comes back to them (doc/streaming.md,
+ * decision 1).
+ */
+void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo,
+			 bool locusMajor)
 {
-  out << labelCols << "\tLOCUS";
+  if(locusMajor) out << "LOCUS\t" << labelCols;
+  else out << labelCols << "\tLOCUS";
   for(int g = gFrom; g <= gTo; g++) out << "\tG" << g;
   out << "\n";
   return;
@@ -3962,9 +3970,9 @@ void writeFullDataRow(ostream& out,const string& locus,
 void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       const vector<Window>& windows,const LocusMap& lmap,
 	       const vector< vector<int> >& tuples,
+	       const vector<int>& tupleFile,const vector<string>& tupleOut,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
-	       const string& comb_out,
 	       bool full_rich,bool full_priv,bool full_comb)
 {
   const int J = int(scan.groupName.size());
@@ -3989,7 +3997,6 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
   //Output files, opened in the order the passes open them.
   ofstream ag_out,ag_full_out,ag_win_out;
   ofstream pg_out,pg_full_out,pg_win_out;
-  ofstream cb_out,cb_full_out,cb_win_out;
 
   if(do_rich)
     {
@@ -3999,7 +4006,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	{
 	  const string name = nameCreate(richness_out,"_fulldata");
 	  ag_full_out.open(name.c_str());
-	  writeFullDataHeader(ag_full_out,"POP_GROUPING",gFrom,gToRich);
+	  writeFullDataHeader(ag_full_out,"POP_GROUPING",gFrom,gToRich,true);
 	}
       if(!windows.empty())
 	{
@@ -4017,7 +4024,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	{
 	  const string name = nameCreate(private_out,"_fulldata");
 	  pg_full_out.open(name.c_str());
-	  writeFullDataHeader(pg_full_out,"POP_GROUPING",gFrom,gToPair);
+	  writeFullDataHeader(pg_full_out,"POP_GROUPING",gFrom,gToPair,true);
 	}
       if(!windows.empty())
 	{
@@ -4027,24 +4034,32 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	}
     }
 
+  /*
+   * A k range writes one file per k, so the tuples of a run belong to
+   * several output files. They are all accumulated in the same pass and
+   * sorted into their files when the sweep ends.
+   */
+  const int F = int(tupleOut.size());
+  vector<ofstream*> cbOut(F,(ofstream*)0), cbFull(F,(ofstream*)0), cbWin(F,(ofstream*)0);
+
   if(do_tuple && T > 0)
     {
-      cb_out.open(comb_out.c_str());
-      if(param.tabbed())
+      for(int f = 0; f < F; f++)
 	{
-	  cb_out << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
-	}
-      if(full_comb)
-	{
-	  const string name = nameCreate(comb_out,"_fulldata");
-	  cb_full_out.open(name.c_str());
-	  writeFullDataHeader(cb_full_out,"TUPLE",gFrom,gToPair);
-	}
-      if(!windows.empty())
-	{
-	  const string name = nameCreate(comb_out,"_windows");
-	  cb_win_out.open(name.c_str());
-	  writeWindowHeader(cb_win_out,"TUPLE");
+	  cbOut[f] = new ofstream(tupleOut[f].c_str());
+	  if(param.tabbed()) *cbOut[f] << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+	  if(full_comb)
+	    {
+	      const string name = nameCreate(tupleOut[f],"_fulldata");
+	      cbFull[f] = new ofstream(name.c_str());
+	      writeFullDataHeader(*cbFull[f],"TUPLE",gFrom,gToPair,true);
+	    }
+	  if(!windows.empty())
+	    {
+	      const string name = nameCreate(tupleOut[f],"_windows");
+	      cbWin[f] = new ofstream(name.c_str());
+	      writeWindowHeader(*cbWin[f],"TUPLE");
+	    }
 	}
     }
 
@@ -4277,8 +4292,22 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	}
       if(do_tuple && full_comb && T > 0)
 	{
-	  writeFullDataRow(cb_full_out,locus.name,tupleLabel,vComb,
-			   gFrom,gToPair,gStride);
+	  for(int f = 0; f < F; f++)
+	    {
+	      for(int m = 0; m < T; m++)
+		{
+		  if(tupleFile[m] != f) continue;
+		  *cbFull[f] << locus.name << '\t' << tupleLabel[m];
+		  for(int g = gFrom; g <= gToPair; g++)
+		    {
+		      const double v = vComb[size_t(m)*gStride + g];
+		      *cbFull[f] << '\t';
+		      if(v == -9) *cbFull[f] << "NA";
+		      else *cbFull[f] << v;
+		    }
+		  *cbFull[f] << '\n';
+		}
+	    }
 	}
 
       if(param.pp.val) bar.adv(1);
@@ -4319,20 +4348,32 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
       if(!param.tabbed()) pg_out << endl;
     }
 
-  for(int m = 0; do_tuple && m < T; m++)
+  for(int f = 0; do_tuple && f < F; f++)
     {
-      for(int g = gFrom; g <= gToPair; g++)
+      for(int m = 0; m < T; m++)
 	{
-	  Stats st;
-	  comb[m].into(st,size_t(g),numLoci);
-	  st.printStats(cb_out,tupleLabel[m],g,param.tabbed());
+	  if(tupleFile[m] != f) continue;
+
+	  for(int g = gFrom; g <= gToPair; g++)
+	    {
+	      Stats st;
+	      comb[m].into(st,size_t(g),numLoci);
+	      st.printStats(*cbOut[f],tupleLabel[m],g,param.tabbed());
+	    }
+	  if(!windows.empty())
+	    {
+	      writeWindowRunning(*cbWin[f],combWin[m],gStride,windows,lmap,
+				 tupleLabel[m],gFrom,gToPair);
+	    }
+	  if(!param.tabbed()) *cbOut[f] << endl;
 	}
-      if(!windows.empty())
-	{
-	  writeWindowRunning(cb_win_out,combWin[m],gStride,windows,lmap,
-			     tupleLabel[m],gFrom,gToPair);
-	}
-      if(!param.tabbed()) cb_out << endl;
+    }
+
+  for(int f = 0; f < F; f++)
+    {
+      delete cbOut[f];
+      delete cbFull[f];
+      delete cbWin[f];
     }
 
   return;
