@@ -81,6 +81,39 @@ int min(int,int);
 
 void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
 		 int gMax,int gStride,vector<double>& q);
+/*
+ * What one pass over the input yields without keeping any allele.
+ *
+ * The streaming sweep needs three whole-dataset facts before it can compute
+ * anything: which loci survive --tolerance, what the default MAX_G resolves
+ * to, and where the windows fall. All three follow from how many gene copies
+ * each grouping scored at each locus, which is countable without interning a
+ * single allele label -- so the scan parses genotypes only far enough to tell
+ * a call from a missing one.
+ *
+ * observed[g][l] is that count. The grouping's total gene copies minus it is
+ * the missing count the filter compares against, and it is itself the Nj the
+ * ceilings are taken from.
+ */
+struct ScanResult
+{
+  vector<string> groupName;           //groupings, in output order
+  vector<long long> groupRows;        //gene copies per grouping
+  vector< vector<int> > observed;     //[grouping][locus]: non-missing copies
+  vector<string> locusName;           //only when something needs names
+  LocusMap lmap;                      //coordinates, when the input has them
+  long long numLoci;
+  long long geneCopies;
+
+  ScanResult() : numLoci(0), geneCopies(0) {}
+
+  int nj(int g,long long l) const {return observed[g][size_t(l)];};
+  long long missing(int g,long long l) const
+  {return groupRows[g] - observed[g][size_t(l)];};
+};
+
+void scanDataset(ParamSet& p,ScanResult& out);
+
 void dumpCounts(const char* path,Population pop[],int numDivs,int numLoci,
 		const LocusMap& lmap);
 void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo);

@@ -186,6 +186,25 @@ int main(int argc, char* argv[])
   LocusTable locusTable;
   LocusMap lmap;
 
+  /*
+   * Development facility: run the scan alongside the reader so the two can be
+   * compared where they should agree (see ADZE_DUMP_SCAN and
+   * ADZE_DUMP_COUNTS). It costs an extra pass and is off unless the variable
+   * is set. The scan resolves the same dimensions the reader does, so it runs
+   * on a copy of the parameters rather than on the ones the reader will use.
+   */
+  if(getenv("ADZE_DUMP_SCAN"))
+    {
+      try
+	{
+	  ParamSet scanParams = p;
+	  ScanResult scan;
+	  scanDataset(scanParams,scan);
+	}
+      catch(BAD_FILE x) { return EXIT_IO; }
+      catch(BAD_PARAM x) { return EXIT_DATA; }
+    }
+
   try
     {
       pop = readDataset(p,divisionNames,numDivs,locusTable,lmap);

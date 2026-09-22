@@ -1139,6 +1139,411 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 }
 
 /*
+ * One pass over the input that keeps no alleles.
+ *
+ * See ScanResult. The work is deliberately the reader's minus everything
+ * expensive: no allele labels are interned, no counts per allele are kept,
+ * and nothing per locus survives except one integer per grouping. What comes
+ * out is enough to decide which loci survive, what MAX_G resolves to and
+ * where the windows fall -- the three things the sweep cannot start without.
+ *
+ * The parsing mirrors readStructureInto and readVCFInto exactly, including
+ * their dimension detection, their filtering by --pops/--exclude-pops and
+ * their notion of a gene copy, because a scan that disagreed with the reader
+ * about any of that would filter one set of loci and compute over another.
+ * ADZE_DUMP_SCAN is how that agreement is checked against ADZE_DUMP_COUNTS.
+ */
+static int scanGroup(ScanResult& out,const string& label,
+		     unordered_map<string,int>& groupOf,long long loci)
+{
+  unordered_map<string,int>::iterator it = groupOf.find(label);
+  if(it != groupOf.end()) return it->second;
+
+  const int index = int(out.groupName.size());
+  groupOf.insert(make_pair(label,index));
+  out.groupName.push_back(label);
+  out.groupRows.push_back(0);
+  //A grouping first seen at locus l scored nothing at the loci before it.
+  out.observed.push_back(vector<int>(size_t(loci),0));
+  return index;
+}
+
+static void scanStructure(ParamSet& p,ScanResult& out,LineSource& in,
+			  const vector<string>& keepList,
+			  const vector<string>& dropList,
+			  bool needNames,long long& dataRows)
+{
+  string line;
+  vector<Field> fields;
+
+  if(!in.next(line)) badData("no locus-name row in " + p.dfile.val + ".");
+  tokenize(line,fields);
+
+  const int declaredLoci = int(fields.size());
+  if(declaredLoci < 1) badData("no locus names in the first row of " + p.dfile.val + ".");
+
+  if(p.loci.set && p.loci.val != declaredLoci)
+    {
+      adzelog() << "WARNING: LOCI says " << p.loci.val << " but "
+		<< p.dfile.val << " has " << declaredLoci
+		<< " locus names; using " << declaredLoci << ".\n";
+    }
+  p.loci.val = declaredLoci;
+  out.numLoci = declaredLoci;
+
+  if(needNames)
+    {
+      out.locusName.reserve(fields.size());
+      for(size_t l = 0; l < fields.size(); l++)
+	{
+	  out.locusName.push_back(string(fields[l].first,fields[l].second));
+	}
+    }
+
+  for(int skip = 1; skip < p.nd_rows.val; skip++) in.next(line);
+
+  unordered_map<string,int> groupOf;
+  int ndCols = p.nd_cols.set ? p.nd_cols.val : 0;
+  int groupCol = -1;
+  int expected = 0;
+  string token;
+  long long physicalRows = 0;
+  dataRows = 0;
+
+  while(in.next(line))
+    {
+      physicalRows++;
+      tokenize(line,fields);
+      if(fields.empty()) continue;
+
+      if(expected == 0)
+	{
+	  const int found = int(fields.size()) - declaredLoci;
+	  if(found < 1)
+	    {
+	      ostringstream m;
+	      m << "the first data row of " << p.dfile.val << " has "
+		<< fields.size() << " columns, which leaves no room for "
+		<< declaredLoci << " loci plus at least one label column.";
+	      badData(m.str());
+	    }
+
+	  if(p.nd_cols.set && ndCols != found)
+	    {
+	      adzelog() << "WARNING: NON_DATA_COLS says " << ndCols
+			<< " but the data rows leave room for " << found
+			<< "; using " << found << ".\n";
+	    }
+	  ndCols = found;
+	  p.nd_cols.val = ndCols;
+
+	  if(!p.sort_by.set) p.sort_by.val = ndCols;
+	  groupCol = p.sort_by.val - 1;
+
+	  if(groupCol < 0 || groupCol >= ndCols)
+	    {
+	      ostringstream m;
+	      m << "GROUP_BY_COL " << p.sort_by.val << " is not one of the "
+		<< ndCols << " label columns in " << p.dfile.val << ".";
+	      badData(m.str());
+	    }
+
+	  expected = ndCols + declaredLoci;
+	}
+
+      if(int(fields.size()) != expected)
+	{
+	  ostringstream m;
+	  m << "expected " << expected << " columns at data line " << physicalRows
+	    << " in " << p.dfile.val << " but found " << fields.size()
+	    << ". Check NON_DATA_ROWS, or whether the row is truncated.";
+	  badData(m.str());
+	}
+
+      dataRows++;
+      token.assign(fields[groupCol].first,fields[groupCol].second);
+
+      if(!keepList.empty() &&
+	 find(keepList.begin(),keepList.end(),token) == keepList.end()) continue;
+      if(!dropList.empty() &&
+	 find(dropList.begin(),dropList.end(),token) != dropList.end()) continue;
+
+      const int g = scanGroup(out,token,groupOf,out.numLoci);
+      out.groupRows[g]++;
+      out.geneCopies++;
+
+      vector<int>& seen = out.observed[g];
+      for(int l = 0; l < declaredLoci; l++)
+	{
+	  const Field& f = fields[ndCols + l];
+	  token.assign(f.first,f.second);
+	  if(token.compare(p.miss.val) != 0) seen[size_t(l)]++;
+	}
+    }
+
+  return;
+}
+
+static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
+		    const vector<string>& keepList,
+		    const vector<string>& dropList)
+{
+  unordered_map<string,string> groupOfSample;
+  vector<string> groupOrder;
+  readSampleMap(p.samples.val,groupOfSample,groupOrder);
+
+  unordered_map<string,int> groupOf;
+  for(size_t i = 0; i < groupOrder.size(); i++)
+    {
+      const string& g = groupOrder[i];
+      if(!keepList.empty() &&
+	 find(keepList.begin(),keepList.end(),g) == keepList.end()) continue;
+      if(!dropList.empty() &&
+	 find(dropList.begin(),dropList.end(),g) != dropList.end()) continue;
+      scanGroup(out,g,groupOf,0);
+    }
+
+  if(out.groupName.empty())
+    {
+      badData("no grouping in " + p.samples.val + " survived --pops/--exclude-pops.");
+    }
+
+  string line, token;
+  vector<Field> fields;
+  bool haveHeader = false;
+  vector<int> sampleGroup;
+  vector<int> samplePloidy;
+  int usedSamples = 0;
+  long long records = 0;
+
+  while(in.next(line))
+    {
+      if(line.empty()) continue;
+      if(line.compare(0,2,"##") == 0) continue;
+
+      if(!haveHeader)
+	{
+	  if(line[0] != '#')
+	    {
+	      badData("no #CHROM header line before the records in " + p.dfile.val + ".");
+	    }
+
+	  tokenize(line,fields);
+	  if(fields.size() < 10)
+	    {
+	      badData("the #CHROM line of " + p.dfile.val +
+		      " names no samples; there is nothing to count.");
+	    }
+
+	  sampleGroup.assign(fields.size()-9,-1);
+	  samplePloidy.assign(fields.size()-9,0);
+
+	  for(size_t c = 9; c < fields.size(); c++)
+	    {
+	      token.assign(fields[c].first,fields[c].second);
+	      unordered_map<string,string>::const_iterator it = groupOfSample.find(token);
+	      if(it == groupOfSample.end()) continue;
+
+	      unordered_map<string,int>::const_iterator gi = groupOf.find(it->second);
+	      if(gi == groupOf.end()) continue;
+
+	      sampleGroup[c-9] = gi->second;
+	      usedSamples++;
+	    }
+
+	  if(usedSamples == 0)
+	    {
+	      badData("none of the samples in " + p.dfile.val + " appears in " +
+		      p.samples.val + " under a grouping being analysed.");
+	    }
+
+	  haveHeader = true;
+	  continue;
+	}
+
+      tokenize(line,fields);
+      if(fields.empty()) continue;
+
+      if(fields.size() != sampleGroup.size() + 9)
+	{
+	  ostringstream m;
+	  m << "record " << (records+1) << " of " << p.dfile.val << " has "
+	    << fields.size() << " columns but the header declares "
+	    << (sampleGroup.size() + 9) << ".";
+	  badData(m.str());
+	}
+
+      {
+	const string chrom(fields[0].first,fields[0].second);
+	const string posText(fields[1].first,fields[1].second);
+	out.lmap.chrom.push_back(out.lmap.chromIndex(chrom));
+	out.lmap.pos.push_back(atoll(posText.c_str()));
+      }
+
+      int gtField = -1;
+      {
+	const char* f = fields[8].first;
+	const size_t n = fields[8].second;
+	int index = 0;
+	size_t i = 0;
+	while(i <= n)
+	  {
+	    size_t j = i;
+	    while(j < n && f[j] != ':') j++;
+	    if(j - i == 2 && f[i] == 'G' && f[i+1] == 'T') { gtField = index; break; }
+	    if(j >= n) break;
+	    i = j + 1;
+	    index++;
+	  }
+      }
+      if(gtField < 0)
+	{
+	  ostringstream m;
+	  m << "record " << (records+1) << " of " << p.dfile.val
+	    << " has no GT in its FORMAT column.";
+	  badData(m.str());
+	}
+
+      const size_t l = size_t(records);
+      records++;
+      for(size_t g = 0; g < out.observed.size(); g++) out.observed[g].push_back(0);
+
+      for(size_t c = 0; c < sampleGroup.size(); c++)
+	{
+	  const int g = sampleGroup[c];
+	  if(g < 0) continue;
+
+	  const char* f = fields[c+9].first;
+	  const size_t n = fields[c+9].second;
+
+	  size_t i = 0;
+	  for(int skip = 0; skip < gtField && i < n; skip++)
+	    {
+	      while(i < n && f[i] != ':') i++;
+	      if(i < n) i++;
+	    }
+	  size_t stop = i;
+	  while(stop < n && f[stop] != ':') stop++;
+
+	  if(i >= stop) continue;
+	  if(stop - i == 1 && f[i] == '.') { if(samplePloidy[c] == 0) samplePloidy[c] = 1; continue; }
+
+	  int copies = 0;
+	  size_t a = i;
+	  while(a < stop)
+	    {
+	      size_t b = a;
+	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
+
+	      copies++;
+	      if(!(b - a == 1 && f[a] == '.')) out.observed[g][l]++;
+
+	      a = (b < stop) ? b + 1 : stop;
+	    }
+
+	  if(samplePloidy[c] < copies) samplePloidy[c] = copies;
+	}
+    }
+
+  if(!haveHeader) badData("no #CHROM header line in " + p.dfile.val + ".");
+  if(records == 0) badData("no variant records in " + p.dfile.val + ".");
+
+  //A sample's ploidy is the largest GT it carries anywhere, so the totals are
+  //only knowable here. A sample with no call at any record counts as diploid,
+  //as the reader assumes.
+  for(size_t c = 0; c < sampleGroup.size(); c++)
+    {
+      const int g = sampleGroup[c];
+      if(g < 0) continue;
+      const int ploidy = (samplePloidy[c] > 0) ? samplePloidy[c] : 2;
+      out.groupRows[g] += ploidy;
+      out.geneCopies += ploidy;
+    }
+
+  if(p.loci.set && p.loci.val != int(records))
+    {
+      adzelog() << "WARNING: LOCI says " << p.loci.val << " but " << p.dfile.val
+		<< " has " << records << " records; using " << records << ".\n";
+    }
+  p.loci.val = int(records);
+  out.numLoci = records;
+
+  return;
+}
+
+void scanDataset(ParamSet& p,ScanResult& out)
+{
+  const bool vcf = wantsVCF(p.format.val,p.dfile.val);
+
+  if(vcf && !p.samples.set)
+    {
+      badData("VCF input needs --samples FILE, a sample-to-grouping map.");
+    }
+  if(!vcf && p.samples.set)
+    {
+      adzelog() << "WARNING: --samples is for VCF input and is ignored here.\n";
+    }
+
+  LineSource in;
+  if(!in.open(p.dfile.val))
+    {
+      cerr << "ERROR: could not open " << p.dfile.val << "\n";
+      throw BAD_FILE();
+    }
+  if(!vcf && looksCompressed(p.dfile.val))
+    {
+      badData("compressed input is supported for VCF only.");
+    }
+
+  vector<string> keepList, dropList;
+  splitList(p.pops.val,keepList);
+  splitList(p.expops.val,dropList);
+
+  long long dataRows = 0;
+  if(vcf) scanVCF(p,out,in,keepList,dropList);
+  else scanStructure(p,out,in,keepList,dropList,p.loci_map.set,dataRows);
+
+  if(!vcf)
+    {
+      if(p.dlines.set && p.dlines.val != int(dataRows))
+	{
+	  adzelog() << "WARNING: DATA_LINES says " << p.dlines.val << " but "
+		    << p.dfile.val << " has " << dataRows << " data rows; using "
+		    << dataRows << ".\n";
+	}
+      p.dlines.val = int(dataRows);
+      if(dataRows == 0) badData("no data rows in " + p.dfile.val + ".");
+    }
+  else
+    {
+      p.dlines.val = int(out.geneCopies);
+    }
+
+  if(out.groupName.empty()) badData("no grouping survived the filters.");
+
+  if(!vcf && p.loci_map.set) readLocusMap(p.loci_map.val,out.locusName,out.lmap);
+
+  //Development facility, the counterpart of ADZE_DUMP_COUNTS: the same two
+  //numbers per locus and grouping, from a pass that interned nothing.
+  if(const char* path = getenv("ADZE_DUMP_SCAN"))
+    {
+      ofstream d(path);
+      d << "LOCUS_INDEX\tGROUPING\tNJ\tMISSING\n";
+      for(long long l = 0; l < out.numLoci; l++)
+	{
+	  for(size_t g = 0; g < out.groupName.size(); g++)
+	    {
+	      d << l << "\t" << out.groupName[g] << "\t" << out.nj(int(g),l)
+		<< "\t" << out.missing(int(g),l) << "\n";
+	    }
+	}
+      d.close();
+    }
+
+  return;
+}
+
+/*
  * Read the data file and return a freshly allocated array of numDivs
  * Population objects, one per grouping, with allele counts, sample sizes and
  * missing-data tallies already filled in.
