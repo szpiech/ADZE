@@ -230,6 +230,52 @@ int main(int argc, char* argv[])
   LocusMap lmap;
 
   /*
+   * Development facility: walk the locus source and write the counts it
+   * yields in the same layout the reader's dump uses (see dumpCounts), so
+   * the two can be diffed directly. The sweep will read exactly these.
+   */
+  if(const char* sourcePath = getenv("ADZE_DUMP_SOURCE"))
+    {
+      try
+	{
+	  ParamSet sourceParams = p;
+	  ScanResult scan;
+	  scanDataset(sourceParams,scan,false);
+
+	  LocusSource* src = openVCFSource(sourceParams,scan);
+	  ofstream d(sourcePath);
+	  d << "LOCUS\tCHROM\tPOS\tGROUPING\tNJ\tMISSING\tSLOTS\tNJI\n";
+
+	  LocusCounts locus;
+	  const int J = int(src->groupNames().size());
+	  while(src->next(locus))
+	    {
+	      for(int j = 0; j < J; j++)
+		{
+		  d << locus.name << "\t"
+		    << (locus.chrom < 0 ? string(".") : scan.lmap.chromName[locus.chrom]) << "\t"
+		    << locus.pos << "\t"
+		    << src->groupNames()[j] << "\t"
+		    << locus.nj[j] << "\t"
+		    << (src->geneCopies(j) - locus.nj[j]) << "\t"
+		    << locus.slots << "\t";
+
+		  for(int i = 0; i < locus.slots; i++)
+		    {
+		      if(i) d << ",";
+		      d << locus.count[size_t(i)*J + j];
+		    }
+		  d << "\n";
+		}
+	    }
+	  d.close();
+	  delete src;
+	}
+      catch(BAD_FILE x) { return EXIT_IO; }
+      catch(BAD_PARAM x) { return EXIT_DATA; }
+    }
+
+  /*
    * Development facility: run the scan alongside the reader so the two can be
    * compared where they should agree (see ADZE_DUMP_SCAN and
    * ADZE_DUMP_COUNTS). It costs an extra pass and is off unless the variable

@@ -1139,6 +1139,242 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 }
 
 /*
+ * A VCF read one record at a time.
+ *
+ * The parsing is readVCFInto's, with one difference that is the point of the
+ * rewrite: nothing accumulates. A record's alleles are interned into a tally
+ * that is reused for the next record, the slots are put into the order the
+ * output has always used, and the locus is handed to the caller. The sample
+ * map, the grouping order, the ploidies and the per-grouping totals all come
+ * from the scan, which has already read the file -- so this pass needs no
+ * end-of-file fixups and can hand out the first locus immediately.
+ */
+namespace {
+
+  class VCFSource : public LocusSource
+  {
+  public:
+    VCFSource(ParamSet& p,const ScanResult& scan)
+      : param(p), rows(scan.groupRows), name(scan.groupName), records(0)
+    {
+      if(!in.open(p.dfile.val))
+	{
+	  cerr << "ERROR: could not open " << p.dfile.val << "\n";
+	  throw BAD_FILE();
+	}
+      readHeader();
+    }
+
+    const vector<string>& groupNames() const { return name; }
+    long long geneCopies(int grouping) const { return rows[grouping]; }
+
+    bool next(LocusCounts& out)
+    {
+      const int J = int(name.size());
+      string line;
+
+      while(in.next(line))
+	{
+	  if(line.empty()) continue;
+	  if(line[0] == '#') continue;
+
+	  tokenize(line,fields);
+	  if(fields.empty()) continue;
+
+	  out.name.assign(fields[2].first,fields[2].second);
+	  if(out.name == ".")
+	    {
+	      out.name.assign(fields[0].first,fields[0].second);
+	      out.name += ":";
+	      out.name.append(fields[1].first,fields[1].second);
+	    }
+
+	  {
+	    const string chrom(fields[0].first,fields[0].second);
+	    const string posText(fields[1].first,fields[1].second);
+	    out.chrom = chromIndex(chrom);
+	    out.pos = atoll(posText.c_str());
+	  }
+
+	  //One tally, reused: a locus's alleles are interned and forgotten.
+	  tally.label.clear();
+	  tally.firstSeen.clear();
+	  tally.count.clear();
+
+	  const int gtField = gtPosition(fields[8]);
+
+	  for(size_t c = 0; c < sampleGroup.size(); c++)
+	    {
+	      const int g = sampleGroup[c];
+	      if(g < 0) continue;
+
+	      const char* f = fields[c+9].first;
+	      const size_t n = fields[c+9].second;
+
+	      size_t i = 0;
+	      for(int skip = 0; skip < gtField && i < n; skip++)
+		{
+		  while(i < n && f[i] != ':') i++;
+		  if(i < n) i++;
+		}
+	      size_t stop = i;
+	      while(stop < n && f[stop] != ':') stop++;
+
+	      if(i >= stop) continue;
+	      if(stop - i == 1 && f[i] == '.') continue;
+
+	      int copies = 0;
+	      size_t a = i;
+	      const long long sampleKey =
+		(long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
+
+	      while(a < stop)
+		{
+		  size_t b = a;
+		  while(b < stop && f[b] != '/' && f[b] != '|') b++;
+
+		  copies++;
+		  if(!(b - a == 1 && f[a] == '.'))
+		    {
+		      token.assign(f + a, b - a);
+		      const int sl = tally.slot(token,sampleKey + (copies - 1),J);
+		      tally.count[size_t(sl)*J + g]++;
+		    }
+
+		  a = (b < stop) ? b + 1 : stop;
+		}
+	    }
+
+	  records++;
+	  finish(out,J);
+	  return true;
+	}
+
+      return false;
+    }
+
+  private:
+    ParamSet& param;
+    const vector<long long>& rows;
+    const vector<string>& name;
+    LineSource in;
+    LocusTally tally;
+    vector<Field> fields;
+    vector<int> sampleGroup, sampleRank;
+    vector<string> chromName;
+    unordered_map<string,int> chromOf;
+    string token;
+    long long records;
+
+    int chromIndex(const string& c)
+    {
+      unordered_map<string,int>::iterator it = chromOf.find(c);
+      if(it != chromOf.end()) return it->second;
+      const int i = int(chromName.size());
+      chromName.push_back(c);
+      chromOf.insert(make_pair(c,i));
+      return i;
+    }
+
+    int gtPosition(const Field& format)
+    {
+      const char* f = format.first;
+      const size_t n = format.second;
+      int index = 0;
+      size_t i = 0;
+      while(i <= n)
+	{
+	  size_t j = i;
+	  while(j < n && f[j] != ':') j++;
+	  if(j - i == 2 && f[i] == 'G' && f[i+1] == 'T') return index;
+	  if(j >= n) break;
+	  i = j + 1;
+	  index++;
+	}
+
+      ostringstream m;
+      m << "record " << (records+1) << " of " << param.dfile.val
+	<< " has no GT in its FORMAT column.";
+      badData(m.str());
+      return -1;
+    }
+
+    //Slots into output order, and Nj from the counts.
+    void finish(LocusCounts& out,int J)
+    {
+      const int slots = int(tally.label.size());
+      out.slots = slots;
+      out.count.assign(size_t(slots)*J,0);
+      out.nj.assign(J,0);
+
+      vector<int> order(slots);
+      for(int sl = 0; sl < slots; sl++) order[sl] = sl;
+      sort(order.begin(),order.end(),FirstSeenLess(tally.firstSeen));
+
+      for(int i = 0; i < slots; i++)
+	{
+	  for(int g = 0; g < J; g++)
+	    {
+	      const int c = tally.count[size_t(order[i])*J + g];
+	      out.count[size_t(i)*J + g] = c;
+	      out.nj[g] += c;
+	    }
+	}
+      return;
+    }
+
+    void readHeader()
+    {
+      unordered_map<string,string> groupOfSample;
+      vector<string> groupOrder;
+      readSampleMap(param.samples.val,groupOfSample,groupOrder);
+
+      unordered_map<string,int> indexOf;
+      for(size_t g = 0; g < name.size(); g++) indexOf.insert(make_pair(name[g],int(g)));
+
+      string line;
+      while(in.next(line))
+	{
+	  if(line.empty()) continue;
+	  if(line.compare(0,2,"##") == 0) continue;
+	  if(line[0] != '#')
+	    {
+	      badData("no #CHROM header line before the records in " + param.dfile.val + ".");
+	    }
+
+	  tokenize(line,fields);
+	  sampleGroup.assign(fields.size()-9,-1);
+	  sampleRank.assign(fields.size()-9,0);
+	  vector<int> seenInGroup(name.size(),0);
+
+	  for(size_t c = 9; c < fields.size(); c++)
+	    {
+	      token.assign(fields[c].first,fields[c].second);
+	      unordered_map<string,string>::const_iterator it = groupOfSample.find(token);
+	      if(it == groupOfSample.end()) continue;
+
+	      unordered_map<string,int>::const_iterator gi = indexOf.find(it->second);
+	      if(gi == indexOf.end()) continue;
+
+	      sampleGroup[c-9] = gi->second;
+	      sampleRank[c-9] = seenInGroup[gi->second]++;
+	    }
+	  return;
+	}
+
+      badData("no #CHROM header line in " + param.dfile.val + ".");
+      return;
+    }
+  };
+
+} //anonymous namespace
+
+LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan)
+{
+  return new VCFSource(p,scan);
+}
+
+/*
  * The dry run: what the program would do with this dataset, from the counts
  * alone. Every figure here -- the dimensions, each grouping's sample size and
  * the range of Nj it scored, the largest feasible MAX_G, the window layout

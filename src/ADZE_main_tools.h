@@ -130,6 +130,45 @@ struct ScanResult
 };
 
 void scanDataset(ParamSet& p,ScanResult& out,bool announce = true);
+
+/*
+ * One locus, as the sweep needs it.
+ *
+ * count is slot-major with stride numDivs, and the slots are in the order
+ * the output has always used: by the grouping that first carried the allele,
+ * then by position within that grouping, then by gene copy. nj[g] is that
+ * grouping's scored copies here, so the statistics need nothing else.
+ */
+struct LocusCounts
+{
+  string name;
+  int chrom;                 //-1 when the input carries no coordinates
+  long long pos;
+  int slots;
+  vector<int> count;         //[slot*numDivs + grouping]
+  vector<int> nj;            //per grouping
+
+  LocusCounts() : chrom(-1), pos(-1), slots(0) {}
+};
+
+/*
+ * The engine's only view of the data: loci in file order, one at a time.
+ *
+ * A VCF satisfies it directly, a record being a locus. A STRUCTURE file is
+ * individual-major and cannot, so it is converted to this shape first rather
+ * than the engine learning to read columns -- see doc/streaming.md,
+ * decision 3.
+ */
+class LocusSource
+{
+ public:
+  virtual ~LocusSource() {}
+  virtual bool next(LocusCounts& out) = 0;      //false when the input ends
+  virtual const vector<string>& groupNames() const = 0;
+  virtual long long geneCopies(int grouping) const = 0;
+};
+
+LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan);
 void printDryRun(const ParamSet& p,const ScanResult& scan,
 		 const vector< vector<int> >& tuples,list<int>& k,
 		 bool do_rich,bool do_priv,bool do_tuple);
