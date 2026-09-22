@@ -29,7 +29,6 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 add_executable(adze
   src/ADZE_main.cpp
   src/ADZE_main_tools.cpp
-  src/ADZE_pop.cpp
   src/ADZE_pfile.cpp
   src/ADZE_stats.cpp
   src/ADZE_pbar.cpp

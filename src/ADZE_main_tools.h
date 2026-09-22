@@ -10,12 +10,12 @@
 #include <iomanip>
 #include "ADZE_binom.h"
 #include "ADZE_stats.h"
+#include <list>
 #include "ADZE_pfile.h"
 #ifdef ADZE_HAVE_ZLIB
 #include <zlib.h>
 #endif
 
-#include "ADZE_pop.h"
 #include "ADZE_pbar.h"
 
 
@@ -79,8 +79,6 @@ int min(int,int);
 
 
 
-void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
-		 int gMax,int gStride,vector<double>& q);
 /*
  * What one pass over the input yields without keeping any allele.
  *
@@ -192,8 +190,6 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
 		 const vector< vector<int> >& tuples,list<int>& k,
 		 bool do_rich,bool do_priv,bool do_tuple);
 
-void dumpCounts(const char* path,Population pop[],int numDivs,int numLoci,
-		const LocusMap& lmap);
 void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo,
 			 bool locusMajor = false);
 void writeFullDataRow(ostream& out,const string& locus,
@@ -211,17 +207,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       const string& deleted_out,bool appendTuples = false);
 long long tupleBatch(const ParamSet& param,const ScanResult& scan,
 		     size_t numWindows,long long budget);
-void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
-		       int lo,int hi,int gFrom,int gTo,int gStride,
-		       const Population& pop);
 void writeWindowHeader(ostream& out,const char* groupColumn);
-void writeWindowStats(ostream& out,vector<double>& perLocus,int numLoci,
-		      const vector<Window>& windows,const LocusMap& lmap,
-		      const string& label,int gFirst,int gLast,int gBase);
-void calcAllAgs(Population[],int,const ParamSet&,bool,string,
-		const vector<Window>&,const LocusMap&);
-void calcAllPgs(Population[],int,const ParamSet&,bool,string,
-		const vector<Window>&,const LocusMap&);
 
 
 
@@ -230,22 +216,11 @@ double displayTime(ostream& out);
 void buildKTuples(int numDivs,int k,vector< vector<int> >& out);
 bool readTupleFile(const string& file,const vector<string>& groupName,
 		   vector< vector<int> >& out);
-bool readTupleFile(const string& file,Population pop[],int numDivs,
-		   vector< vector<int> >& out);
-void calcPgTuples(Population pop[],int numDivs,
-		  const vector< vector<int> >& tuples,const ParamSet& p,
-		  bool full_comb,string comb_out,bool namedTuples,
-		  const vector<Window>& windows,const LocusMap& lmap);
 extern bool ADZE_QUIET;
 ostream& adzelog();
 bool stderrIsTerminal();
 string combineNames(string names[],int k,char sep = ' ');
 bool validK(int numDivs,list<int> k);
-void filterLoci(Population pop[],int numDivs,double tol,string private_out,
-		bool pp,LocusMap& lmap,LocusTable& loci);
-Population* readDataset(ParamSet& p,vector<string>& groupNames,int& numDivs,
-			LocusTable& loci,
-			LocusMap& lmap);
 bool wantsVCF(const string& format,const string& path);
 list<int> parseKVals(string str);
 

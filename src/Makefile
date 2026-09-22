@@ -60,10 +60,10 @@ endif
 # on every invocation. Naming it explicitly avoids that:
 #   make TARGET=adze.exe
 TARGET  = adze
-SOURCES = ADZE_main.cpp ADZE_main_tools.cpp ADZE_pop.cpp ADZE_pfile.cpp \
+SOURCES = ADZE_main.cpp ADZE_main_tools.cpp ADZE_pfile.cpp \
           ADZE_stats.cpp ADZE_pbar.cpp ADZE_binom.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
-HEADERS = ADZE_main_tools.h ADZE_pop.h ADZE_pfile.h ADZE_stats.h \
+HEADERS = ADZE_main_tools.h ADZE_pfile.h ADZE_stats.h \
           ADZE_pbar.h ADZE_binom.h
 
 all: $(TARGET)
