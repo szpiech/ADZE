@@ -1139,6 +1139,78 @@ static void readVCFInto(ParamSet& p, Accumulator& acc, LineSource& in,
 }
 
 /*
+ * Everything the sweep needs to know about the dataset as a whole, derived
+ * from the counts alone.
+ *
+ * The filter is the one in Population::recLociDelete: a locus goes if any
+ * grouping failed to score more than a fraction tol of its gene copies
+ * there, and a grouping that scored nothing anywhere has no say. The
+ * ceilings are smallestNj's, taken over the loci that survive, and the count
+ * of loci sitting at a grouping's ceiling is kept because it is what tells a
+ * user whether one locus is costing them the sweep or a third of the genome.
+ */
+void ScanResult::resolve(double tol)
+{
+  const int J = int(groupName.size());
+
+  dropped.assign(size_t(numLoci),0);
+  for(int g = 0; g < J; g++)
+    {
+      if(groupRows[g] == 0) continue;   //no gene copies: no opinion
+
+      const double copies = double(groupRows[g]);
+      for(long long l = 0; l < numLoci; l++)
+	{
+	  if(dropped[size_t(l)]) continue;
+	  if(double(missing(g,l))/copies > tol) dropped[size_t(l)] = 1;
+	}
+    }
+
+  survivors = 0;
+  for(long long l = 0; l < numLoci; l++)
+    {
+      if(!dropped[size_t(l)]) survivors++;
+    }
+
+  ceiling.assign(J,0);
+  binding.assign(J,0);
+  emptyAt.assign(J,0);
+  feasibleG = 0;
+  feasibleGAll = 0;
+
+  for(int g = 0; g < J; g++)
+    {
+      int least = 0, atLeast = 0, none = 0;
+      bool first = true;
+
+      for(long long l = 0; l < numLoci; l++)
+	{
+	  if(dropped[size_t(l)]) continue;
+
+	  const int Nj = nj(g,l);
+	  if(first || Nj < least) { least = Nj; atLeast = 0; first = false; }
+	  if(Nj == least) atLeast++;
+	  if(Nj == 0) none++;
+	}
+
+      ceiling[g] = least;
+      binding[g] = atLeast;
+      emptyAt[g] = none;
+      if(g == 0 || least < feasibleG) feasibleG = least;
+
+      int all = 0;
+      for(long long l = 0; l < numLoci; l++)
+	{
+	  const int Nj = nj(g,l);
+	  if(l == 0 || Nj < all) all = Nj;
+	}
+      if(g == 0 || all < feasibleGAll) feasibleGAll = all;
+    }
+
+  return;
+}
+
+/*
  * One pass over the input that keeps no alleles.
  *
  * See ScanResult. The work is deliberately the reader's minus everything
@@ -1523,8 +1595,12 @@ void scanDataset(ParamSet& p,ScanResult& out)
 
   if(!vcf && p.loci_map.set) readLocusMap(p.loci_map.val,out.locusName,out.lmap);
 
+  out.resolve(p.tol.val);
+
   //Development facility, the counterpart of ADZE_DUMP_COUNTS: the same two
-  //numbers per locus and grouping, from a pass that interned nothing.
+  //numbers per locus and grouping from a pass that interned nothing, plus
+  //what the scan concluded from them, so the filter, the ceilings and the
+  //window layout can be checked against the program's own output.
   if(const char* path = getenv("ADZE_DUMP_SCAN"))
     {
       ofstream d(path);
@@ -1537,6 +1613,43 @@ void scanDataset(ParamSet& p,ScanResult& out)
 		<< "\t" << out.missing(int(g),l) << "\n";
 	    }
 	}
+
+      d << "#SUMMARY\tloci=" << out.numLoci << "\tsurvivors=" << out.survivors
+	<< "\tfeasibleG=" << out.feasibleG
+	<< "\tfeasibleGAll=" << out.feasibleGAll << "\n";
+
+      for(size_t g = 0; g < out.groupName.size(); g++)
+	{
+	  d << "#GROUP\t" << out.groupName[g] << "\trows=" << out.groupRows[g]
+	    << "\tceiling=" << out.ceiling[g] << "\tbinding=" << out.binding[g]
+	    << "\tempty=" << out.emptyAt[g] << "\n";
+	}
+
+      //Dropped loci, highest index first: the order 1.0 wrote _deletedloci.
+      for(long long l = out.numLoci - 1; l >= 0; l--)
+	{
+	  if(!out.dropped[size_t(l)]) continue;
+	  d << "#DROPPED\t" << l << "\t"
+	    << (out.locusName.empty() ? string(".") : out.locusName[size_t(l)]) << "\n";
+	}
+
+      //The window layout follows the survivors, as it does after filtering.
+      if(out.lmap.size() == size_t(out.numLoci) &&
+	 (p.win_bp.set || p.win_loci.set))
+	{
+	  LocusMap kept = out.lmap;
+	  kept.compact(out.dropped);
+
+	  vector<Window> windows;
+	  buildWindows(kept,p,windows);
+	  for(size_t w = 0; w < windows.size(); w++)
+	    {
+	      d << "#WINDOW\t" << kept.chromName[windows[w].chrom] << "\t"
+		<< windows[w].start << "\t" << windows[w].end << "\t"
+		<< windows[w].numLoci() << "\n";
+	    }
+	}
+
       d.close();
     }
 

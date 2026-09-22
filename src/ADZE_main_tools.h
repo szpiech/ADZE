@@ -105,11 +105,28 @@ struct ScanResult
   long long numLoci;
   long long geneCopies;
 
-  ScanResult() : numLoci(0), geneCopies(0) {}
+  /*
+   * What resolve() derives, once every gene copy has been counted. The
+   * filter's denominator is a grouping's total, which is only final at the
+   * end of the pass, so the survival decision cannot be taken locus by locus
+   * while reading -- that is the one thing this pass has to hold.
+   */
+  vector<char> dropped;               //per locus: filtered out by --tolerance
+  long long survivors;
+  vector<int> ceiling;                //per grouping: fewest copies at a survivor
+  vector<int> binding;                //per grouping: loci sitting at that floor
+  vector<int> emptyAt;                //per grouping: survivors it did not score
+  int feasibleG;                      //the ceiling over all groupings
+  int feasibleGAll;                   //the same before any locus is dropped
+
+  ScanResult() : numLoci(0), geneCopies(0), survivors(0),
+		 feasibleG(0), feasibleGAll(0) {}
 
   int nj(int g,long long l) const {return observed[g][size_t(l)];};
   long long missing(int g,long long l) const
   {return groupRows[g] - observed[g][size_t(l)];};
+
+  void resolve(double tol);
 };
 
 void scanDataset(ParamSet& p,ScanResult& out);
