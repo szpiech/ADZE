@@ -81,6 +81,8 @@ int min(int,int);
 
 void buildQTable(Population pop[],int numDivs,int locus,int numAlleles,
 		 int gMax,int gStride,vector<double>& q);
+void dumpCounts(const char* path,Population pop[],int numDivs,int numLoci,
+		const LocusMap& lmap);
 void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo);
 void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
 		       int lo,int hi,int gFrom,int gTo,int gStride,

@@ -1985,6 +1985,59 @@ void writeWindowHeader(ostream& out, const char* groupColumn)
 }
 
 /*
+ * Every count the reader produced, as read: one row per locus and grouping,
+ * with that grouping's total, its missing copies, and the per-allele counts
+ * in slot order.
+ *
+ * A development facility, switched on by ADZE_DUMP_COUNTS=<file> rather than
+ * by a flag, because it exists to compare two builds' reading and not to be
+ * part of the interface. Two readers that produce the same dump produce the
+ * same statistics by construction; without it, a counting difference only
+ * surfaces as a difference in a mean, with no way to say which locus.
+ */
+void dumpCounts(const char* path, Population pop[], int numDivs, int numLoci,
+		const LocusMap& lmap)
+{
+  ofstream out(path);
+  if(!out.is_open())
+    {
+      adzelog() << "WARNING: could not write the count dump to " << path << "\n";
+      return;
+    }
+
+  out << "LOCUS\tCHROM\tPOS\tGROUPING\tNJ\tMISSING\tSLOTS\tNJI\n";
+
+  for(int l = 0; l < numLoci; l++)
+    {
+      const bool placed = (lmap.size() == size_t(numLoci));
+
+      for(int j = 0; j < numDivs; j++)
+	{
+	  const int slots = pop[j].getNjiColLength(l);
+
+	  out << pop[0].getLocusName(l) << "\t"
+	      << (placed ? lmap.chromName[lmap.chrom[l]] : ".") << "\t"
+	      << (placed ? lmap.pos[l] : -1) << "\t"
+	      << pop[j].getName() << "\t"
+	      << pop[j].getNj(l) << "\t"
+	      << pop[j].getMissing(l) << "\t"
+	      << slots << "\t";
+
+	  for(int i = 0; i < slots; i++)
+	    {
+	      if(i) out << ",";
+	      out << pop[j].getNji(i,l);
+	    }
+
+	  out << "\n";
+	}
+    }
+
+  out.close();
+  return;
+}
+
+/*
  * The _fulldata layout: one row per grouping and locus, one column per g.
  *
  * Version 1.0 wrote the transpose of this -- a row per (grouping, g) holding

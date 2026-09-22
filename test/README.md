@@ -9,6 +9,23 @@ table. All run under `ctest` when the tree is configured with CMake
 (`regression` needs `-DADZE_REFERENCE=/path/to/adze-1.0`, `equivalence` needs
 `-DADZE_EQUIV_REFERENCE=/path/to/adze-2.x`).
 
+## ADZE_DUMP_COUNTS
+
+Not a suite, but the facility the reader work is checked with. Setting
+`ADZE_DUMP_COUNTS=<file>` makes a run write every count the reader produced —
+one row per locus and grouping, with that grouping's total, its missing gene
+copies and the per-allele counts in slot order — before any locus is filtered:
+
+    ADZE_DUMP_COUNTS=counts.tsv ./src/adze --data d.vcf --samples d.samples ...
+
+Two builds that produce the same dump read the same data, so a change to how
+the file is read can be checked where the difference would be, instead of
+waiting for it to surface as a difference in a mean. It is an environment
+variable rather than a flag because it is a development facility and not part
+of the interface. The STRUCTURE and VCF readers produce identical dumps for
+the same genotypes, coordinates included, which is `formats.py`'s guarantee
+stated one level lower.
+
 ## equivalence.py
 
 For a change that is meant to alter nothing a user can see — a rewrite of how

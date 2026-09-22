@@ -78,6 +78,10 @@ class Population
   int getNj(int);
   int getNji(int,int);
   int getNjiColLength(int);
+  //Gene copies this grouping failed to score at a locus. Read by the filter
+  //through its own member; exposed for the count dump (see dumpCounts).
+  int getMissing(int locus) const
+  {return (locus < 0 || locus > numLoci-1) ? -1 : int(missing[locus]);};
   string getName() {return name;};
   int getNumLoci() {return numLoci;};
   int getNumRows() {return rows;};

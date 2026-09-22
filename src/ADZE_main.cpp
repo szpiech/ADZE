@@ -1,4 +1,5 @@
 #include "ADZE_main_tools.h"
+#include <cstdlib>
 
 using namespace std;
 
@@ -203,6 +204,13 @@ int main(int argc, char* argv[])
 	    << (numDivs == 1 ? " grouping" : " groupings") << " (d:h:m:s ";
   displayTime(adzelog());
   adzelog() << ")\n";
+
+  //Development facility: see dumpCounts. Written before the filter runs, so
+  //it is what the reader produced rather than what survived.
+  if(const char* dumpPath = getenv("ADZE_DUMP_COUNTS"))
+    {
+      dumpCounts(dumpPath,pop,numDivs,p.loci.val,lmap);
+    }
 
   int feasibleG = smallestNj(pop,numDivs,p.loci.val);
 
