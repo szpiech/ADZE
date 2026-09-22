@@ -1,11 +1,36 @@
 # Test suite
 
-Four suites. Three are driven by `gen_data.py`. `regress.py` holds the numbers to
-ADZE 1.0; `formats.py` holds the input formats to each other; `windows.py`
+Five suites. Four are driven by `gen_data.py`. `regress.py` holds the numbers to
+ADZE 1.0; `equivalence.py` holds a build to another 2.x build, byte for byte;
+`formats.py` holds the input formats to each other; `windows.py`
 holds the windowed statistics to the layout they claim to cover. `docs.py`
 needs no data and no binary: it holds the README to the program's own option
-table. All four run under `ctest` when the tree is configured with CMake
-(`regress` needs `-DADZE_REFERENCE=/path/to/adze-1.0`).
+table. All run under `ctest` when the tree is configured with CMake
+(`regression` needs `-DADZE_REFERENCE=/path/to/adze-1.0`, `equivalence` needs
+`-DADZE_EQUIV_REFERENCE=/path/to/adze-2.x`).
+
+## equivalence.py
+
+For a change that is meant to alter nothing a user can see — a rewrite of how
+the data is read or swept, rather than of what is computed. It runs the
+candidate and a 2.x reference over the same inputs with the same flags and
+requires every output file to be byte-identical, masking only the wall-clock
+lines that differ between any two runs:
+
+    ./test/equivalence.py --candidate src/adze --reference /path/to/adze-pre
+
+119 cases: seven fixture shapes (including uneven sample sizes, haploid data,
+40 alleles per locus, and a two-chromosome set for windows) crossed with the
+invocations that exercise each output path — the ladder and `--at-g`, both
+layouts, `--full-*`, tuples by k, a statistic subset, a grouping filter,
+windows by locus and by basepair, all three input encodings, and `--dry-run`.
+Exit status and stdout are compared too.
+
+A deliberate change of row order can be declared rather than tolerated:
+`--fulldata-rows-reordered` compares `_fulldata` as a multiset of rows, and
+still fails if any value in them changed. The suite is negative-controlled —
+a perturbed statistic, a deleted output file, shuffled `_fulldata` rows and an
+altered `_fulldata` value are each caught.
 
 ## regress.py
 

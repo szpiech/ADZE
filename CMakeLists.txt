@@ -89,6 +89,22 @@ endif()
 # layout they claim to cover, and the documentation check compares the README's
 # option table with the OPTIONS table in the source (it needs no binary at all,
 # so it runs even on a tree that has not been built).
+# A 2.x build to hold this one to, byte for byte. Unlike ADZE_REFERENCE (a 1.0
+# binary, compared with a tolerance on the summary columns) this reference is
+# expected to agree exactly: it is how a refactor proves it changed nothing.
+set(ADZE_EQUIV_REFERENCE "" CACHE FILEPATH "Path to an ADZE 2.x binary for equivalence tests")
+
+if(BUILD_TESTING AND ADZE_EQUIV_REFERENCE)
+  find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_FOUND)
+    add_test(NAME equivalence
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/equivalence.py
+                     --candidate $<TARGET_FILE:adze>
+                     --reference ${ADZE_EQUIV_REFERENCE}
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/equivalence)
+  endif()
+endif()
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_FOUND)
