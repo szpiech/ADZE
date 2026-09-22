@@ -208,7 +208,9 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
 	       bool full_rich,bool full_priv,bool full_comb,
-	       const string& deleted_out);
+	       const string& deleted_out,bool appendTuples = false);
+long long tupleBatch(const ParamSet& param,const ScanResult& scan,
+		     size_t numWindows,long long budget);
 void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
 		       int lo,int hi,int gFrom,int gTo,int gStride,
 		       const Population& pop);

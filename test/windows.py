@@ -71,7 +71,8 @@ VAR_RTOL = 1e-3
 ATOL = 1e-12
 
 
-def run(binary, workdir, args, expect=0, pin_tolerance=True, pin_format=True):
+def run(binary, workdir, args, expect=0, pin_tolerance=True, pin_format=True,
+        env=None):
     """Run adze, pinning the parameters a case must not inherit from defaults.
 
     Most cases here reason about the full locus set -- which loci a window
@@ -87,7 +88,8 @@ def run(binary, workdir, args, expect=0, pin_tolerance=True, pin_format=True):
     if pin_format and "--legacy" not in args:
         args = args + ["--legacy"]
     r = subprocess.run([os.path.abspath(binary)] + args, cwd=workdir,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True,
+                       env=dict(os.environ, **env) if env else None)
     return r
 
 
@@ -733,6 +735,53 @@ def case_format_default(s, adze, w):
             "exit %d for --tsv, stderr %r" % (gone.returncode, gone.stderr[:120]))
 
 
+def case_tuple_batches(s, adze, w):
+    """Sweeping the tuples in batches gives the same answers as one pass.
+
+    Every tuple needs a running accumulator per g, and one per window per g,
+    all live together, so a large k range is swept in batches. Batching is
+    otherwise unreachable without a dataset big enough to need hundreds of
+    megabytes of accumulators, so the budget is forced down here.
+
+    What must hold: the statistics files are byte-identical to the one-pass
+    run, and the per-locus files hold the same rows -- in a different order,
+    since each batch writes its loci as it goes (see doc/streaming.md).
+    """
+    gen_data.write_pair(os.path.join(w, "tb"), npops=8, nind=6, nloci=40,
+                        nall=5, missing=0.05, seed=25)
+
+    common = ["--data", "tb.vcf", "--samples", "tb.samples", "--tolerance", "1",
+              "--max-g", "3", "--combinations", "--tuples-k", "1-4",
+              "--full-tuples"]
+
+    run(adze, w, common + ["--out-prefix", "tb_one"], pin_format=False)
+    r = run(adze, w, common + ["--out-prefix", "tb_many"], pin_format=False,
+            env={"ADZE_TUPLE_BUDGET": "2048"})
+
+    s.check("tuples.batched_says_so", "batches of" in (r.stdout + r.stderr),
+            "expected the run to report that it batched the tuples")
+
+    for k in (1, 2, 3, 4):
+        a = os.path.join(w, "tb_one.tuples_%d" % k)
+        b = os.path.join(w, "tb_many.tuples_%d" % k)
+        s.check("tuples.batch_same_stats_k%d" % k,
+                open(a, "rb").read() == open(b, "rb").read(),
+                "k=%d statistics differ between one pass and several" % k)
+
+    for stat in ("richness", "private"):
+        a = os.path.join(w, "tb_one.%s" % stat)
+        b = os.path.join(w, "tb_many.%s" % stat)
+        s.check("tuples.batch_leaves_%s" % stat,
+                open(a, "rb").read() == open(b, "rb").read(),
+                "%s changed when the tuples were batched" % stat)
+
+    for k in (1, 4):
+        a = sorted(open(os.path.join(w, "tb_one.tuples_%d_fulldata" % k)))
+        b = sorted(open(os.path.join(w, "tb_many.tuples_%d_fulldata" % k)))
+        s.check("tuples.batch_same_rows_k%d" % k, a == b,
+                "k=%d per-locus rows differ by more than their order" % k)
+
+
 def case_refusals(s, adze, w):
     """Inputs a window cannot be defined over are refused, not guessed at."""
     meta = gen_data.write_pair(os.path.join(w, "rf"), npops=3, nind=5,
@@ -796,7 +845,7 @@ def main():
     for case in (case_whole, case_recompute, case_layout, case_units,
                  case_minloci, case_formats, case_threads,
                  case_g1_closed_forms, case_at_g, case_tolerance_default,
-                 case_format_default, case_refusals):
+                 case_format_default, case_tuple_batches, case_refusals):
         case(s, args.candidate, args.workdir)
 
     if not s.failures and not args.keep:

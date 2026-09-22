@@ -528,13 +528,37 @@ int main(int argc, char* argv[])
 
   try
     {
-      LocusSource* src = 0;
+      /*
+       * One sweep, unless the tuple accumulators would not fit: every tuple
+       * carries a running accumulator per g and per window per g, all live
+       * together, so a large k range is swept in batches. Each batch after
+       * the first costs another pass over the loci and appends to the files
+       * the first opened.
+       */
+      long long budget = 256LL*1024*1024;
+      //A lever for the tests: batching is otherwise unreachable without a
+      //dataset large enough to need hundreds of megabytes of accumulators.
+      if(const char* forced = getenv("ADZE_TUPLE_BUDGET")) budget = atoll(forced);
+      const long long batch = do_tuple
+	? tupleBatch(p,scan,windows.size(),budget) : (long long)(tuples.size());
+      const long long batches = tuples.empty()
+	? 1 : (long long)((tuples.size() + batch - 1)/batch);
 
-      if(wantsVCF(p.format.val,p.dfile.val))
+      if(batches > 1)
 	{
-	  src = openVCFSource(p,scan);
+	  adzelog() << "Sweeping " << tuples.size() << " tuples in " << batches
+		    << " batches of " << batch << ", to keep their "
+		    << "accumulators inside the memory budget.\n";
+	  if(p.full_c.val)
+	    {
+	      adzelog() << "         With --full-tuples the per-locus rows "
+			<< "arrive one batch at a time, so a locus's rows are\n"
+			<< "         contiguous within a batch rather than "
+			<< "across the whole file.\n";
+	    }
 	}
-      else
+
+      if(!wantsVCF(p.format.val,p.dfile.val))
 	{
 	  countPath = countFilePath(p);
 	  string why;
@@ -542,15 +566,30 @@ int main(int argc, char* argv[])
 	    {
 	      transposeStructure(p,scan,countPath,convertChunk(p,scan));
 	    }
-	  src = openCountFileSource(countPath,scan);
 	}
 
-      sweepLoci(*src,scan,p,windows,scan.lmap,tuples,tupleFile,tupleOut,
-		do_rich,do_priv,do_tuple,p.r_out.val,p.p_out.val,
-		p.full_r.val,p.full_p.val,p.full_c.val,
-		(p.tol.val != 1) ? p.p_out.val : string());
+      for(long long b = 0; b < batches; b++)
+	{
+	  const size_t lo = size_t(b*batch);
+	  const size_t hi = (lo + size_t(batch) < tuples.size())
+	    ? lo + size_t(batch) : tuples.size();
 
-      delete src;
+	  vector< vector<int> > slice(tuples.begin() + lo, tuples.begin() + hi);
+	  vector<int> sliceFile(tupleFile.begin() + lo, tupleFile.begin() + hi);
+
+	  LocusSource* src = wantsVCF(p.format.val,p.dfile.val)
+	    ? openVCFSource(p,scan) : openCountFileSource(countPath,scan);
+
+	  //Everything but the tuples is computed once, in the first batch.
+	  sweepLoci(*src,scan,p,windows,scan.lmap,slice,sliceFile,tupleOut,
+		    do_rich && b == 0,do_priv && b == 0,do_tuple,
+		    p.r_out.val,p.p_out.val,
+		    p.full_r.val,p.full_p.val,p.full_c.val,
+		    (b == 0 && p.tol.val != 1) ? p.p_out.val : string(),
+		    b > 0);
+
+	  delete src;
+	}
     }
   catch(BAD_FILE x)
     {

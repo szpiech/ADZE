@@ -148,3 +148,21 @@ summary carries one "Statistics completed at" line in place of one per
 statistic. No per-statistic timing is lost that meant anything: in a fused
 pass there is no moment at which richness is finished and private richness
 is not.
+
+### Tuples are swept in batches when they do not fit
+
+Every tuple carries a running accumulator per *g*, and another per window per
+*g*, and in a fused sweep they are all live at once. That is fine for the
+usual k range and not fine at the extreme: all k over 20 groupings is a
+million tuples, 550 MB of accumulators at *g* <= 20, where the old
+one-k-at-a-time passes peaked at the largest single k (97 MB).
+
+The tuple list is therefore swept in batches sized to a memory budget. One
+batch is the common case. Each further batch costs one more pass over the
+loci -- for STRUCTURE input a re-read of the converted counts, not of the
+data -- and appends to the files the first batch opened, so the rows land in
+the order one pass would have produced.
+
+One consequence, reported by the run when it happens: with `--full-tuples`,
+a locus's rows are contiguous within a batch rather than across the whole
+file, because each batch writes its per-locus rows as it goes.

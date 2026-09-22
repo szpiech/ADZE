@@ -4010,6 +4010,38 @@ void writeFullDataRow(ostream& out,const string& locus,
   return;
 }
 
+
+/*
+ * How many tuples one sweep can carry.
+ *
+ * Every tuple needs a running accumulator per g, and another per window per
+ * g, all live at once -- so a k range over many groupings can ask for more
+ * memory in accumulators than the whole rest of the run uses: all k at 20
+ * groupings is a million tuples, and at g <= 20 that is 550 MB, against the
+ * 97 MB the old one-k-at-a-time passes peaked at. The tuple list is
+ * therefore swept in batches that fit a budget. One batch is the common
+ * case; each extra batch costs one more pass over the loci, which for
+ * STRUCTURE input is a re-read of the converted counts rather than of the
+ * data.
+ */
+long long tupleBatch(const ParamSet& param,const ScanResult& scan,
+		     size_t numWindows,long long budget)
+{
+  int gTop = param.g.val;
+  if(scan.feasibleG < gTop) gTop = scan.feasibleG;
+  if(gTop < 1) gTop = 1;
+  const long long gStride = (param.at_g_val ? param.at_g_val : gTop) + 1;
+
+  //Running holds n, mean and m2 per slot, plus a byte of "some value was
+  //undefined here"; one set per tuple and one per tuple per window.
+  const long long perSlot = 8 + 8 + 8 + 1;
+  const long long perTuple = perSlot*gStride*(1 + (long long)(numWindows));
+
+  long long n = budget/(perTuple > 0 ? perTuple : 1);
+  if(n < 1) n = 1;
+  return n;
+}
+
 /*
  * The sweep, over a stream of loci.
  *
@@ -4040,7 +4072,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
 	       bool full_rich,bool full_priv,bool full_comb,
-	       const string& deleted_out)
+	       const string& deleted_out,bool appendTuples)
 {
   const int J = int(scan.groupName.size());
   const int numLoci = int(scan.survivors);
@@ -4111,21 +4143,32 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 
   if(do_tuple && T > 0)
     {
+      /*
+       * A later batch of tuples appends to the files the first batch opened
+       * and writes no second header: the batches are consecutive slices of
+       * the same tuple list, so the rows land in the order they would have
+       * had in one pass.
+       */
+      const ios::openmode mode = appendTuples ? (ios::out|ios::app) : ios::out;
+
       for(int f = 0; f < F; f++)
 	{
-	  cbOut[f] = new ofstream(tupleOut[f].c_str());
-	  if(param.tabbed()) *cbOut[f] << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+	  cbOut[f] = new ofstream(tupleOut[f].c_str(),mode);
+	  if(param.tabbed() && !appendTuples)
+	    {
+	      *cbOut[f] << "TUPLE\tG\tNUM_LOCI\tMEAN\tVAR\tSTD_ERR\n";
+	    }
 	  if(full_comb)
 	    {
 	      const string name = nameCreate(tupleOut[f],"_fulldata");
-	      cbFull[f] = new ofstream(name.c_str());
-	      writeFullDataHeader(*cbFull[f],"TUPLE",gFrom,gToPair,true);
+	      cbFull[f] = new ofstream(name.c_str(),mode);
+	      if(!appendTuples) writeFullDataHeader(*cbFull[f],"TUPLE",gFrom,gToPair,true);
 	    }
 	  if(!windows.empty())
 	    {
 	      const string name = nameCreate(tupleOut[f],"_windows");
-	      cbWin[f] = new ofstream(name.c_str());
-	      writeWindowHeader(*cbWin[f],"TUPLE");
+	      cbWin[f] = new ofstream(name.c_str(),mode);
+	      if(!appendTuples) writeWindowHeader(*cbWin[f],"TUPLE");
 	    }
 	}
     }
