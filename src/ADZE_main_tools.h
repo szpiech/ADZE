@@ -199,13 +199,16 @@ void writeFullDataHeader(ostream& out,const string& labelCols,int gFrom,int gTo,
 void writeFullDataRow(ostream& out,const string& locus,
 		      const vector<string>& label,const vector<double>& vals,
 		      int gFrom,int gTo,int gStride);
+string deletedHeader(long long gone,double tol);
+void writeDeletedLoci(ParamSet& p,const ScanResult& scan,const string& out);
 void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       const vector<Window>& windows,const LocusMap& lmap,
 	       const vector< vector<int> >& tuples,
 	       const vector<int>& tupleFile,const vector<string>& tupleOut,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
-	       bool full_rich,bool full_priv,bool full_comb);
+	       bool full_rich,bool full_priv,bool full_comb,
+	       const string& deleted_out);
 void writeFullDataRows(ostream& out,const string& label,const vector<double>& vals,
 		       int lo,int hi,int gFrom,int gTo,int gStride,
 		       const Population& pop);

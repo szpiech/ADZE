@@ -18,6 +18,10 @@ A decision that deliberately changes a file can be declared, so that it shows
 up as a named exception rather than being quietly tolerated. The declaration
 says exactly what the new file must be, so it is still an exact comparison:
 
+    --deletedloci-file-order    the reference's _deletedloci list, reversed:
+                                the streaming sweep names dropped loci as
+                                they go past, so the list is in file order
+                                rather than descending (decision 4).
     --fulldata-locus-major      the reference's _fulldata, with its label and
                                 LOCUS columns swapped and its rows re-sorted
                                 by locus (groupings keeping their order within
@@ -166,7 +170,7 @@ def as_locus_major(text):
     return "\n".join(out) + "\n"
 
 
-def compare(ref_dir, cnd_dir, reordered_fulldata):
+def compare(ref_dir, cnd_dir, reordered_fulldata, deleted_in_file_order=False):
     ref_files, cnd_files = outputs(ref_dir), outputs(cnd_dir)
     if ref_files != cnd_files:
         only_ref = [f for f in ref_files if f not in cnd_files]
@@ -178,6 +182,16 @@ def compare(ref_dir, cnd_dir, reordered_fulldata):
         a, b = masked(os.path.join(ref_dir, f)), masked(os.path.join(cnd_dir, f))
         if a == b:
             continue
+        if deleted_in_file_order and f.endswith("_deletedloci"):
+            # A declared decision: the expected file is the reference's own
+            # list reversed, so this is still an exact comparison -- the same
+            # names, and the same count in the header sentence.
+            head, *names = a.decode().rstrip("\n").split("\n")
+            expected = "\n".join([head] + list(reversed(names))).encode()
+            if expected == b.rstrip(b"\n"):
+                continue
+            return "%s (not the declared file-order rewrite: %s)" % (
+                f, first_difference(expected, b.rstrip(b"\n")))
         if reordered_fulldata and f.endswith("_fulldata"):
             # A declared decision: the expected file is computed from the
             # reference's own content, so this is still an exact comparison.
@@ -208,6 +222,8 @@ def main():
     ap.add_argument("--reference", required=True)
     ap.add_argument("--workdir", default=os.path.join(os.path.dirname(
         os.path.abspath(__file__)), "work-equivalence"))
+    ap.add_argument("--deletedloci-file-order", action="store_true",
+                    help="expect the _deletedloci list in file order (decision 4)")
     ap.add_argument("--fulldata-locus-major", action="store_true",
                     help="expect _fulldata in the locus-major layout (doc/streaming.md, decision 1)")
     ap.add_argument("--only", default=None, help="substring filter on case names")
@@ -243,7 +259,8 @@ def main():
                 why = "stdout differs: %s" % first_difference(
                     masked_text(r.stdout).encode(), masked_text(c.stdout).encode())
             else:
-                why = compare(dirs["ref"], dirs["cnd"], args.fulldata_locus_major)
+                why = compare(dirs["ref"], dirs["cnd"], args.fulldata_locus_major,
+                              args.deletedloci_file_order)
 
             if why:
                 nfail += 1

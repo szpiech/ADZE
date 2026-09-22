@@ -113,16 +113,18 @@ def read_fulldata(path):
         lines = [l.rstrip("\n") for l in fh if l.strip()]
     head = lines[0].split("\t")
     gs = [int(h[1:]) for h in head[2:]]
-    names, out = [], {}
-    seen = set()
+    #Which column is the locus is read from the header: the streaming sweep
+    #writes it first (doc/streaming.md, decision 1), earlier builds second.
+    locusCol = head.index("LOCUS") if "LOCUS" in head[:2] else 1
+    labelCol = 1 - locusCol
+    #Locus names in order of first appearance, which works whether the file
+    #is label-major (each label's loci in a block) or locus-major.
+    names, out, seen = [], {}, set()
     for line in lines[1:]:
         f = line.split("\t")
-        label, locus = f[0], f[1]
-        if label not in seen:
-            seen.add(label)
-            if len(seen) == 1:
-                names = []
-        if len(seen) == 1:
+        label, locus = f[labelCol], f[locusCol]
+        if locus not in seen:
+            seen.add(locus)
             names.append(locus)
         for g, value in zip(gs, f[2:]):
             out.setdefault((label, g), []).append(
@@ -701,15 +703,16 @@ def case_format_default(s, adze, w):
 
     # A locus undefined at this g is NA in its own row, in that g's column --
     # where 1.0 dropped the whole row and said nothing about which locus.
-    raw = [line.rstrip("\n").split("\t")
-           for line in open(os.path.join(w, "fl_def.richness_fulldata"))
-           if line.startswith("POP1\t")]
-    third = [r for r in raw if r[1] == dn[2]]
+    rows = [line.rstrip("\n").split("\t")
+            for line in open(os.path.join(w, "fl_def.richness_fulldata"))][1:]
+    #Locus-major rows: the locus leads and the label follows.
+    raw = [r for r in rows if r[1] == "POP1"]
+    third = [r for r in raw if r[0] == dn[2]]
     s.check("fmt.fulldata.na_names_the_locus",
             bool(third) and third[0][2 + 2] == "NA",
             "expected NA at g = 3 for the third locus: %s" % (third[0] if third else None))
     s.check("fmt.fulldata.other_loci_defined",
-            all(r[2 + 2] != "NA" for r in raw if r[1] != dn[2]),
+            all(r[2 + 2] != "NA" for r in raw if r[0] != dn[2]),
             "another locus went NA at g = 3")
 
     # The summary belongs to the statistics file; _fulldata carries values only.

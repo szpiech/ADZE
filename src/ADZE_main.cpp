@@ -4,51 +4,6 @@
 
 using namespace std;
 
-/*
- * Per-grouping ceiling on g: the fewest gene copies a grouping scored at any
- * surviving locus.  A locus where it scored fewer than g copies makes the
- * statistic undefined at that g, and Stats propagates that sentinel through
- * the average, so a single such locus takes the whole grouping out at that g.
- * The count of loci sitting at the ceiling therefore matters as much as the
- * ceiling itself: one locus is worth dropping, a third of the genome is not.
- *
- * ceiling[j] is that minimum, binding[j] how many loci sit on it, and empty[j]
- * how many loci the grouping did not score at all. The smallest ceiling is the
- * largest feasible MAX_G.
- */
-static int smallestNj(Population pop[], int numDivs, int numLoci,
-		      vector<int>* ceiling = 0, vector<int>* binding = 0,
-		      vector<int>* empty = 0)
-{
-  int smallest = 0;
-
-  if(ceiling) ceiling->assign(numDivs,0);
-  if(binding) binding->assign(numDivs,0);
-  if(empty) empty->assign(numDivs,0);
-
-  for(int j = 0; j < numDivs; j++)
-    {
-      int least = 0;
-      int atLeast = 0;
-      int none = 0;
-
-      for(int l = 0; l < numLoci; l++)
-	{
-	  const int Nj = pop[j].getNj(l);
-	  if(l == 0 || Nj < least) { least = Nj; atLeast = 0; }
-	  if(Nj == least) atLeast++;
-	  if(Nj == 0) none++;
-	}
-
-      if(ceiling) (*ceiling)[j] = least;
-      if(binding) (*binding)[j] = atLeast;
-      if(empty) (*empty)[j] = none;
-
-      if(j == 0 || least < smallest) smallest = least;
-    }
-
-  return smallest;
-}
 
 /*
  * Interface, in brief:
@@ -175,102 +130,6 @@ int main(int argc, char* argv[])
     }
 
   adzelog() << "Reading " << p.dfile.val << "...\n";
-
-  /*
-   * The streaming path, while it is being brought up: scan, then one sweep
-   * over the loci, with nothing resident between them. It is behind
-   * ADZE_STREAM until it has been shown to produce what the current path
-   * produces -- the equivalence suite is the gate -- and then it becomes
-   * the only path and this switch goes away.
-   */
-  if(getenv("ADZE_STREAM"))
-    {
-      ScanResult scan;
-      string countPath;
-
-      try
-	{
-	  scanDataset(p,scan);
-	  scan.resolve(p.tol.val);
-
-	  const int numDivs = int(scan.groupName.size());
-	  if(scan.survivors < 1)
-	    {
-	      cerr << "ERROR: no locus survived the missing-data filter.\n";
-	      return EXIT_DATA;
-	    }
-
-	  if(!p.g.set)
-	    {
-	      p.g.val = (scan.feasibleG < 1) ? 1 : scan.feasibleG;
-	    }
-
-	  //Which tuples, and which file each belongs to.
-	  vector< vector<int> > tuples;
-	  vector<int> tupleFile;
-	  vector<string> tupleOut;
-	  if(do_tuple)
-	    {
-	      if(p.tuple_file.set)
-		{
-		  if(!readTupleFile(p.tuple_file.val,scan.groupName,tuples))
-		    {
-		      return EXIT_USAGE;
-		    }
-		  tupleOut.push_back(p.c_out.val);
-		  tupleFile.assign(tuples.size(),0);
-		}
-	      else
-		{
-		  if(!validK(numDivs,k)) return EXIT_USAGE;
-		  for(list<int>::iterator i = k.begin(); i != k.end(); i++)
-		    {
-		      ostringstream suffix;
-		      suffix << "_" << *i;
-		      tupleOut.push_back(nameCreate(p.c_out.val,suffix.str()));
-
-		      vector< vector<int> > ofK;
-		      buildKTuples(numDivs,*i,ofK);
-		      for(size_t x = 0; x < ofK.size(); x++)
-			{
-			  tuples.push_back(ofK[x]);
-			  tupleFile.push_back(int(tupleOut.size())-1);
-			}
-		    }
-		}
-	    }
-
-	  vector<Window> windows;
-	  if(p.windowed()) buildWindows(scan.lmap,p,windows);
-
-	  LocusSource* src = 0;
-	  if(wantsVCF(p.format.val,p.dfile.val))
-	    {
-	      src = openVCFSource(p,scan);
-	    }
-	  else
-	    {
-	      countPath = countFilePath(p);
-	      string why;
-	      if(!countFileUsable(countPath,p,scan,why))
-		{
-		  transposeStructure(p,scan,countPath,convertChunk(p,scan));
-		}
-	      src = openCountFileSource(countPath,scan);
-	    }
-
-	  sweepLoci(*src,scan,p,windows,scan.lmap,tuples,tupleFile,tupleOut,
-		    do_rich,do_priv,do_tuple,p.r_out.val,p.p_out.val,
-		    p.full_r.val,p.full_p.val,p.full_c.val);
-
-	  delete src;
-	  if(!countPath.empty()) remove(countPath.c_str());
-	}
-      catch(BAD_FILE x) { return EXIT_IO; }
-      catch(BAD_PARAM x) { return EXIT_DATA; }
-
-      return EXIT_OK;
-    }
 
   /*
    * Development facility: walk the locus source and write the counts it
@@ -413,32 +272,18 @@ int main(int argc, char* argv[])
    */
   vector<string> divisionNames;
   int numDivs = 0;
-  Population* pop = NULL;
-  LocusTable locusTable;
-  LocusMap lmap;
-
   /*
-   * Development facility: run the scan alongside the reader so the two can be
-   * compared where they should agree (see ADZE_DUMP_SCAN and
-   * ADZE_DUMP_COUNTS). It costs an extra pass and is off unless the variable
-   * is set. The scan resolves the same dimensions the reader does, so it runs
-   * on a copy of the parameters rather than on the ones the reader will use.
+   * The run: a scan, then one sweep over the loci. Nothing between them
+   * holds the dataset -- the scan keeps a count per locus per grouping, the
+   * sweep keeps one locus at a time -- so peak memory no longer follows the
+   * genotypes. See doc/streaming.md.
    */
-  if(getenv("ADZE_DUMP_SCAN"))
-    {
-      try
-	{
-	  ParamSet scanParams = p;
-	  ScanResult scan;
-	  scanDataset(scanParams,scan,false);
-	}
-      catch(BAD_FILE x) { return EXIT_IO; }
-      catch(BAD_PARAM x) { return EXIT_DATA; }
-    }
+  ScanResult scan;
+  string countPath;
 
   try
     {
-      pop = readDataset(p,divisionNames,numDivs,locusTable,lmap);
+      scanDataset(p,scan);
     }
   catch(BAD_FILE x)
     {
@@ -449,40 +294,28 @@ int main(int argc, char* argv[])
       return EXIT_DATA;
     }
 
+  numDivs = int(scan.groupName.size());
+
   adzelog() << "Read " << p.dlines.val << " gene copies at " << p.loci.val
-	    << (p.loci.val == 1 ? " locus in " : " loci in ") << numDivs
+	    << " loci in " << numDivs
 	    << (numDivs == 1 ? " grouping" : " groupings") << " (d:h:m:s ";
   displayTime(adzelog());
-  adzelog() << ")\n";
-
-  //Development facility: see dumpCounts. Written before the filter runs, so
-  //it is what the reader produced rather than what survived.
-  if(const char* dumpPath = getenv("ADZE_DUMP_COUNTS"))
-    {
-      dumpCounts(dumpPath,pop,numDivs,p.loci.val,lmap);
-    }
-
-  int feasibleG = smallestNj(pop,numDivs,p.loci.val);
+  adzelog() << ")" << endl;
 
   vector< vector<int> > tuples;
+  vector<int> tupleFile;
+  vector<string> tupleOut;
 
   if(do_tuple)
     {
       if(p.tuple_file.set)
 	{
-	  if(!readTupleFile(p.tuple_file.val,pop,numDivs,tuples))
-	    {
-	      delete [] pop;
-	      return EXIT_USAGE;
-	    }
+	  if(!readTupleFile(p.tuple_file.val,scan.groupName,tuples)) return EXIT_USAGE;
+	  tupleOut.push_back(p.c_out.val);
+	  tupleFile.assign(tuples.size(),0);
 	}
-      else if(!validK(numDivs,k))
-	{
-	  delete [] pop;
-	  return EXIT_USAGE;
-	}
+      else if(!validK(numDivs,k)) return EXIT_USAGE;
     }
-
 
   ofstream summary;
   const string sum_out = p.summaryName();
@@ -490,51 +323,55 @@ int main(int argc, char* argv[])
   if(summary.fail())
     {
       cerr << "ERROR: could not write " << sum_out << "\n";
-      delete [] pop;
       return EXIT_IO;
     }
   p.echo(summary);
   summary << endl;
 
+  /*
+   * The filter is decided here, from the counts, and applied by the sweep as
+   * the loci go past. Which loci were dropped is reported by the sweep too:
+   * it knows their names, and the scan deliberately does not keep them.
+   */
+  if(p.tol.val != 1) adzelog() << "Applying the missing-data filter...\n";
+  scan.resolve(p.tol.val);
+
   if(p.tol.val != 1)
     {
-      adzelog() << "Applying the missing-data filter...\n";
-      filterLoci(pop,numDivs,p.tol.val,p.p_out.val,p.pp.val,lmap,locusTable);
+      adzelog() << "\n"
+		<< deletedHeader(scan.numLoci - scan.survivors,p.tol.val);
     }
 
-  /*
-   * Windows are laid out over the loci that survived, so this has to follow
-   * filtering.  A window is a run of consecutive loci, which only means
-   * anything if the loci arrive in genome order.
-   */
   vector<Window> windows;
 
   if(p.windowed())
     {
-      vector<string> names(p.loci.val);
-      for(int l = 0; l < p.loci.val; l++) names[l] = pop[0].getLocusName(l);
-
-      const string bad = lmap.checkOrder(names);
+      /*
+       * Names are only there to point at the offending locus; the scan keeps
+       * them for a locus map and not for a VCF, where the message falls back
+       * to the position.
+       */
+      const string bad = scan.lmap.checkOrder(scan.locusName);
       if(!bad.empty())
 	{
 	  cerr << "ERROR: " << bad << "\n";
-	  delete [] pop;
 	  return EXIT_DATA;
 	}
 
-      buildWindows(lmap,p,windows);
+      LocusMap kept = scan.lmap;
+      kept.compact(scan.dropped);
+      buildWindows(kept,p,windows);
 
       if(windows.empty())
 	{
 	  cerr << "ERROR: no window holds at least --min-window-loci "
 	       << p.min_win_loci.val << " loci.\n";
-	  delete [] pop;
 	  return EXIT_DATA;
 	}
 
       adzelog() << "Laid out " << windows.size() << " window"
 		<< (windows.size() == 1 ? "" : "s") << " over "
-		<< p.loci.val << " loci.\n";
+		<< scan.survivors << " loci.\n";
 
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());
@@ -543,36 +380,32 @@ int main(int argc, char* argv[])
       if(p.tnc.val)
 	{
 	  summary.close();
-	  delete [] pop;
 	  return EXIT_OK;
-	} 
+	}
     }
 
-  p.loci.val = pop[0].getNumLoci();
+  p.loci.val = int(scan.survivors);
 
-  /*
-   * With no surviving locus every statistic is undefined. 1.0 carried on and
-   * printed rows of "nan -0 nan"; say so and stop instead.
-   */
-  if(p.loci.val == 0)
+  if(scan.survivors == 0)
     {
+      //The list is the diagnosis here, so it is written before giving up.
+      writeDeletedLoci(p,scan,p.p_out.val);
+
       cerr << "ERROR: no locus survived filtering at TOLERANCE " << p.tol.val
 	   << ".\n       Every statistic would be undefined; "
 	   << "raise TOLERANCE or check MISSING.\n";
       summary << "ERROR: no locus survived filtering at TOLERANCE "
 	      << p.tol.val << ".\n";
       summary.close();
-      delete [] pop;
       return EXIT_DATA;
     }
 
   /*
-   * MAX_G is resolved here, not before filtering: dropping loci with heavy
-   * missing data raises the smallest sample size, so the largest usable g is a
-   * property of the surviving loci.
+   * MAX_G is resolved over the surviving loci, not over all of them:
+   * dropping loci with heavy missing data raises the smallest sample size.
+   * The scan has both, having applied the filter to its own counts.
    */
-  vector<int> ceiling, binding, emptyIn;
-  feasibleG = smallestNj(pop,numDivs,p.loci.val,&ceiling,&binding,&emptyIn);
+  const int feasibleG = scan.feasibleG;
 
   if(!p.g.set)
     {
@@ -584,59 +417,44 @@ int main(int argc, char* argv[])
     }
 
   /*
-   * Which groupings cannot reach MAX_G, and what holds them back.  Naming them
-   * is the whole point: a run whose ceiling is 1 produces nothing usable, and
-   * in the legacy format it produces nothing visible either, since undefined
-   * rows are omitted rather than written as NA. Reporting only the global
-   * minimum -- which is what 1.0 did, and what this did until now -- leaves a
-   * user staring at blank result files with no idea which grouping, or how
-   * many loci, caused it.
+   * Which groupings cannot reach MAX_G, and what holds them back. A run
+   * whose ceiling is 1 produces nothing usable, and reporting only the
+   * global minimum leaves a user staring at blank files with no idea which
+   * grouping, or how many loci, caused it.
    */
   for(int j = 0; j < numDivs; j++)
     {
-      if(ceiling[j] >= p.g.val) continue;
+      if(scan.ceiling[j] >= p.g.val) continue;
 
-      adzelog() << "WARNING: " << pop[j].getName() << " scored only "
-		<< ceiling[j] << " gene cop" << ((ceiling[j] == 1) ? "y" : "ies")
-		<< " at " << binding[j]
-		<< ((binding[j] == 1) ? " locus" : " loci")
+      adzelog() << "WARNING: " << scan.groupName[j] << " scored only "
+		<< scan.ceiling[j] << " gene cop"
+		<< ((scan.ceiling[j] == 1) ? "y" : "ies")
+		<< " at " << scan.binding[j]
+		<< ((scan.binding[j] == 1) ? " locus" : " loci")
 		<< " of " << p.loci.val;
-      if(emptyIn[j] > 0)
+
+      if(scan.emptyAt[j] > 0)
 	{
-	  adzelog() << " (" << emptyIn[j]
-		    << ((emptyIn[j] == 1) ? " locus is" : " loci are")
+	  adzelog() << " (" << scan.emptyAt[j]
+		    << (scan.emptyAt[j] == 1 ? " locus is" : " loci are")
 		    << " not scored at all)";
 	}
-      if(ceiling[j] == 0)
+
+      if(scan.ceiling[j] == 0)
 	adzelog() << ",\n         so its statistics are undefined at every g.\n";
       else
 	adzelog() << ",\n         so its statistics are undefined above g = "
-		  << ceiling[j] << ".\n";
+		  << scan.ceiling[j] << ".\n";
 
-      if(ceiling[j] < 2)
+      if(scan.ceiling[j] == 0)
 	{
 	  adzelog() << "         That leaves nothing usable for "
-		    << pop[j].getName() << ": lower --tolerance to drop those "
-		    << "loci\n         (--dry-run reports the ceiling without "
-		    << "computing anything).\n";
-	  if(!p.tabbed())
-	    {
-	      adzelog() << "         --legacy omits undefined rows entirely, "
-			<< "so they will be missing from the\n"
-			<< "         result file rather than marked NA.\n";
-	    }
+		    << scan.groupName[j] << ": lower --tolerance to drop "
+		    << "those loci,\n         or --exclude-pops to leave the "
+		    << "grouping out.\n";
 	}
     }
 
-  /*
-   * --at-g reports one g instead of the ladder.  Two ceilings bind: MAX_G,
-   * which is what the run was asked to sweep, and the smallest number of gene
-   * copies scored anywhere, which is the largest g with defined values.  A
-   * request above either is met at the ceiling with a warning -- unlike an
-   * over-large MAX_G, which keeps its shape and reports the unreachable rows
-   * as undefined, because a single-g report of nothing but NA would be no
-   * answer at all.
-   */
   if(p.at_g.set)
     {
       const bool wantsMax = (p.at_g.val == "max");
@@ -665,49 +483,38 @@ int main(int argc, char* argv[])
       summary << "AT_G resolved to " << p.at_g_val << endl;
     }
 
-  if(do_rich)
+  //Every requested tuple, whichever file it belongs to.
+  if(do_tuple && !p.tuple_file.set)
     {
-      adzelog() << "Calculating allelic richness...\n";
-      calcAllAgs(pop,numDivs,p,p.full_r.val,p.r_out.val,windows,lmap);
-      if(p.pp.val) adzelog() << endl;
-      adzelog() << "Completed at (d:h:m:s) ";
-      displayTime(adzelog());
-      adzelog() << endl;
+      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
+	{
+	  ostringstream suffix;
+	  suffix << "_" << *i;
+	  tupleOut.push_back(nameCreate(p.c_out.val,suffix.str()));
 
-      summary << "Total alleles completed at (d:h:m:s) ";
-      displayTime(summary);
-      summary << endl;
+	  vector< vector<int> > ofK;
+	  buildKTuples(numDivs,*i,ofK);
+	  for(size_t x = 0; x < ofK.size(); x++)
+	    {
+	      tuples.push_back(ofK[x]);
+	      tupleFile.push_back(int(tupleOut.size())-1);
+	    }
+	}
     }
 
-  if(do_priv)
-    {
-      adzelog() << "Calculating private allelic richness...\n";
-      calcAllPgs(pop,numDivs,p,p.full_p.val,p.p_out.val,windows,lmap);
-      if(p.pp.val) adzelog() << endl;
-      adzelog() << "Completed at (d:h:m:s) ";
-      displayTime(adzelog());
-      adzelog() << endl;
-
-      summary << "Private alleles completed at (d:h:m:s) ";
-      displayTime(summary);
-      summary << endl;
-    }
-
+  /*
+   * One announcement per statistic, then one pass computing all of them: a
+   * locus's Q table serves every statistic, so they finish together and
+   * there is one completion line rather than three.
+   */
+  if(do_rich) adzelog() << "Calculating allelic richness...\n";
+  if(do_priv) adzelog() << "Calculating private allelic richness...\n";
   if(do_tuple)
     {
       if(p.tuple_file.set)
 	{
 	  adzelog() << "Calculating private alleles for " << tuples.size()
 		    << " named tuples...\n";
-	  calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,p.c_out.val,1,windows,lmap);
-	  if(p.pp.val) adzelog() << endl;
-	  adzelog() << "Completed at (d:h:m:s) ";
-	  displayTime(adzelog());
-	  adzelog() << endl;
-
-	  summary << "Named tuples completed at (d:h:m:s) ";
-	  displayTime(summary);
-	  summary << endl;
 	}
       else
 	{
@@ -715,38 +522,66 @@ int main(int argc, char* argv[])
 	    {
 	      adzelog() << "Calculating private alleles for all possible "
 			<< *i << "-tuples...\n";
-
-	      ostringstream suffix;
-	      suffix << "_" << *i;
-	      const string new_comb_out = nameCreate(p.c_out.val,suffix.str());
-
-	      buildKTuples(numDivs,*i,tuples);
-	      calcPgTuples(pop,numDivs,tuples,p,p.full_c.val,new_comb_out,0,windows,lmap);
-
-	      if(p.pp.val) adzelog() << endl;
-	      adzelog() << "Completed at (d:h:m:s) ";
-	      displayTime(adzelog());
-	      adzelog() << endl;
-
-	      summary << *i << "-tuples completed at (d:h:m:s) ";
-	      displayTime(summary);
-	      summary << endl;
 	    }
 	}
     }
 
-  delete [] pop;
+  try
+    {
+      LocusSource* src = 0;
+
+      if(wantsVCF(p.format.val,p.dfile.val))
+	{
+	  src = openVCFSource(p,scan);
+	}
+      else
+	{
+	  countPath = countFilePath(p);
+	  string why;
+	  if(!countFileUsable(countPath,p,scan,why))
+	    {
+	      transposeStructure(p,scan,countPath,convertChunk(p,scan));
+	    }
+	  src = openCountFileSource(countPath,scan);
+	}
+
+      sweepLoci(*src,scan,p,windows,scan.lmap,tuples,tupleFile,tupleOut,
+		do_rich,do_priv,do_tuple,p.r_out.val,p.p_out.val,
+		p.full_r.val,p.full_p.val,p.full_c.val,
+		(p.tol.val != 1) ? p.p_out.val : string());
+
+      delete src;
+    }
+  catch(BAD_FILE x)
+    {
+      if(!countPath.empty()) remove(countPath.c_str());
+      return EXIT_IO;
+    }
+  catch(BAD_PARAM x)
+    {
+      if(!countPath.empty()) remove(countPath.c_str());
+      return EXIT_DATA;
+    }
+
+  if(!countPath.empty()) remove(countPath.c_str());
+
+  if(p.pp.val) adzelog() << endl;
+  adzelog() << "Completed at (d:h:m:s) ";
+  displayTime(adzelog());
+  adzelog() << endl;
+
+  summary << "Statistics completed at (d:h:m:s) ";
+  displayTime(summary);
+  summary << endl;
 
   adzelog() << "\nadze finished in (d:h:m:s) ";
-  const double total = displayTime(adzelog());
+  displayTime(adzelog());
   adzelog() << endl;
 
   summary << "\nadze finished in (d:h:m:s) ";
   displayTime(summary);
   summary << endl;
   summary.close();
-
-  (void)total;
 
   return EXIT_OK;
 }

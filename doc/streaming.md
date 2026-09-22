@@ -125,3 +125,26 @@ edit that preserves both — rewriting a file in place within the filesystem's
 timestamp resolution — would go unnoticed. Name a converted file when the
 input is settled; while data is still moving, let the run convert into its
 temporary file each time.
+
+### Decision 4: the deleted-loci list is in file order
+
+The sweep names a dropped locus as it goes past, because the scan does not
+keep locus names -- a million of them would put back a per-locus cost this
+rewrite exists to remove. The list is therefore in file order, where before
+it was in descending index order. Same header sentence, same names, reversed.
+
+A run where every locus is dropped stops before the sweep, and that is the
+run whose user most needs the list, so it is written there too: from the
+header row for STRUCTURE input, and by re-reading the records for a VCF,
+which is affordable on a path that is about to exit.
+
+### Decision 5: one pass, one completion line
+
+Each statistic is still announced -- "Calculating allelic richness...", and
+so on for private richness and each tuple size -- because each is still
+being calculated. They are now calculated together, from one Q table per
+locus, so there is one completion line rather than three, and the run
+summary carries one "Statistics completed at" line in place of one per
+statistic. No per-statistic timing is lost that meant anything: in a fused
+pass there is no moment at which richness is finished and private richness
+is not.

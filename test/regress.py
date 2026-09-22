@@ -299,13 +299,22 @@ def ref_fulldata_cells(path):
 
 
 def cnd_fulldata_cells(path):
-    """The same, from the candidate's layout: one row per label and locus."""
+    """The same, from the candidate's layout: one row per label and locus.
+
+    Which of the two leading columns is the locus is read from the header,
+    not assumed: the streaming sweep writes the locus first because it has a
+    locus's values for every label at once (doc/streaming.md, decision 1),
+    while earlier builds wrote the label first. Either way the cells are the
+    same cells, which is what this compares.
+    """
     lines = open(path).read().splitlines()
     if not lines:
         return {}
     head = lines[0].split("\t")
-    if len(head) < 3 or head[1] != "LOCUS":
+    if len(head) < 3 or "LOCUS" not in head[:2]:
         return {}
+    locusCol = head.index("LOCUS")
+    labelCol = 1 - locusCol
     gs = [h[1:] for h in head[2:]]          # G1, G2, ... -> 1, 2, ...
     cells = {}
     for line in lines[1:]:
@@ -313,7 +322,7 @@ def cnd_fulldata_cells(path):
         if len(f) != len(head):
             continue
         for g, value in zip(gs, f[2:]):
-            cells[(f[0], g, f[1])] = value
+            cells[(f[labelCol], g, f[locusCol])] = value
     return cells
 
 
@@ -415,6 +424,21 @@ def compare(ref_dir, cnd_dir, files):
                 n, labels = g1_rows(b)
                 if n != len(labels):
                     missing.append("%s: %d g=1 rows for %d labels" % (f, n, len(labels)))
+            continue
+
+        if f.endswith("_deletedloci") and ref_bytes != cnd_bytes:
+            # Declared decision 4: the streaming sweep names dropped loci as
+            # they go past, so the list is in file order where 1.0's was in
+            # descending index order. The expected file is computed from the
+            # reference's own list, so this stays an exact comparison.
+            ra = ref_bytes.decode().rstrip("\n").split("\n")
+            rb = cnd_bytes.decode().rstrip("\n").split("\n")
+            expected = [ra[0]] + list(reversed(ra[1:]))
+            if expected == rb:
+                continue
+            diffs.append("%s (not the declared file-order rewrite: %s)" % (
+                f, first_difference("\n".join(expected).encode(),
+                                    "\n".join(rb).encode())))
             continue
 
         if ref_bytes != cnd_bytes:

@@ -3919,6 +3919,72 @@ string nameCreate(string name,string toPut)
   */
 }
 
+string deletedHeader(long long gone,double tol)
+{
+  ostringstream out;
+  out << gone << ((gone == 1) ? " locus has " : " loci have ")
+      << "at least one grouping with";
+  if(tol > 0) out << " more than " << 100*tol << "%";
+  out << " missing data.\n";
+  return out.str();
+}
+
+/*
+ * The deleted-loci report when there is nothing left to sweep.
+ *
+ * Normally the sweep writes this file as the dropped loci go past, but a run
+ * where every locus is dropped stops before the sweep -- and that is exactly
+ * the run whose user most needs the list. The names are read again rather
+ * than kept: a STRUCTURE file names its loci in the header row, and a VCF is
+ * re-read, which is affordable on a path that is about to exit.
+ */
+void writeDeletedLoci(ParamSet& p,const ScanResult& scan,const string& out)
+{
+  const string name = nameCreate(out,"_deletedloci");
+  ofstream d(name.c_str());
+  if(!d.is_open()) return;
+
+  d << deletedHeader(scan.numLoci - scan.survivors,p.tol.val);
+
+  if(wantsVCF(p.format.val,p.dfile.val))
+    {
+      LocusSource* src = openVCFSource(p,scan);
+      LocusCounts locus;
+      long long l = 0;
+      while(src->next(locus))
+	{
+	  if(size_t(l) < scan.dropped.size() && scan.dropped[size_t(l)])
+	    {
+	      d << locus.name << "\n";
+	    }
+	  l++;
+	}
+      delete src;
+    }
+  else
+    {
+      LineSource in;
+      if(!in.open(p.dfile.val)) return;
+
+      string line;
+      if(!in.next(line)) return;
+
+      vector<Field> fields;
+      tokenize(line,fields);
+      for(long long l = 0; l < scan.numLoci; l++)
+	{
+	  if(size_t(l) >= scan.dropped.size() || !scan.dropped[size_t(l)]) continue;
+	  if(size_t(l) < fields.size())
+	    {
+	      d << string(fields[size_t(l)].first,fields[size_t(l)].second) << "\n";
+	    }
+	}
+    }
+
+  d.close();
+  return;
+}
+
 /*
  * One locus's rows in the _fulldata file: a row per label, the locus first.
  * The streaming sweep has a locus's values for every grouping at once and
@@ -3973,7 +4039,8 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       const vector<int>& tupleFile,const vector<string>& tupleOut,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
-	       bool full_rich,bool full_priv,bool full_comb)
+	       bool full_rich,bool full_priv,bool full_comb,
+	       const string& deleted_out)
 {
   const int J = int(scan.groupName.size());
   const int numLoci = int(scan.survivors);
@@ -4084,7 +4151,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 
   //Tuple membership, hoisted out of the locus loop as the tuple pass does.
   vector< vector<char> > inTuple(T,vector<char>(J,0));
-  vector<string> tupleLabel(T);
+  vector<string> tupleLabel(T), tupleLabelComma(T);
   {
     vector<string> names;
     for(int m = 0; m < T; m++)
@@ -4095,10 +4162,34 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	    names[x] = scan.groupName[tuples[m][x]];
 	    inTuple[m][tuples[m][x]] = 1;
 	  }
+
+	/*
+	 * Two spellings, as the passes wrote them: the statistics file
+	 * follows the layout's separator, so a legacy space-separated file
+	 * gets a space-joined label; the _fulldata and window files are
+	 * tab-separated whatever the layout, so their label is always
+	 * comma-joined and stays one field.
+	 */
 	tupleLabel[m] = combineNames(&names[0],int(names.size()),
 				     param.tabbed() ? ',' : ' ');
+	tupleLabelComma[m] = combineNames(&names[0],int(names.size()),',');
       }
   }
+
+  /*
+   * The dropped loci are named as they go past, not collected and written at
+   * the end: the scan knows how many there are but not what they are called,
+   * and holding a name per dropped locus would put back a per-locus cost
+   * this rewrite exists to remove. They therefore appear in file order --
+   * doc/streaming.md, decision 4.
+   */
+  ofstream del_out;
+  if(!deleted_out.empty())
+    {
+      const string name = nameCreate(deleted_out,"_deletedloci");
+      del_out.open(name.c_str());
+      del_out << deletedHeader(scan.numLoci - scan.survivors,param.tol.val);
+    }
 
   WindowCursor richCursor, privCursor, combCursor;
   richCursor.init(windows);
@@ -4121,7 +4212,11 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
     {
       const bool keep = (size_t(seen) >= scan.dropped.size()) || !scan.dropped[size_t(seen)];
       seen++;
-      if(!keep) continue;
+      if(!keep)
+	{
+	  if(del_out.is_open()) del_out << locus.name << "\n";
+	  continue;
+	}
 
       const int slots = locus.slots;
       const int here = int(index);
@@ -4297,7 +4392,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	      for(int m = 0; m < T; m++)
 		{
 		  if(tupleFile[m] != f) continue;
-		  *cbFull[f] << locus.name << '\t' << tupleLabel[m];
+		  *cbFull[f] << locus.name << '\t' << tupleLabelComma[m];
 		  for(int g = gFrom; g <= gToPair; g++)
 		    {
 		      const double v = vComb[size_t(m)*gStride + g];
@@ -4363,7 +4458,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	  if(!windows.empty())
 	    {
 	      writeWindowRunning(*cbWin[f],combWin[m],gStride,windows,lmap,
-				 tupleLabel[m],gFrom,gToPair);
+				 tupleLabelComma[m],gFrom,gToPair);
 	    }
 	  if(!param.tabbed()) *cbOut[f] << endl;
 	}
