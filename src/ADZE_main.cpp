@@ -1,5 +1,6 @@
 #include "ADZE_main_tools.h"
 #include <cstdlib>
+#include <cstdio>
 
 using namespace std;
 
@@ -176,6 +177,79 @@ int main(int argc, char* argv[])
   adzelog() << "Reading " << p.dfile.val << "...\n";
 
   /*
+   * Development facility: walk the locus source and write the counts it
+   * yields in the same layout the reader's dump uses (see dumpCounts), so
+   * the two can be diffed directly. The sweep will read exactly these.
+   */
+  if(const char* sourcePath = getenv("ADZE_DUMP_SOURCE"))
+    {
+      try
+	{
+	  ParamSet sourceParams = p;
+	  ScanResult scan;
+	  scanDataset(sourceParams,scan,false);
+
+	  /*
+	   * STRUCTURE is converted first; VCF is read as it stands. Either way
+	   * the engine sees the same interface, which is the point.
+	   */
+	  LocusSource* src = 0;
+	  string tmp;
+	  long long passes = 1;
+	  if(wantsVCF(sourceParams.format.val,sourceParams.dfile.val))
+	    {
+	      src = openVCFSource(sourceParams,scan);
+	    }
+	  else
+	    {
+	      tmp = string(sourcePath) + ".counts.tmp";
+	      const long long budget = 64LL*1024*1024;
+	      const long long perLocus =
+		(long long)(sizeof(int))*4*int(scan.groupName.size()) + 64;
+	      long long chunk = budget/(perLocus > 0 ? perLocus : 1);
+	      //A development lever until --convert-chunk exists: force the
+	      //multi-pass path on a small fixture, where it can be checked.
+	      if(const char* forced = getenv("ADZE_CONVERT_CHUNK")) chunk = atoll(forced);
+	      if(chunk < 1) chunk = 1;
+	      passes = transposeStructure(sourceParams,scan,tmp,chunk);
+	      src = openCountFileSource(tmp,scan);
+	    }
+	  adzelog() << "converted in " << passes
+		    << (passes == 1 ? " pass\n" : " passes\n");
+	  ofstream d(sourcePath);
+	  d << "LOCUS\tCHROM\tPOS\tGROUPING\tNJ\tMISSING\tSLOTS\tNJI\n";
+
+	  LocusCounts locus;
+	  const int J = int(src->groupNames().size());
+	  while(src->next(locus))
+	    {
+	      for(int j = 0; j < J; j++)
+		{
+		  d << locus.name << "\t"
+		    << (locus.chrom < 0 ? string(".") : scan.lmap.chromName[locus.chrom]) << "\t"
+		    << locus.pos << "\t"
+		    << src->groupNames()[j] << "\t"
+		    << locus.nj[j] << "\t"
+		    << (src->geneCopies(j) - locus.nj[j]) << "\t"
+		    << locus.slots << "\t";
+
+		  for(int i = 0; i < locus.slots; i++)
+		    {
+		      if(i) d << ",";
+		      d << locus.count[size_t(i)*J + j];
+		    }
+		  d << "\n";
+		}
+	    }
+	  d.close();
+	  delete src;
+	  if(!tmp.empty()) remove(tmp.c_str());
+	}
+      catch(BAD_FILE x) { return EXIT_IO; }
+      catch(BAD_PARAM x) { return EXIT_DATA; }
+    }
+
+  /*
    * A dry run answers questions about the dataset -- its dimensions, each
    * grouping's sample size, the largest feasible MAX_G, how many windows and
    * rows the run would produce -- and every one of them follows from the
@@ -228,52 +302,6 @@ int main(int argc, char* argv[])
   Population* pop = NULL;
   LocusTable locusTable;
   LocusMap lmap;
-
-  /*
-   * Development facility: walk the locus source and write the counts it
-   * yields in the same layout the reader's dump uses (see dumpCounts), so
-   * the two can be diffed directly. The sweep will read exactly these.
-   */
-  if(const char* sourcePath = getenv("ADZE_DUMP_SOURCE"))
-    {
-      try
-	{
-	  ParamSet sourceParams = p;
-	  ScanResult scan;
-	  scanDataset(sourceParams,scan,false);
-
-	  LocusSource* src = openVCFSource(sourceParams,scan);
-	  ofstream d(sourcePath);
-	  d << "LOCUS\tCHROM\tPOS\tGROUPING\tNJ\tMISSING\tSLOTS\tNJI\n";
-
-	  LocusCounts locus;
-	  const int J = int(src->groupNames().size());
-	  while(src->next(locus))
-	    {
-	      for(int j = 0; j < J; j++)
-		{
-		  d << locus.name << "\t"
-		    << (locus.chrom < 0 ? string(".") : scan.lmap.chromName[locus.chrom]) << "\t"
-		    << locus.pos << "\t"
-		    << src->groupNames()[j] << "\t"
-		    << locus.nj[j] << "\t"
-		    << (src->geneCopies(j) - locus.nj[j]) << "\t"
-		    << locus.slots << "\t";
-
-		  for(int i = 0; i < locus.slots; i++)
-		    {
-		      if(i) d << ",";
-		      d << locus.count[size_t(i)*J + j];
-		    }
-		  d << "\n";
-		}
-	    }
-	  d.close();
-	  delete src;
-	}
-      catch(BAD_FILE x) { return EXIT_IO; }
-      catch(BAD_PARAM x) { return EXIT_DATA; }
-    }
 
   /*
    * Development facility: run the scan alongside the reader so the two can be

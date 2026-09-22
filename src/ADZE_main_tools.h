@@ -169,6 +169,14 @@ class LocusSource
 };
 
 LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan);
+
+/*
+ * STRUCTURE input, converted once into the locus-major counts the engine
+ * reads. Returns the number of passes the conversion made over the file.
+ */
+long long transposeStructure(ParamSet& p,const ScanResult& scan,
+			     const string& path,long long lociPerPass);
+LocusSource* openCountFileSource(const string& path,const ScanResult& scan);
 void printDryRun(const ParamSet& p,const ScanResult& scan,
 		 const vector< vector<int> >& tuples,list<int>& k,
 		 bool do_rich,bool do_priv,bool do_tuple);

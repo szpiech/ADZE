@@ -1375,6 +1375,273 @@ LocusSource* openVCFSource(ParamSet& p,const ScanResult& scan)
 }
 
 /*
+ * STRUCTURE input, converted into the counts the engine reads.
+ *
+ * A STRUCTURE file is individual-major: one row per gene copy, one column
+ * per locus. There is no way to finish a locus without visiting every row,
+ * so a locus cannot simply be streamed off it. Rather than teach the engine
+ * a second input shape, the file is converted: a chunk of locus columns is
+ * counted, written out, and the next chunk begun. The chunk is sized from a
+ * memory budget, so a microsatellite dataset of a few thousand loci is one
+ * pass and only a very large file needs more.
+ *
+ * (A strictly single-pass conversion is possible -- write each row's tokens
+ * to per-chunk spill files, then count each spill in turn -- but it trades
+ * the re-reads for writing and re-reading the genotypes themselves, which is
+ * more I/O than the re-reads unless the chunk count is large. Worth doing
+ * only if the pass count ever becomes the measured problem.)
+ *
+ * The file format is transient and host-native: a header naming the
+ * groupings and their gene copies, then one record per locus -- name, allele
+ * count, then the counts, slot-major with stride J, in the same order
+ * VCFSource yields and the reader published.
+ */
+namespace {
+
+  const char COUNT_MAGIC[8] = {'A','D','Z','E','C','N','T','1'};
+
+  void writeInt(ostream& out,int v) { out.write((const char*)&v,sizeof(int)); }
+  void writeLL(ostream& out,long long v) { out.write((const char*)&v,sizeof(long long)); }
+  void writeStr(ostream& out,const string& s)
+  {
+    writeInt(out,int(s.size()));
+    out.write(s.data(),s.size());
+  }
+
+  bool readInt(istream& in,int& v)
+  {
+    in.read((char*)&v,sizeof(int));
+    return in.good();
+  }
+  bool readLL(istream& in,long long& v)
+  {
+    in.read((char*)&v,sizeof(long long));
+    return in.good();
+  }
+  bool readStr(istream& in,string& s)
+  {
+    int n = 0;
+    if(!readInt(in,n) || n < 0) return false;
+    s.resize(size_t(n));
+    if(n) in.read(&s[0],n);
+    return in.good();
+  }
+
+  class CountFileSource : public LocusSource
+  {
+  public:
+    CountFileSource(const string& path,const ScanResult& scan)
+      : name(scan.groupName), rows(scan.groupRows), in(path.c_str(),ios::binary),
+	lmap(&scan.lmap), index(0)
+    {
+      if(!in.is_open())
+	{
+	  cerr << "ERROR: could not read the converted counts at " << path << "\n";
+	  throw BAD_FILE();
+	}
+
+      char magic[8];
+      in.read(magic,8);
+      if(!in.good() || memcmp(magic,COUNT_MAGIC,8) != 0)
+	{
+	  cerr << "ERROR: " << path << " is not an adze count file\n";
+	  throw BAD_FILE();
+	}
+
+      int J = 0;
+      long long loci = 0;
+      readInt(in,J);
+      readLL(in,loci);
+      for(int g = 0; g < J; g++)
+	{
+	  string nm;
+	  long long copies = 0;
+	  readStr(in,nm);
+	  readLL(in,copies);
+	}
+    }
+
+    const vector<string>& groupNames() const { return name; }
+    long long geneCopies(int grouping) const { return rows[grouping]; }
+
+    bool next(LocusCounts& out)
+    {
+      const int J = int(name.size());
+      int slots = 0;
+
+      if(!readStr(in,out.name)) return false;
+      if(!readInt(in,slots)) return false;
+
+      out.slots = slots;
+      out.count.assign(size_t(slots)*J,0);
+      out.nj.assign(J,0);
+
+      if(slots)
+	{
+	  in.read((char*)&out.count[0],streamsize(sizeof(int))*slots*J);
+	  if(!in.good()) return false;
+	}
+
+      for(int i = 0; i < slots; i++)
+	{
+	  for(int g = 0; g < J; g++) out.nj[g] += out.count[size_t(i)*J + g];
+	}
+
+      //Coordinates stay with the scan: the conversion need not repeat them.
+      if(lmap && lmap->size() > size_t(index))
+	{
+	  out.chrom = lmap->chrom[size_t(index)];
+	  out.pos = lmap->pos[size_t(index)];
+	}
+      else
+	{
+	  out.chrom = -1;
+	  out.pos = -1;
+	}
+
+      index++;
+      return true;
+    }
+
+  private:
+    const vector<string>& name;
+    const vector<long long>& rows;
+    ifstream in;
+    const LocusMap* lmap;
+    long long index;
+  };
+
+} //anonymous namespace
+
+long long transposeStructure(ParamSet& p,const ScanResult& scan,
+			     const string& path,long long lociPerPass)
+{
+  const int J = int(scan.groupName.size());
+  const long long numLoci = scan.numLoci;
+  if(lociPerPass < 1) lociPerPass = 1;
+
+  unordered_map<string,int> indexOf;
+  for(int g = 0; g < J; g++) indexOf.insert(make_pair(scan.groupName[g],g));
+
+  vector<string> keepList, dropList;
+  splitList(p.pops.val,keepList);
+  splitList(p.expops.val,dropList);
+
+  ofstream out(path.c_str(),ios::binary);
+  if(!out.is_open())
+    {
+      cerr << "ERROR: could not write the converted counts to " << path << "\n";
+      throw BAD_FILE();
+    }
+
+  out.write(COUNT_MAGIC,8);
+  writeInt(out,J);
+  writeLL(out,numLoci);
+  for(int g = 0; g < J; g++)
+    {
+      writeStr(out,scan.groupName[g]);
+      writeLL(out,scan.groupRows[g]);
+    }
+
+  vector<LocusTally> chunk;
+  vector<Field> fields;
+  vector<int> order;
+  string line, token;
+  long long passes = 0;
+
+  for(long long base = 0; base < numLoci; base += lociPerPass)
+    {
+      const long long stop = (base + lociPerPass < numLoci) ? base + lociPerPass : numLoci;
+      const int width = int(stop - base);
+
+      LineSource in;
+      if(!in.open(p.dfile.val))
+	{
+	  cerr << "ERROR: could not open " << p.dfile.val << "\n";
+	  throw BAD_FILE();
+	}
+      passes++;
+
+      //The locus-name row, then any further non-data rows.
+      if(!in.next(line)) badData("no locus-name row in " + p.dfile.val + ".");
+      tokenize(line,fields);
+      vector<string> names;
+      names.reserve(size_t(width));
+      for(int i = 0; i < width; i++)
+	{
+	  const Field& f = fields[size_t(base) + i];
+	  names.push_back(string(f.first,f.second));
+	}
+      for(int skip = 1; skip < p.nd_rows.val; skip++) in.next(line);
+
+      chunk.clear();
+      chunk.resize(size_t(width));
+
+      const int ndCols = p.nd_cols.val;
+      const int groupCol = p.sort_by.val - 1;
+      vector<int> rowInGroup(J,0);
+
+      while(in.next(line))
+	{
+	  tokenize(line,fields);
+	  if(fields.empty()) continue;
+
+	  token.assign(fields[groupCol].first,fields[groupCol].second);
+	  if(!keepList.empty() &&
+	     find(keepList.begin(),keepList.end(),token) == keepList.end()) continue;
+	  if(!dropList.empty() &&
+	     find(dropList.begin(),dropList.end(),token) != dropList.end()) continue;
+
+	  unordered_map<string,int>::const_iterator gi = indexOf.find(token);
+	  if(gi == indexOf.end()) continue;
+
+	  const int g = gi->second;
+	  const long long firstKey = (long long)(g) * 4294967296LL + rowInGroup[g];
+	  rowInGroup[g]++;
+
+	  for(int i = 0; i < width; i++)
+	    {
+	      const Field& f = fields[ndCols + size_t(base) + i];
+	      token.assign(f.first,f.second);
+	      if(token.compare(p.miss.val) == 0) continue;
+
+	      LocusTally& t = chunk[size_t(i)];
+	      const int sl = t.slot(token,firstKey,J);
+	      t.count[size_t(sl)*J + g]++;
+	    }
+	}
+
+      for(int i = 0; i < width; i++)
+	{
+	  LocusTally& t = chunk[size_t(i)];
+	  const int slots = int(t.label.size());
+
+	  order.resize(size_t(slots));
+	  for(int sl = 0; sl < slots; sl++) order[size_t(sl)] = sl;
+	  sort(order.begin(),order.end(),FirstSeenLess(t.firstSeen));
+
+	  writeStr(out,names[size_t(i)]);
+	  writeInt(out,slots);
+	  for(int sl = 0; sl < slots; sl++)
+	    {
+	      for(int g = 0; g < J; g++)
+		{
+		  writeInt(out,t.count[size_t(order[size_t(sl)])*J + g]);
+		}
+	    }
+	}
+    }
+
+  out.close();
+  return passes;
+}
+
+LocusSource* openCountFileSource(const string& path,const ScanResult& scan)
+{
+  return new CountFileSource(path,scan);
+}
+
+/*
  * The dry run: what the program would do with this dataset, from the counts
  * alone. Every figure here -- the dimensions, each grouping's sample size and
  * the range of Nj it scored, the largest feasible MAX_G, the window layout
