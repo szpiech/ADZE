@@ -43,11 +43,13 @@ layouts, `--full-*`, tuples by k, a statistic subset, a grouping filter,
 windows by locus and by basepair, all three input encodings, and `--dry-run`.
 Exit status and stdout are compared too.
 
-A deliberate change of row order can be declared rather than tolerated:
-`--fulldata-rows-reordered` compares `_fulldata` as a multiset of rows, and
-still fails if any value in them changed. The suite is negative-controlled —
-a perturbed statistic, a deleted output file, shuffled `_fulldata` rows and an
-altered `_fulldata` value are each caught.
+A deliberate change is declared rather than tolerated, and the declaration is
+still an exact comparison: `--fulldata-locus-major` rewrites the *reference's*
+`_fulldata` into the layout decision 1 of `doc/streaming.md` calls for and
+requires the candidate to equal it byte for byte, so a changed value still
+fails. The suite is negative-controlled — a perturbed statistic, a deleted
+output file, shuffled `_fulldata` rows, the declared layout offered without
+the flag, and an altered value under the flag are each caught.
 
 ## regress.py
 

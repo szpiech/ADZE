@@ -14,10 +14,15 @@ Both binaries run in their own scratch directory, and every file either wrote
 is compared. Lines carrying a wall-clock duration are masked, since two runs
 of the same binary differ there.
 
-A decision that deliberately changes a file's row order can be declared, so
-that it shows up as a named exception rather than being quietly tolerated:
+A decision that deliberately changes a file can be declared, so that it shows
+up as a named exception rather than being quietly tolerated. The declaration
+says exactly what the new file must be, so it is still an exact comparison:
 
-    --fulldata-rows-reordered   compare _fulldata as a multiset of rows
+    --fulldata-locus-major      the reference's _fulldata, with its label and
+                                LOCUS columns swapped and its rows re-sorted
+                                by locus (groupings keeping their order within
+                                a locus), must equal the candidate's byte for
+                                byte. See doc/streaming.md, decision 1.
 
 Exit status is 0 only if every case passes.
 """
@@ -115,6 +120,40 @@ def outputs(directory):
     return sorted(f for f in os.listdir(directory) if f not in skip)
 
 
+def as_locus_major(text):
+    """The reference's _fulldata, rewritten as the locus-major layout.
+
+    Decision 1 of the streaming rewrite: rows follow the sweep, so they come
+    out ordered by locus with a locus's groupings together, and LOCUS leads
+    the row because it is the sort key. Nothing else about the file changes,
+    so the expected content is computable from the reference's own and the
+    comparison stays exact — a changed value still fails.
+    """
+    lines = text.splitlines()
+    if not lines:
+        return text
+    head = lines[0].split("\t")
+    if len(head) < 3 or head[1] != "LOCUS":
+        return text                      # not a file this decision covers
+
+    rows = [l.split("\t") for l in lines[1:] if l.strip()]
+    loci, groups = [], []
+    for r in rows:                       # first-appearance order, both axes
+        if r[1] not in loci:
+            loci.append(r[1])
+        if r[0] not in groups:
+            groups.append(r[0])
+    at = {(r[0], r[1]): r for r in rows}
+
+    out = ["\t".join([head[1], head[0]] + head[2:])]
+    for locus in loci:
+        for g in groups:
+            r = at.get((g, locus))
+            if r is not None:
+                out.append("\t".join([r[1], r[0]] + r[2:]))
+    return "\n".join(out) + "\n"
+
+
 def compare(ref_dir, cnd_dir, reordered_fulldata):
     ref_files, cnd_files = outputs(ref_dir), outputs(cnd_dir)
     if ref_files != cnd_files:
@@ -128,15 +167,13 @@ def compare(ref_dir, cnd_dir, reordered_fulldata):
         if a == b:
             continue
         if reordered_fulldata and f.endswith("_fulldata"):
-            # A declared decision: the rows are the same, the order is not.
-            ra = sorted(a.decode().splitlines()[1:])
-            rb = sorted(b.decode().splitlines()[1:])
-            head_a = a.decode().splitlines()[:1]
-            head_b = b.decode().splitlines()[:1]
-            if ra == rb and head_a == head_b:
+            # A declared decision: the expected file is computed from the
+            # reference's own content, so this is still an exact comparison.
+            expected = as_locus_major(a.decode()).rstrip("\n").encode()
+            if expected == b.rstrip(b"\n"):
                 continue
-            return "%s (rows differ, not just their order: %s)" % (
-                f, first_difference("\n".join(ra).encode(), "\n".join(rb).encode()))
+            return "%s (not the declared locus-major rewrite: %s)" % (
+                f, first_difference(expected, b.rstrip(b"\n")))
         return "%s (%s)" % (f, first_difference(a, b))
 
     return None
@@ -159,8 +196,8 @@ def main():
     ap.add_argument("--reference", required=True)
     ap.add_argument("--workdir", default=os.path.join(os.path.dirname(
         os.path.abspath(__file__)), "work-equivalence"))
-    ap.add_argument("--fulldata-rows-reordered", action="store_true",
-                    help="accept a _fulldata file whose rows are the same but ordered differently")
+    ap.add_argument("--fulldata-locus-major", action="store_true",
+                    help="expect _fulldata in the locus-major layout (doc/streaming.md, decision 1)")
     ap.add_argument("--only", default=None, help="substring filter on case names")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--keep", action="store_true")
@@ -194,7 +231,7 @@ def main():
                 why = "stdout differs: %s" % first_difference(
                     masked_text(r.stdout).encode(), masked_text(c.stdout).encode())
             else:
-                why = compare(dirs["ref"], dirs["cnd"], args.fulldata_rows_reordered)
+                why = compare(dirs["ref"], dirs["cnd"], args.fulldata_locus_major)
 
             if why:
                 nfail += 1
