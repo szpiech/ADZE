@@ -419,6 +419,52 @@ which is what the warning is there to explain.
 If filtering removes every locus, \prog\ stops with an error rather than
 reporting statistics over no data.
 
+\subsection{How a run proceeds}
+\label{sec:how}
+
+Version 2.0 reads the data twice and holds none of it.
+
+The first pass counts. It reads every gene copy and records, for each
+grouping and each locus, how many copies were scored there --- one integer
+per locus per grouping, and nothing about which alleles they were. That is
+enough to decide everything the analysis needs to know about the dataset as
+a whole: which loci fail the missing-data filter (the filter's denominator
+is a grouping's total, which is only final at the end of the file), how
+large $g$ can be for each grouping and overall, where the windows fall, and
+what a \flag{--dry-run} should report.
+
+The second pass computes. Loci arrive one at a time; for each, the
+non-detection probabilities $Q_{jig}$ are built once and every requested
+statistic reads them --- allelic richness, private allelic richness, and
+each tuple. Each statistic keeps a running mean and sum of squared
+deviations per $g$, and one per window per $g$, so nothing per-locus is
+stored: when a locus's rows have been written it is forgotten.
+
+Peak memory therefore does not follow the genotypes. On a VCF of 320\,000
+loci and 10 groupings, version 1.0's successor-in-design --- the same
+program with the dataset resident --- peaks at 195\,MB where 2.0 peaks at
+32\,MB; the gap widens with the number of loci.
+
+A \flag{--dry-run} answers from the first pass alone and never opens the
+data a second time, so asking what a large file would do no longer costs
+most of doing it.
+
+\subsubsection*{\structureprog\ input is converted first}
+
+A \structureprog\ file is individual-major: one row per gene copy, one
+column per locus, so no locus can be finished without reading every row.
+Rather than a second engine, such a file is converted once into locus-major
+counts --- a chunk of locus columns at a time, sized to a memory budget ---
+and the analysis reads those. The converted file holds counts rather than
+genotypes and is correspondingly small: an 80\,000-locus file of 122\,MB
+converts to 7.2\,MB. It is written beside the output and removed when the
+run ends.
+
+The cost is honest: a \structureprog\ run reads its input twice and its
+conversion once, so it is slower than it was (on 320\,000 loci, 4.1\,s
+against 5.7\,s) while using roughly half the memory. A VCF run pays only the
+extra scan.
+
 \section{Parameters and options}
 
 \subsection{Parameter file syntax}
@@ -526,16 +572,20 @@ file per $k$; with \flag{--tuples} the named tuples all go to one file.
 
 \flag{--full-richness}, \flag{--full-private} and \flag{--full-tuples} add a
 \texttt{\_fulldata} file carrying the statistic at every locus: one row per
-grouping and locus, one column per $g$, tab-separated with a header. A value
+locus and grouping, one column per $g$, tab-separated with a header. A value
 undefined at that $g$ is \texttt{NA}.
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
-POP_GROUPING    LOCUS   G1      G2      G3
-POP1            L0      1       1.53571 1.80357
-POP1            L1      1       1.60714 2
-POP1            L2      1       1       NA
-POP1            L3      1       1.67857 2.125
+LOCUS   POP_GROUPING    G1      G2      G3
+L0      POP1            1       1.53571 1.80357
+L0      POP2            1       1.48214 1.75
+L1      POP1            1       1.60714 2
+L1      POP2            1       1.55357 1.91071
 \end{Verbatim}
+
+The locus leads the row because the program reads one locus at a time and
+computes every grouping's value for it before moving on (section~\ref{sec:how}):
+a locus's rows are written together and never returned to.
 
 \textbf{This is the transpose of what version 1.0 wrote}, and the one output
 format that 2.0 deliberately breaks. 1.0 put a row per grouping and $g$ with a
@@ -558,7 +608,7 @@ the statistics files; the summary columns are not repeated here, being the
 statistics file's business. To recover 1.0's orientation, transpose it:
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
-awk -F'\t' 'NR>1 {print $1, $2, $3}' out.richness_fulldata    # label, locus, g=1
+awk -F'\t' 'NR>1 {print $1, $2, $3}' out.richness_fulldata    # locus, label, g=1
 \end{Verbatim}
 
 \noindent In the example above \texttt{POP1} scored only two gene copies at
@@ -574,7 +624,11 @@ $g$ with nothing to say why; \flag{--legacy} reproduces that.
 
 When \flag{--tolerance} is below 1, a \texttt{\_deletedloci} file records how
 many loci were dropped, the threshold applied, and the name of each dropped
-locus.
+locus, in the order they appear in the input. (Version 1.0 listed them in
+descending order of position; the change is a consequence of naming each
+locus as it is read rather than collecting the names first.) The file is
+written even when every locus is dropped --- the run that produces no
+statistics at all is the one whose user most needs the list.
 
 \subsection{Run summary}
 
@@ -1007,7 +1061,23 @@ happens during the single read pass.
 \item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
   \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
   read only the uncompressed \structureprog\ layout.
-\item The \texttt{\_fulldata} files are transposed: one row per grouping and
+\item The data is never held in memory. Two passes replace the old read: one
+  counts gene copies and decides the filter, the ceilings, \texttt{MAX\_G} and
+  the windows; the second computes every statistic from one $Q$ table per
+  locus (section~\ref{sec:how}). On a VCF of 1.28 million loci and 10
+  groupings, peak memory falls from 764\,MB to 145\,MB at equal run time; a
+  \structureprog\ file of the same size falls from 886\,MB to 260\,MB and
+  takes about twice as long, being converted to locus-major counts first.
+\item \flag{--dry-run} is answered from the counting pass and never reads the
+  data a second time: 54\,MB and 0.47\,s become 11\,MB and 0.19\,s on 80\,000
+  loci.
+\item The \texttt{\_deletedloci} list is in input order rather than descending
+  order of position, and is written even when every locus is dropped
+  (section~\ref{sec:deletedloci}).
+\item Each statistic is still announced, but they are computed together, so
+  the run reports one completion and the summary carries one
+  \texttt{Statistics completed at} line rather than one per statistic.
+\item The \texttt{\_fulldata} files are transposed: one row per locus and
   locus with a column per $g$, where 1.0 wrote a row per $g$ with a column per
   locus (section~\ref{sec:fulldata}). This is the one output format 2.0 does
   not reproduce, in either mode.

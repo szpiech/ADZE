@@ -139,11 +139,16 @@ omission is why the default changed: a grouping undefined at every g disappears
 from the legacy file entirely, so a run can complete and report nothing with no
 visible reason. Window files were always tab-separated with a header, and `_deletedloci` and
 `_summary` are unaffected either way. The `_fulldata` files are **transposed with respect to 1.0** — one row per
-grouping and locus with a column per g, tab-separated with a header, `NA` where
+locus and grouping with a column per g, tab-separated with a header, `NA` where
 the value is undefined — in both layouts, so `--legacy` does not reproduce that
 file. 1.0's orientation (a row per g, a column per locus) cannot be written
-until the whole sweep is finished and is unreadable at genome scale; the
-manual's "Locus-specific output" section shows both and how to transpose back.
+until the whole sweep is finished and is unreadable at genome scale; the locus
+leads the row because the program computes a locus's values for every grouping
+together and never returns to it. The manual's "Locus-specific output" section
+shows both and how to transpose back.
+
+`_deletedloci` lists dropped loci in input order (1.0 listed them in descending
+order of position) and is written even when every locus is dropped.
 
 The `--tolerance` default is 0.1, not 1.0's `1`. Keeping every locus means a
 single locus where one grouping scored nothing drives `MAX_G` to 1 and leaves
@@ -247,6 +252,33 @@ Results do not depend on `--threads`: loci are processed independently and
 accumulated in locus order, so any thread count gives bit-identical output —
 checked at 1, 2, 4 and 8 threads over the statistics, `_fulldata` and window
 files.
+
+## Memory
+
+The data is never held in memory. A run reads the input twice: the first pass
+counts gene copies per grouping per locus — enough to decide the missing-data
+filter, each grouping's ceiling, `MAX_G` and the window layout — and the second
+computes every statistic from one *Q* table per locus, keeping a running mean
+and variance rather than the per-locus values. `--dry-run` is answered from the
+first pass alone.
+
+Measured on synthetic diploid data, 10 groupings of 20 individuals, both
+statistics, `--max-g 10` (peak RSS, median of three):
+
+| loci | VCF before | VCF now | STRUCTURE before | STRUCTURE now |
+|---|---|---|---|---|
+| 20 000 | 13 MB | 7 MB | 15 MB | 16 MB |
+| 80 000 | 49 MB | 12 MB | 55 MB | 35 MB |
+| 320 000 | 195 MB | 32 MB | 216 MB | 133 MB |
+| 1 280 000 | 764 MB | 145 MB | 886 MB | 260 MB |
+
+"before" is the same program with the dataset resident, at the branch point.
+VCF runs take the same time as before; STRUCTURE runs take 1.3× to 1.9× longer,
+since the file is individual-major and is converted to locus-major counts
+first, into a temporary file beside the output that is removed when the run
+ends. The conversion is small — an 80 000-locus file of 122 MB becomes 7.2 MB —
+and the chunk it holds while converting is what keeps STRUCTURE's peak above
+the VCF one.
 
 ## Documentation
 
