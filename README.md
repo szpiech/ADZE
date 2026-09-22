@@ -210,6 +210,8 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 | `--samples FILE` | sample-to-grouping map, required for VCF input | none |
 | `--format auto\|structure\|vcf` | input format; `auto` reads the file name | `auto` |
 | `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input | none |
+| `--count-file FILE` | keep the counts a STRUCTURE file is converted into, and reuse them next run | temporary, removed |
+| `--convert-chunk N` | loci per conversion pass | as many as fit 64 MB |
 | `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci | off |
 | `--step-bp N` / `--step-loci N` | how far a window advances | the window width |
 | `--min-window-loci N` | skip windows holding fewer than N loci | `1` |
@@ -278,7 +280,10 @@ since the file is individual-major and is converted to locus-major counts
 first, into a temporary file beside the output that is removed when the run
 ends. The conversion is small — an 80 000-locus file of 122 MB becomes 7.2 MB —
 and the chunk it holds while converting is what keeps STRUCTURE's peak above
-the VCF one.
+the VCF one. `--count-file FILE` keeps that file instead of deleting it, and
+reuses it on the next run over the same data — it is refused, with the reason,
+if the data file has changed size or date, or if the grouping filters, missing
+code or column layout differ. `--convert-chunk N` sets the loci per pass.
 
 ## Documentation
 

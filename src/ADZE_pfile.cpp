@@ -29,6 +29,12 @@ const OptSpec OPTIONS[] = {
    "Input", "sample-to-grouping map, required for VCF input (two columns: sample grouping)"},
   {LOCI_MAP, "LOCI_MAP", "--loci-map", 0, OPT_STRING, "FILE", 0,
    "Input", "locus coordinates for STRUCTURE input (three columns: locus chromosome position)"},
+  {COUNT_FILE, "COUNT_FILE", "--count-file", 0, OPT_STRING, "FILE",
+   "temporary, removed",
+   "Input", "keep the counts a STRUCTURE file is converted into, and reuse them next run"},
+  {CONVERT_CHUNK, "CONVERT_CHUNK", "--convert-chunk", 0, OPT_INT, "N",
+   "as many as fit 64 MB",
+   "Input", "loci per pass when converting STRUCTURE input"},
   {G, "MAX_G", "--max-g", "-g", OPT_INT, "N", "the largest the data supports",
    "Input", "largest standardized sample size"},
   {ND_ROWS, "NON_DATA_ROWS", "--non-data-rows", "-nr", OPT_INT, "N", "1",
@@ -140,6 +146,8 @@ ParamSet::ParamSet()
   format.val = "auto";
   samples.val = "";
   loci_map.val = "";
+  count_file.val = "";
+  convert_chunk.val = 0;
   win_bp.val = 0;
   win_loci.val = 0;
   step_bp.val = 0;
@@ -284,6 +292,9 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case FORMAT:     SETP(format);     format.val = val;                 break;
     case SAMPLES:    SETP(samples);    samples.val = val;                break;
     case LOCI_MAP:   SETP(loci_map);   loci_map.val = val;               break;
+    case COUNT_FILE: SETP(count_file); count_file.val = val;             break;
+    case CONVERT_CHUNK: SETP(convert_chunk);
+      convert_chunk.val = atoi(val.c_str());                             break;
     case WIN_BP:     SETP(win_bp);     win_bp.val = atoll(val.c_str());   break;
     case WIN_LOCI:   SETP(win_loci);   win_loci.val = atoll(val.c_str()); break;
     case STEP_BP:    SETP(step_bp);    step_bp.val = atoll(val.c_str());  break;
@@ -681,6 +692,8 @@ void ParamSet::echo(ostream& out)
   if(format.set) out << "FORMAT " << format.val << endl;
   if(samples.set) out << "SAMPLE_FILE " << samples.val << endl;
   if(loci_map.set) out << "LOCI_MAP " << loci_map.val << endl;
+  if(count_file.set) out << "COUNT_FILE " << count_file.val << endl;
+  if(convert_chunk.set) out << "CONVERT_CHUNK " << convert_chunk.val << endl;
   if(win_bp.set)
     {
       out << "WINDOW_BP " << win_bp.val << endl

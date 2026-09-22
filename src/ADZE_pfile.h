@@ -19,7 +19,7 @@ enum{FALSE,TRUE};
 enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      MISS,COMB,FULL_R,FULL_P,FULL_C,PP,TNC,SKIP_CHK,
      OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,DRY_RUN,QUIET,THREADS,PARAMS,
-     FORMAT,SAMPLES,LOCI_MAP,
+     FORMAT,SAMPLES,LOCI_MAP,COUNT_FILE,CONVERT_CHUNK,
      WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,LEGACY,
      LABEL_SIZE};
 
@@ -104,7 +104,9 @@ class ParamSet
   Param<string> tuple_file;
   Param<string> format;   //auto | structure | vcf
   Param<string> samples;  //sample -> grouping map, for VCF input
-  Param<string> loci_map; //locus -> chromosome, position; STRUCTURE input
+  Param<string> loci_map;
+  Param<string> count_file;
+  Param<int> convert_chunk; //locus -> chromosome, position; STRUCTURE input
 
   /*
    * Sliding windows.  Size is given either in basepairs or in loci, never

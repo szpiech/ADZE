@@ -129,8 +129,6 @@ int main(int argc, char* argv[])
       return EXIT_USAGE;
     }
 
-  adzelog() << "Reading " << p.dfile.val << "...\n";
-
   /*
    * Development facility: walk the locus source and write the counts it
    * yields in the same layout the reader's dump uses (see dumpCounts), so
@@ -560,11 +558,35 @@ int main(int argc, char* argv[])
 
       if(!wantsVCF(p.format.val,p.dfile.val))
 	{
+	  /*
+	   * A STRUCTURE file is individual-major, so it is converted once into
+	   * the locus-major counts the sweep reads. On a large file this is
+	   * minutes of work and a second file on disk: the run says so rather
+	   * than going quiet.
+	   */
 	  countPath = countFilePath(p);
 	  string why;
-	  if(!countFileUsable(countPath,p,scan,why))
+
+	  if(countFileUsable(countPath,p,scan,why))
 	    {
-	      transposeStructure(p,scan,countPath,convertChunk(p,scan));
+	      adzelog() << "Reusing the counts in " << countPath << ".\n";
+	    }
+	  else
+	    {
+	      if(p.count_file.set && why.size())
+		{
+		  adzelog() << "Converting again: " << countPath
+			    << " cannot be used, " << why << ".\n";
+		}
+
+	      adzelog() << "Converting " << p.dfile.val
+			<< " to locus-major counts in " << countPath << "...\n";
+
+	      const long long passes =
+		transposeStructure(p,scan,countPath,convertChunk(p,scan));
+
+	      adzelog() << "  converted in " << passes
+			<< (passes == 1 ? " pass" : " passes") << ".\n";
 	    }
 	}
 
@@ -593,16 +615,17 @@ int main(int argc, char* argv[])
     }
   catch(BAD_FILE x)
     {
-      if(!countPath.empty()) remove(countPath.c_str());
+      if(!countPath.empty() && !p.count_file.set) remove(countPath.c_str());
       return EXIT_IO;
     }
   catch(BAD_PARAM x)
     {
-      if(!countPath.empty()) remove(countPath.c_str());
+      if(!countPath.empty() && !p.count_file.set) remove(countPath.c_str());
       return EXIT_DATA;
     }
 
-  if(!countPath.empty()) remove(countPath.c_str());
+  //A file the user named is theirs to keep; an unnamed one was ours.
+  if(!countPath.empty() && !p.count_file.set) remove(countPath.c_str());
 
   if(p.pp.val) adzelog() << endl;
   adzelog() << "Completed at (d:h:m:s) ";

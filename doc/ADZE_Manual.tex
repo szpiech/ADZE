@@ -458,7 +458,12 @@ counts --- a chunk of locus columns at a time, sized to a memory budget ---
 and the analysis reads those. The converted file holds counts rather than
 genotypes and is correspondingly small: an 80\,000-locus file of 122\,MB
 converts to 7.2\,MB. It is written beside the output and removed when the
-run ends.
+run ends, unless \flag{--count-file} names it, in which case it is kept and
+reused by the next run over the same data. A kept file records where it came
+from --- the data file's path, size and modification time, the grouping
+filters, the missing code and the column layout --- and is refused with the
+reason if any of those has changed, rather than being used with a warning.
+\flag{--convert-chunk} sets the loci per conversion pass.
 
 The cost is honest: a \structureprog\ run reads its input twice and its
 conversion once, so it is slower than it was (on 320\,000 loci, 4.1\,s

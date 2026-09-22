@@ -1694,6 +1694,9 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
  */
 string countFilePath(const ParamSet& p)
 {
+  //A named file is the user's to keep and reuse; an unnamed one is the run's
+  //own temporary, written beside the output and removed when it ends.
+  if(p.count_file.set) return p.count_file.val;
   return p.out_prefix.val + ".counts.tmp";
 }
 
@@ -1715,6 +1718,12 @@ long long countFileBytes(const ScanResult& scan)
  */
 long long convertChunk(const ParamSet& p,const ScanResult& scan)
 {
+  if(p.convert_chunk.set && p.convert_chunk.val > 0)
+    {
+      return (p.convert_chunk.val < scan.numLoci)
+	? (long long)(p.convert_chunk.val) : scan.numLoci;
+    }
+
   const long long budget = 64LL*1024*1024;
   const long long J = (long long)(scan.groupName.size());
   const long long perLocus = 4*(long long)(sizeof(int))*(J > 0 ? J : 1) + 64;
