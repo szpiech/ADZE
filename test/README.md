@@ -1,6 +1,6 @@
 # Test suite
 
-Five suites. Four are driven by `gen_data.py`. `regress.py` holds the numbers to
+Six suites. Four are driven by `gen_data.py`. `regress.py` holds the numbers to
 ADZE 1.0; `equivalence.py` holds a build to another 2.x build, byte for byte;
 `formats.py` holds the input formats to each other; `windows.py`
 holds the windowed statistics to the layout they claim to cover. `docs.py`
@@ -133,6 +133,19 @@ spacing, so a window of k spacings holds exactly k loci and the expected
 layout can be written down by hand.
 
     ./test/gen_data.py /tmp/adze-data
+
+## includes.py
+
+Reads the sources and requires each compiled file to include a header for
+every standard-library symbol it uses --- following its project headers one
+level, since a header it includes may supply one. It exists because
+implementations differ in what they hand over transitively: `libc++` supplies
+`<cstring>` through other headers, so a `memcmp()` with no
+`#include <cstring>` built on macOS and failed on a Linux cluster with
+`libstdc++`. Reading the source catches that anywhere, including on the
+machine where it would have compiled.
+
+    ./test/includes.py
 
 ## docs.py
 

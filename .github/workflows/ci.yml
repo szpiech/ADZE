@@ -193,6 +193,7 @@ jobs:
         run: |
           set -euxo pipefail
           python3 test/docs.py
+          python3 test/includes.py
           python3 test/regress.py --candidate src/adze --reference ref10/src/adze-1.0
           python3 test/formats.py --candidate src/adze
           python3 test/windows.py --candidate src/adze

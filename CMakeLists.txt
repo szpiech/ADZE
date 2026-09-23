@@ -111,6 +111,11 @@ if(BUILD_TESTING)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/docs.py
                      --readme ${CMAKE_CURRENT_SOURCE_DIR}/README.md
                      --source ${CMAKE_CURRENT_SOURCE_DIR}/src/ADZE_pfile.cpp)
+    # Reads the sources rather than compiling them, so a header another
+    # implementation supplies transitively is caught on this machine too.
+    add_test(NAME includes
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/includes.py
+                     --src ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME formats
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/formats.py
                      --candidate $<TARGET_FILE:adze>
