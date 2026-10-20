@@ -104,6 +104,17 @@ struct ScanResult
   long long geneCopies;
 
   /*
+   * Haplotype mode only: the span and SNP count of each block, parallel to
+   * lmap, whose position is the block's first SNP. Empty otherwise, and
+   * blocked() is how later code asks which it is looking at.
+   */
+  vector<long long> blockEnd;
+  vector<int> blockSnps;
+  long long records;                 //VCF records read, blocks aside
+
+  bool blocked() const { return !blockSnps.empty(); }
+
+  /*
    * What resolve() derives, once every gene copy has been counted. The
    * filter's denominator is a grouping's total, which is only final at the
    * end of the pass, so the survival decision cannot be taken locus by locus

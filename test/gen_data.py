@@ -242,6 +242,15 @@ def write_phased(prefix, nloci, npops=4, nind=8, nall=2, missing=0.0, seed=1,
 
     samples = [(p, i) for p in range(npops) for i in range(nind[p])]
 
+    # A shortened GT does not convey its trailing copy at that record, so the
+    # matrix says uncalled there too: .haps is the record of what the VCF
+    # conveys, not of what was drawn, and a checker that read the drawn value
+    # would expect a haplotype the file never carried.
+    for (l, p, i) in short_gt:
+        seq = copies[(p, i)]
+        if len(seq) > 1:
+            seq[-1][l] = None
+
     with open(prefix + ".haps", "w", newline="\n") as fh:
         fh.write("SAMPLE\tCOPY\t" + "\t".join(names) + "\n")
         for (p, i) in samples:

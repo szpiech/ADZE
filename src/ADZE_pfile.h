@@ -21,6 +21,7 @@ enum{G,LOCI,ND_ROWS,ND_COLS,DLINES,SORT_BY,TOL,K,DFILE,R_OUT,P_OUT,C_OUT,
      OUT_PREFIX,STAT,POPS,EXPOPS,TUPLE_FILE,DRY_RUN,QUIET,THREADS,PARAMS,
      FORMAT,SAMPLES,LOCI_MAP,COUNT_FILE,CONVERT_CHUNK,
      WIN_BP,WIN_LOCI,STEP_BP,STEP_LOCI,MIN_WIN_LOCI,AT_G,LEGACY,
+     HAP_SNPS,HAP_BP,MIN_HAP_SNPS,
      LABEL_SIZE};
 
 enum OptType{OPT_INT,OPT_LONG,OPT_DOUBLE,OPT_BOOL,OPT_STRING};
@@ -113,6 +114,9 @@ class ParamSet
    * both; the matching step defaults to the size, so the default is a
    * non-overlapping tiling.
    */
+  Param<long long> hap_snps;
+  Param<long long> hap_bp;
+  Param<int> min_hap_snps;
   Param<long long> win_bp;
   Param<long long> win_loci;
   Param<long long> step_bp;
@@ -128,6 +132,13 @@ class ParamSet
   int at_g_val;
 
   bool windowed() const { return win_bp.set || win_loci.set; }
+
+  /*
+   * Haplotype mode: consecutive SNPs are collapsed into blocks and a block's
+   * alleles are the haplotypes carried across it, so a "locus" in every later
+   * sentence means a block. Needs phase, so VCF only.
+   */
+  bool haplotypes() const { return hap_snps.set || hap_bp.set; }
   /*
    * Output layout.  One flag: the result files are tab-separated with a header
    * unless version 1.0's layout is asked for.  Writers ask tabbed() rather

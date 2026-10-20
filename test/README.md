@@ -1,6 +1,6 @@
 # Test suite
 
-Six suites. Four are driven by `gen_data.py`. `regress.py` holds the numbers to
+Seven suites. Four are driven by `gen_data.py`. `regress.py` holds the numbers to
 ADZE 1.0; `equivalence.py` holds a build to another 2.x build, byte for byte;
 `formats.py` holds the input formats to each other; `windows.py`
 holds the windowed statistics to the layout they claim to cover. `docs.py`
@@ -133,6 +133,16 @@ spacing, so a window of k spacings holds exactly k loci and the expected
 layout can be written down by hand.
 
     ./test/gen_data.py /tmp/adze-data
+
+## haplotypes.py
+
+Holds the haplotype-block machinery to haplotypes assembled from the
+fixtures' own `.haps` matrices, which `gen_data.write_phased` writes before it
+writes a single record — so block boundaries, spans, callable copies, the
+missing-data filter and the resulting `MAX_G` are all checked against an
+implementation that shares no code with ADZE. Needs no reference binary.
+
+    ./test/haplotypes.py --candidate src/adze
 
 ## includes.py
 

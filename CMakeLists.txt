@@ -120,6 +120,10 @@ if(BUILD_TESTING)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/formats.py
                      --candidate $<TARGET_FILE:adze>
                      --workdir ${CMAKE_CURRENT_BINARY_DIR}/formats)
+    add_test(NAME haplotypes
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/haplotypes.py
+                     --candidate $<TARGET_FILE:adze>
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/haplotypes)
     add_test(NAME windows
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/windows.py
                      --candidate $<TARGET_FILE:adze>

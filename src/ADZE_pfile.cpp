@@ -54,6 +54,12 @@ const OptSpec OPTIONS[] = {
   {EXPOPS, 0, "--exclude-pops", 0, OPT_STRING, "LIST", "none excluded",
    "Input", "analyse everything except these groupings"},
 
+  {HAP_SNPS, "HAP_SNPS", "--hap-snps", 0, OPT_LONG, "N", "off",
+   "Analysis", "collapse runs of N consecutive SNPs into haplotype alleles (phased VCF only)"},
+  {HAP_BP, "HAP_BP", "--hap-bp", 0, OPT_LONG, "N", "off",
+   "Analysis", "collapse each N-basepair run of SNPs into haplotype alleles (phased VCF only)"},
+  {MIN_HAP_SNPS, "MIN_HAP_SNPS", "--min-hap-snps", 0, OPT_INT, "N", "1",
+   "Analysis", "do not report a haplotype block holding fewer than N SNPs"},
   {WIN_BP, "WINDOW_BP", "--window-bp", 0, OPT_LONG, "N", "off",
    "Analysis", "sliding windows N basepairs wide (needs locus coordinates)"},
   {WIN_LOCI, "WINDOW_LOCI", "--window-loci", 0, OPT_LONG, "N", "off",
@@ -148,6 +154,9 @@ ParamSet::ParamSet()
   loci_map.val = "";
   count_file.val = "";
   convert_chunk.val = 0;
+  hap_snps.val = 0;
+  hap_bp.val = 0;
+  min_hap_snps.val = 1;
   win_bp.val = 0;
   win_loci.val = 0;
   step_bp.val = 0;
@@ -295,6 +304,10 @@ void ParamSet::storeVal(int id,const string& raw,bool cmd)
     case COUNT_FILE: SETP(count_file); count_file.val = val;             break;
     case CONVERT_CHUNK: SETP(convert_chunk);
       convert_chunk.val = atoi(val.c_str());                             break;
+    case HAP_SNPS:   SETP(hap_snps);   hap_snps.val = atoll(val.c_str()); break;
+    case HAP_BP:     SETP(hap_bp);     hap_bp.val = atoll(val.c_str());   break;
+    case MIN_HAP_SNPS: SETP(min_hap_snps);
+      min_hap_snps.val = atoi(val.c_str());                                break;
     case WIN_BP:     SETP(win_bp);     win_bp.val = atoll(val.c_str());   break;
     case WIN_LOCI:   SETP(win_loci);   win_loci.val = atoll(val.c_str()); break;
     case STEP_BP:    SETP(step_bp);    step_bp.val = atoll(val.c_str());  break;
@@ -561,6 +574,37 @@ bool ParamSet::finish()
       ok = 0;
     }
 
+  /*
+   * A block is sized one way or the other, never both: a run of N SNPs and a
+   * run of N basepairs are different objects, and a rule combining them would
+   * have to break one of the two promises.
+   */
+  if(hap_snps.set && hap_bp.set)
+    {
+      cerr << "ERROR: --hap-snps and --hap-bp both size a haplotype block; "
+	   << "give one.\n";
+      ok = 0;
+    }
+
+  if((hap_snps.set && hap_snps.val < 1) || (hap_bp.set && hap_bp.val < 1))
+    {
+      cerr << "ERROR: a haplotype block must be at least 1 "
+	   << (hap_bp.set ? "basepair" : "SNP") << " wide.\n";
+      ok = 0;
+    }
+
+  if(min_hap_snps.val < 1)
+    {
+      cerr << "ERROR: --min-hap-snps must be at least 1.\n";
+      ok = 0;
+    }
+
+  if(min_hap_snps.set && !haplotypes())
+    {
+      cerr << "WARNING: --min-hap-snps applies to a haplotype run; "
+	   << "ignoring it.\n";
+    }
+
   if(min_win_loci.val < 1)
     {
       cerr << "ERROR: --min-window-loci must be at least 1.\n";
@@ -623,6 +667,19 @@ bool ParamSet::finish()
 	  cerr << "ERROR: a windowed run needs locus coordinates. STRUCTURE "
 	       << "input carries none,\n       so supply --loci-map FILE "
 	       << "(locus, chromosome, position).\n";
+	  ok = 0;
+	}
+
+      /*
+       * A haplotype is a run of alleles along one chromosome copy, so the
+       * input has to say which copy each allele sits on. A VCF does, when its
+       * genotypes are phased; the STRUCTURE layout has no way to.
+       */
+      if(haplotypes() && !vcf)
+	{
+	  cerr << "ERROR: haplotype alleles need phase, which the STRUCTURE "
+	       << "layout does not carry.\n       Supply a phased VCF, or drop "
+	       << "--hap-snps/--hap-bp to analyse the SNPs themselves.\n";
 	  ok = 0;
 	}
 

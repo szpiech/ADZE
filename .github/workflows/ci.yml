@@ -197,6 +197,7 @@ jobs:
           python3 test/regress.py --candidate src/adze --reference ref10/src/adze-1.0
           python3 test/formats.py --candidate src/adze
           python3 test/windows.py --candidate src/adze
+          python3 test/haplotypes.py --candidate src/adze
 
   example:
     name: distributed example

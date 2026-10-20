@@ -274,6 +274,60 @@ string LocusMap::checkOrder(const vector<string>& locusName) const
 }
 
 /*
+ * Which records belong to the same haplotype block.
+ *
+ * --hap-snps counts SNPs, so a block closes once it holds that many.
+ * --hap-bp divides each chromosome into fixed spans anchored at position 1 --
+ * the run-independent anchoring --window-bp already uses -- so the same region
+ * yields the same blocks in every run and two datasets can be compared block
+ * by block. A block never spans a chromosome.
+ *
+ * The scan and the reader both drive this, and must agree record for record:
+ * the scan numbers the blocks and the reader fills them, so a disagreement
+ * would silently attach one block's haplotypes to another's counts. Keeping
+ * the rule in one place is what makes that agreement structural rather than
+ * something to remember.
+ */
+struct HapBlocker
+{
+  long long snps;                    //block width in SNPs, or 0
+  long long bp;                      //block width in basepairs, or 0
+  int chrom;                         //chromosome of the open block
+  long long span;                    //basepair span index of the open block
+  long long held;                    //SNPs in the open block
+  bool open;
+
+  HapBlocker(const ParamSet& p)
+    : snps(p.hap_snps.set ? p.hap_snps.val : 0),
+      bp(p.hap_bp.set ? p.hap_bp.val : 0),
+      chrom(-1), span(-1), held(0), open(false) {}
+
+  long long spanOf(long long pos) const
+  {
+    return (bp > 0) ? ((pos > 0 ? pos - 1 : 0) / bp) : 0;
+  }
+
+  //True when this record begins a block, closing whatever was open.
+  bool opens(int c, long long pos) const
+  {
+    if(!open) return true;
+    if(c != chrom) return true;
+    if(snps > 0) return held >= snps;
+    return spanOf(pos) != span;
+  }
+
+  void begin(int c, long long pos)
+  {
+    chrom = c;
+    span = spanOf(pos);
+    held = 1;
+    open = true;
+  }
+
+  void add() { held++; }
+};
+
+/*
  * Lay the windows out over the surviving loci, one chromosome at a time so no
  * window spans a boundary.
  *
@@ -1706,6 +1760,44 @@ static void scanStructure(ParamSet& p,ScanResult& out,LineSource& in,
   return;
 }
 
+/*
+ * Append one haplotype block's row to the scan: its coordinate, its span, and
+ * how many gene copies carry a callable haplotype across it.
+ *
+ * A block holding fewer SNPs than --min-hap-snps is not appended at all,
+ * rather than appended and marked dropped: it is not a block the run reports,
+ * and the reader applies the same rule to the same records.
+ */
+static void closeHapBlock(ScanResult& out,const ParamSet& p,
+			  const vector< vector<char> >& callable,
+			  const vector<int>& sampleGroup,
+			  const HapBlocker& blocker,
+			  long long start,long long last)
+{
+  if(!blocker.open) return;
+  if(blocker.held < (long long)(p.min_hap_snps.val)) return;
+
+  out.lmap.chrom.push_back(blocker.chrom);
+  out.lmap.pos.push_back(start);
+  out.blockEnd.push_back(last);
+  out.blockSnps.push_back(int(blocker.held));
+
+  for(size_t g = 0; g < out.observed.size(); g++) out.observed[g].push_back(0);
+
+  const size_t l = out.observed.empty() ? 0 : out.observed[0].size() - 1;
+  for(size_t c = 0; c < callable.size() && c < sampleGroup.size(); c++)
+    {
+      const int g = sampleGroup[c];
+      if(g < 0) continue;
+      for(size_t k = 0; k < callable[c].size(); k++)
+	{
+	  if(callable[c][k]) out.observed[g][l]++;
+	}
+    }
+
+  return;
+}
+
 static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 		    const vector<string>& keepList,
 		    const vector<string>& dropList,
@@ -1739,6 +1831,19 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
   int usedSamples = 0;
   long long records = 0;
 
+  /*
+   * Haplotype mode: a gene copy's haplotype is callable in a block only if the
+   * copy is called at every record in it, so the pass carries one flag per
+   * gene copy across the block rather than a count per record. No allele is
+   * interned here -- what a copy carries does not matter to the scan, only
+   * whether it carries anything -- so a block costs what a locus cost.
+   */
+  const bool haploMode = p.haplotypes();
+  vector<string> sampleName;
+  HapBlocker blocker(p);
+  vector< vector<char> > callable;       //[sample][copy], within the open block
+  long long blockStart = 0, blockLast = 0;
+
   while(in.next(line))
     {
       if(line.empty()) continue;
@@ -1760,6 +1865,12 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 
 	  sampleGroup.assign(fields.size()-9,-1);
 	  samplePloidy.assign(fields.size()-9,0);
+	  sampleName.assign(fields.size()-9,string());
+
+	  for(size_t c = 9; c < fields.size(); c++)
+	    {
+	      sampleName[c-9].assign(fields[c].first,fields[c].second);
+	    }
 
 	  for(size_t c = 9; c < fields.size(); c++)
 	    {
@@ -1796,11 +1907,19 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	  badData(m.str());
 	}
 
+      int recChrom = -1;
+      long long recPos = -1;
       {
 	const string chrom(fields[0].first,fields[0].second);
 	const string posText(fields[1].first,fields[1].second);
-	out.lmap.chrom.push_back(out.lmap.chromIndex(chrom));
-	out.lmap.pos.push_back(atoll(posText.c_str()));
+	recChrom = out.lmap.chromIndex(chrom);
+	recPos = atoll(posText.c_str());
+
+	if(!haploMode)
+	  {
+	    out.lmap.chrom.push_back(recChrom);
+	    out.lmap.pos.push_back(recPos);
+	  }
       }
 
       int gtField = -1;
@@ -1827,9 +1946,36 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	  badData(m.str());
 	}
 
-      const size_t l = size_t(records);
+      /*
+       * A block is closed by the record that starts the next one, and by the
+       * end of the file. Closing is where its callable copies are counted and
+       * its row appended, so a block too short to report (--min-hap-snps)
+       * simply never gets one.
+       */
+      if(haploMode && blocker.opens(recChrom,recPos))
+	{
+	  closeHapBlock(out,p,callable,sampleGroup,blocker,blockStart,blockLast);
+	  blocker.begin(recChrom,recPos);
+	  blockStart = recPos;
+
+	  for(size_t c = 0; c < callable.size(); c++)
+	    {
+	      callable[c].assign(callable[c].size(),1);
+	    }
+	}
+      else if(haploMode)
+	{
+	  blocker.add();
+	}
+
+      blockLast = recPos;
+
+      const size_t l = haploMode ? 0 : size_t(records);
       records++;
-      for(size_t g = 0; g < out.observed.size(); g++) out.observed[g].push_back(0);
+      if(!haploMode)
+	{
+	  for(size_t g = 0; g < out.observed.size(); g++) out.observed[g].push_back(0);
+	}
 
       for(size_t c = 0; c < sampleGroup.size(); c++)
 	{
@@ -1848,8 +1994,20 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	  size_t stop = i;
 	  while(stop < n && f[stop] != ':') stop++;
 
-	  if(i >= stop) continue;
-	  if(stop - i == 1 && f[i] == '.') { if(samplePloidy[c] == 0) samplePloidy[c] = 1; continue; }
+	  if(haploMode && callable.size() <= c) callable.resize(c+1);
+
+	  if(i >= stop)
+	    {
+	      //No GT field at all: every copy this sample has is uncalled here.
+	      if(haploMode) callable[c].assign(callable[c].size(),0);
+	      continue;
+	    }
+	  if(stop - i == 1 && f[i] == '.')
+	    {
+	      if(samplePloidy[c] == 0) samplePloidy[c] = 1;
+	      if(haploMode) callable[c].assign(callable[c].size(),0);
+	      continue;
+	    }
 
 	  int copies = 0;
 	  size_t a = i;
@@ -1859,13 +2017,65 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
 
 	      copies++;
-	      if(!(b - a == 1 && f[a] == '.')) out.observed[g][l]++;
+	      const bool called = !(b - a == 1 && f[a] == '.');
+
+	      /*
+	       * Phase is the whole premise: without it there is no way to say
+	       * which copy an allele sits on, so a haplotype assembled from an
+	       * unphased genotype would be an arbitrary pairing presented as a
+	       * measurement. Refused where it is read, naming the record and
+	       * the sample, rather than carried into the statistics.
+	       */
+	      if(haploMode && copies > 1 && b > a && f[a-1] == '/')
+		{
+		  ostringstream m;
+		  //records is already past this one, so it is the 1-based index.
+		  m << "record " << records << " of " << p.dfile.val
+		    << " is unphased for sample "
+		    << (c < sampleName.size() ? sampleName[c] : string("?"))
+		    << " (" << string(f+i,stop-i) << ").\n"
+		    << "       Haplotype alleles need phase: every multi-copy "
+		    << "genotype must use '|'.";
+		  badData(m.str());
+		}
+
+	      if(haploMode)
+		{
+		  /*
+		   * A copy first seen part-way through a block was absent from
+		   * the records before it, which is the same thing as uncalled
+		   * there, so it opens uncallable.
+		   */
+		  while(int(callable[c].size()) < copies)
+		    {
+		      callable[c].push_back(blocker.held == 1 ? 1 : 0);
+		    }
+		  if(!called) callable[c][copies-1] = 0;
+		}
+	      else if(called) out.observed[g][l]++;
 
 	      a = (b < stop) ? b + 1 : stop;
 	    }
 
+	  /*
+	   * Copies past the end of this record's GT are uncalled here, the
+	   * shortfall rule ploidy already follows.
+	   */
+	  if(haploMode)
+	    {
+	      for(size_t k = size_t(copies); k < callable[c].size(); k++)
+		{
+		  callable[c][k] = 0;
+		}
+	    }
+
 	  if(samplePloidy[c] < copies) samplePloidy[c] = copies;
 	}
+    }
+
+  if(haploMode)
+    {
+      closeHapBlock(out,p,callable,sampleGroup,blocker,blockStart,blockLast);
     }
 
   if(!haveHeader) badData("no #CHROM header line in " + p.dfile.val + ".");
@@ -1883,13 +2093,32 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
       out.geneCopies += ploidy;
     }
 
-  if(p.loci.set && p.loci.val != int(records))
+  if(p.loci.set && p.loci.val != int(out.numLoci))
     {
       adzelog() << "WARNING: LOCI says " << p.loci.val << " but " << p.dfile.val
-		<< " has " << records << " records; using " << records << ".\n";
+		<< " has " << out.numLoci
+		<< (haploMode ? " haplotype blocks" : " records")
+		<< "; using " << out.numLoci << ".\n";
     }
-  p.loci.val = int(records);
-  out.numLoci = records;
+  out.records = records;
+
+  if(haploMode)
+    {
+      if(out.blockSnps.empty())
+	{
+	  ostringstream m;
+	  m << "no haplotype block in " << p.dfile.val << " holds "
+	    << p.min_hap_snps.val << " or more SNPs.";
+	  badData(m.str());
+	}
+      out.numLoci = (long long)(out.blockSnps.size());
+    }
+  else
+    {
+      out.numLoci = records;
+    }
+
+  p.loci.val = int(out.numLoci);
 
   //The reader's words, since the scan can replace it for a dry run and the
   //user should not be told something different about the same file.
@@ -1897,7 +2126,13 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
     {
       adzelog() << "Read " << records << (records == 1 ? " record" : " records")
 		<< " for " << usedSamples
-		<< (usedSamples == 1 ? " sample" : " samples") << ".\n";
+		<< (usedSamples == 1 ? " sample" : " samples");
+      if(haploMode)
+	{
+	  adzelog() << ", collapsed into " << out.numLoci
+		    << (out.numLoci == 1 ? " haplotype block" : " haplotype blocks");
+	}
+      adzelog() << ".\n";
     }
 
   return;
