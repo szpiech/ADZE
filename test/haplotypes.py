@@ -21,6 +21,8 @@ What each group of cases holds:
              rewritten as a single record carrying its haplotypes as alleles
   blocks     the _blocks report: spans, SNP counts, distinct haplotypes,
              callable copies, and which blocks survived the filter
+  dryrun     what the dry run reports about the block layout, before any
+             statistic is computed
   closed     the statistics at one gene copy, where they have exact closed
              forms in the haplotype frequencies
   refusals   what the program refuses, and with which exit status
@@ -652,6 +654,62 @@ def case_blocks(s, adze, w):
                 % sorted(marked - deleted)[:3])
 
 
+def case_dryrun(s, adze, w):
+    """The dry run's block summary, against the layout computed here.
+
+    Sizing a block is the choice a haplotype run turns on, and the dry run is
+    where a user makes it, so the numbers it reports are worth pinning: the
+    block count, the SNPs they hold, and how wide they came out.
+    """
+    for name in ("hap_basic", "hap_twochrom"):
+        kw = dict(gen_data.PHASED)[name]
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        coords, _ = records(os.path.join(w, meta["file"]))
+
+        for flag, width in (("--hap-snps", 4), ("--hap-bp", 3000)):
+            blocks = (blocks_by_snps(coords, width) if flag == "--hap-snps"
+                      else blocks_by_bp(coords, width))
+            r = run(adze, w, ["--data", meta["file"], "--samples", meta["samples"],
+                              "--tolerance", "1", flag, str(width), "--dry-run"])
+            if r.returncode != 0:
+                s.check("dryrun.%s.%s.runs" % (name, flag[2:]), False,
+                        "exit %d" % r.returncode)
+                continue
+
+            text = r.stdout
+            s.check("dryrun.%s.%s.count" % (name, flag[2:]),
+                    "Haplotype blocks: %d" % len(blocks) in text,
+                    "expected %d blocks; got %s" % (
+                        len(blocks),
+                        [l for l in text.splitlines() if "blocks" in l][:1]))
+            s.check("dryrun.%s.%s.records" % (name, flag[2:]),
+                    "Records:          %d" % len(coords) in text,
+                    "expected %d records" % len(coords))
+
+            snps = sorted(len(b) for b in blocks)
+            spans = sorted(coords[b[-1]][1] - coords[b[0]][1] + 1 for b in blocks)
+            s.check("dryrun.%s.%s.snps" % (name, flag[2:]),
+                    "SNPs per block: %d-%d, median %d" % (
+                        snps[0], snps[-1], snps[len(snps)//2]) in text,
+                    "expected %d-%d median %d; got %s" % (
+                        snps[0], snps[-1], snps[len(snps)//2],
+                        [l for l in text.splitlines() if "SNPs per" in l][:1]))
+            s.check("dryrun.%s.%s.span" % (name, flag[2:]),
+                    "block span:     %d-%d bp, median %d" % (
+                        spans[0], spans[-1], spans[len(spans)//2]) in text,
+                    "expected %d-%d median %d; got %s" % (
+                        spans[0], spans[-1], spans[len(spans)//2],
+                        [l for l in text.splitlines() if "block span" in l][:1]))
+
+    # An ordinary run still reports loci, not blocks.
+    meta = gen_data.write_phased(os.path.join(w, "hap_basic"),
+                                 **dict(gen_data.PHASED)["hap_basic"])
+    r = run(adze, w, ["--data", meta["file"], "--samples", meta["samples"],
+                      "--tolerance", "1", "--dry-run"])
+    s.check("dryrun.plain", "Loci:" in r.stdout and "Haplotype blocks" not in r.stdout,
+            "an ordinary dry run should report loci only")
+
+
 def case_closed(s, adze, w):
     """At one gene copy the statistics are known exactly.
 
@@ -834,7 +892,7 @@ def main():
     s = Suite(args.verbose)
     for case in (case_layout, case_callable, case_assembly,
                  case_degenerate, case_labels, case_reencode,
-                 case_blocks, case_closed, case_refusals,
+                 case_blocks, case_dryrun, case_closed, case_refusals,
                  case_filter):
         case(s, args.candidate, args.workdir)
 

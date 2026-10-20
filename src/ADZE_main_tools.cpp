@@ -1620,9 +1620,42 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
   const bool vcf = wantsVCF(p.format.val,p.dfile.val);
 
   cout << "Data file:        " << p.dfile.val
-         << (vcf ? "  (VCF)\n" : "  (STRUCTURE)\n")
-         << "Loci:             " << p.loci.val << "\n"
-         << "Gene copies:      " << p.dlines.val << "\n";
+         << (vcf ? "  (VCF)\n" : "  (STRUCTURE)\n");
+
+  /*
+   * Sizing a block is the choice a haplotype run turns on, and it is made
+   * before anything is computed, so the dry run reports what a given width
+   * actually produced: how many blocks, how wide they came out, and how many
+   * SNPs they hold. The counting pass has all of it, so this costs one read
+   * and no analysis.
+   */
+  if(scan.blocked())
+      {
+        vector<int> snps = scan.blockSnps;
+        vector<long long> span(snps.size(),0);
+        for(size_t b = 0; b < snps.size(); b++)
+          {
+            span[b] = scan.blockEnd[b] - scan.lmap.pos[b] + 1;
+          }
+        sort(snps.begin(),snps.end());
+        sort(span.begin(),span.end());
+        const size_t mid = snps.size()/2;
+
+        cout << "Records:          " << scan.records << "\n"
+             << "Haplotype blocks: " << p.loci.val
+             << (p.hap_snps.set ? "  (--hap-snps " : "  (--hap-bp ")
+             << (p.hap_snps.set ? p.hap_snps.val : p.hap_bp.val) << ")\n"
+             << "  SNPs per block: " << snps.front() << "-" << snps.back()
+             << ", median " << snps[mid] << "\n"
+             << "  block span:     " << span.front() << "-" << span.back()
+             << " bp, median " << span[mid] << "\n";
+      }
+  else
+      {
+        cout << "Loci:             " << p.loci.val << "\n";
+      }
+
+  cout << "Gene copies:      " << p.dlines.val << "\n";
 
   if(vcf)
       {
@@ -1648,7 +1681,9 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
             if(l == 0 || Nj > maxNj) maxNj = Nj;
           }
         cout << "  " << scan.groupName[j] << ": " << scan.groupRows[j]
-             << " gene copies, Nj per locus " << minNj << "-" << maxNj << "\n";
+             << " gene copies, Nj per "
+             << (scan.blocked() ? "block " : "locus ")
+             << minNj << "-" << maxNj << "\n";
       }
 
   cout << "Largest feasible MAX_G: " << scan.feasibleGAll << "\n";
