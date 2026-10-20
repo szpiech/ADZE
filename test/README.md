@@ -138,9 +138,23 @@ layout can be written down by hand.
 
 Holds the haplotype-block machinery to haplotypes assembled from the
 fixtures' own `.haps` matrices, which `gen_data.write_phased` writes before it
-writes a single record — so block boundaries, spans, callable copies, the
-missing-data filter and the resulting `MAX_G` are all checked against an
-implementation that shares no code with ADZE. Needs no reference binary.
+writes a single record — so nothing here is checked against ADZE's own account
+of the haplotypes. Needs no reference binary. The cases, in rising order of
+strength:
+
+- *layout*, *callable*, *assembly*: block boundaries, spans, the gene copies
+  each block can score under the all-or-nothing missing rule, and the
+  per-grouping allele tables including slot order.
+- *degenerate*: `--hap-snps 1` must reproduce an ordinary run byte for byte,
+  across eight fixtures and seven run shapes. Controlled — blocks of two SNPs
+  must differ, so the case cannot pass vacuously.
+- *reencode*: each block is rewritten as a single VCF record carrying its
+  haplotypes as alleles, and an ordinary run on that file must match the
+  haplotype run byte for byte. This is the one that exercises the whole path
+  against an independent implementation.
+- *blocks*, *dryrun*, *closed*, *refusals*, *filter*: the `_blocks` report,
+  the dry run's layout summary, the exact closed forms at one gene copy, the
+  error paths, and which blocks `--tolerance` drops.
 
     ./test/haplotypes.py --candidate src/adze
 

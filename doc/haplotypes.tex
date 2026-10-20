@@ -1,0 +1,119 @@
+\section{Haplotype alleles}
+\label{sec:haplotypes}
+
+The statistics of section~\ref{sec:intro} count alleles at a locus. Given
+phased data they can count \emph{haplotypes} across a short run of loci
+instead: \flag{--hap-snps} and \flag{--hap-bp} collapse consecutive SNPs into
+blocks, and a block's alleles are the haplotypes its gene copies carry.
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+adze --data cohort.vcf.gz --samples pops.tsv --hap-snps 5 --out-prefix hap
+adze --data cohort.vcf.gz --samples pops.tsv --hap-bp 10000 --out-prefix hap
+\end{Verbatim}
+
+\noindent Nothing about the estimators changes. $\hat{\alpha}_{jg}$ and
+$\hat{\pi}_{jg}$ are written as sums over the alleles a locus carries, and a
+block is a locus whose alleles happen to be haplotypes; the rarefaction, the
+averaging and the output are the ones described everywhere else in this
+manual. What changes is what an allele \emph{is}, and that brings its own
+assumptions.
+
+\subsection{What a haplotype allele is here}
+
+For each gene copy, \prog\ reads its allele at every SNP in the block, in
+order along the chromosome, and treats that sequence as one allele. Two gene
+copies carry the same haplotype allele when they match at every SNP in the
+block. Blocks are disjoint: consecutive SNPs are collapsed, not slid over, so
+each SNP belongs to exactly one block and no gene copy is counted twice.
+
+\flag{--hap-snps} $N$ makes each block $N$ consecutive SNPs, so every block
+carries the same number of markers while its width in basepairs varies with
+marker density. \flag{--hap-bp} $N$ makes each block an $N$-basepair span,
+anchored at position~1 and advancing by $N$, so the same region yields the
+same blocks in every run and two datasets can be compared block by block;
+there the number of SNPs varies instead. A block never spans a chromosome, a
+span holding no SNP produces no block, and \flag{--min-hap-snps} drops a block
+that holds too few.
+
+\subsection{Phase is required}
+
+A haplotype is a run of alleles along one chromosome copy, so the input must
+say which copy each allele sits on. \prog\ therefore requires phased
+genotypes: every multi-copy \texttt{GT} must use \texttt{|}, and a record that
+uses \texttt{/} stops the run, naming the record and the sample. Haploid
+copies are trivially phased and need nothing. Phasing is not something \prog\
+does or checks the quality of; a haplotype assembled from an unphased genotype
+would be an arbitrary pairing presented as a measurement, which is why this is
+an error and not a warning.
+
+For the same reason the \structureprog\ layout is not supported in this mode:
+it has no way to say which copy an allele belongs to. Supplying
+\flag{--hap-snps} with \structureprog\ input is refused as a usage error.
+
+\subsection{One uncalled genotype makes the block uncalled}
+
+A gene copy carries a haplotype allele in a block only if it is called at
+\emph{every} SNP in the block. One uncalled genotype anywhere in the block and
+that copy contributes nothing there; it is not given a partial haplotype,
+which would be an allele no copy actually carries and would inflate every
+count that read it. A copy whose \texttt{GT} is shorter than the sample's
+ploidy at some record counts as uncalled there too.
+
+The consequence is worth sizing before a run rather than discovering
+afterwards: missing data compounds along the block. If each SNP is called
+independently with probability $1-m$, a copy survives a block of $N$ SNPs with
+probability about $(1-m)^N$, so at 2\% missingness a block of 50 SNPs keeps
+roughly a third of its gene copies. Since $N_j$ enters the rarefaction
+directly, that shows up as a smaller $g$ the data can support, not as a
+quietly different answer. \flag{--tolerance} then applies to blocks exactly as
+it applies to loci --- a block where some grouping has lost more than the
+allowed fraction of its gene copies is dropped --- and the
+\texttt{\_blocks} file (section~\ref{sec:blocksfile}) reports the callable
+copies per grouping for every block, so the cost is a number rather than an
+inference.
+
+\subsection{Richness saturates as blocks lengthen}
+
+A long block gives every gene copy its own haplotype. When a block carries as
+many distinct haplotypes as it has callable copies, no haplotype repeats,
+every draw of $g$ copies yields $g$ distinct haplotypes, and
+$\hat{\alpha}_{jg} = g$ whatever the data says: the statistic has stopped
+measuring anything. \prog\ counts such blocks and says so at the end of the
+run, and the \texttt{HAPLOTYPES} column of the \texttt{\_blocks} file is where
+the approach to saturation can be watched.
+
+Private allelic richness degrades differently and more gently: a long
+haplotype is more likely to be private to a grouping simply because it is
+long, so $\hat{\pi}_{jg}$ grows with block length for reasons that have
+nothing to do with population history. Both effects argue for the shortest
+blocks that answer the question, and for comparing block lengths with each
+other rather than reading one in isolation.
+
+\subsection{Naming and output}
+\label{sec:blocksfile}
+
+A block spanning more than one SNP is named
+\texttt{chromosome:start-end}; a block holding exactly one SNP takes that
+record's own name, so \flag{--hap-snps 1} reproduces an ordinary SNP-level run
+exactly. Every output file is the one described in section~\ref{sec:output},
+with blocks where loci would be --- including the per-locus
+\texttt{\_fulldata} files and, in a windowed run, the window files, a block
+being assigned to a window by its start position.
+
+One file is added. \texttt{\_blocks} describes the blocks themselves:
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+BLOCK             CHROM  START  END    SNPS  HAPLOTYPES  KEPT  POP0  POP1
+chr1:1000-4000    chr1   1000   4000   4     14          no    9     5
+chr1:5000-8000    chr1   5000   8000   4     11          yes   12    8
+\end{Verbatim}
+
+\noindent one row per block in file order, with the gene copies each grouping
+could score and whether the filter kept it. Two runs can report the same mean
+richness over blocks of five haplotypes and blocks of fifty, so this file is
+what makes the difference visible.
+
+\flag{--dry-run} reports the layout a given width produces --- the blocks it
+yields, the SNPs they hold and how wide they came out --- from the counting
+pass alone, which is the cheapest way to size \flag{--hap-snps} before
+committing to a scan.

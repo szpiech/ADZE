@@ -210,6 +210,9 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 | `--samples FILE` | sample-to-grouping map, required for VCF input | none |
 | `--format auto\|structure\|vcf` | input format; `auto` reads the file name | `auto` |
 | `--loci-map FILE` | locus coordinates, required for windowed STRUCTURE input | none |
+| `--hap-snps N` | collapse runs of N consecutive SNPs into haplotype alleles (phased VCF only) | off |
+| `--hap-bp N` | collapse each N-basepair run of SNPs into haplotype alleles (phased VCF only) | off |
+| `--min-hap-snps N` | drop a haplotype block holding fewer than N SNPs | 1 |
 | `--count-file FILE` | keep the counts a STRUCTURE file is converted into, and reuse them next run | temporary, removed |
 | `--convert-chunk N` | loci per conversion pass | as many as fit 64 MB |
 | `--window-bp N` / `--window-loci N` | report each statistic in sliding windows, sized in basepairs or in loci | off |
@@ -284,6 +287,36 @@ the VCF one. `--count-file FILE` keeps that file instead of deleting it, and
 reuses it on the next run over the same data — it is refused, with the reason,
 if the data file has changed size or date, or if the grouping filters, missing
 code or column layout differ. `--convert-chunk N` sets the loci per pass.
+
+## Haplotype alleles
+
+Given a phased VCF, `--hap-snps N` (or `--hap-bp N`) collapses consecutive SNPs
+into blocks and counts the haplotypes the gene copies carry, instead of the
+alleles at single SNPs:
+
+```sh
+adze --data cohort.vcf.gz --samples pops.tsv --hap-snps 5 --out-prefix hap
+```
+
+The estimators are unchanged — a block is a locus whose alleles happen to be
+haplotypes — but three things follow from that:
+
+- **Phase is required.** Every multi-copy `GT` must use `|`; a `/` stops the
+  run, naming the record and the sample. The STRUCTURE layout cannot say which
+  copy an allele sits on, so it is not supported in this mode.
+- **One uncalled genotype makes the whole block uncalled** for that gene copy.
+  Missing data compounds along a block: at 2% per-call missingness a block of
+  50 SNPs keeps about a third of its gene copies, which shows up as a smaller
+  feasible `MAX_G`.
+- **Richness saturates.** A long block gives every copy its own haplotype, and
+  allelic richness is then `g` by construction rather than by measurement. The
+  run says how many blocks have reached that state, and the `_blocks` file
+  (block, span, SNPs, distinct haplotypes, callable copies per grouping) is
+  where it can be watched.
+
+`--hap-snps 1` reproduces an ordinary SNP-level run byte for byte, which is
+what the test suite uses as its strongest check. `--dry-run` reports the block
+layout a given width produces before anything is computed.
 
 ## Documentation
 
