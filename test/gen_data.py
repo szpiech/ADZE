@@ -181,6 +181,155 @@ def write_pair(prefix, nloci, allele_base=100, gzip_vcf=True, chroms=1,
             "coords": coords, "names": names}
 
 
+def write_phased(prefix, nloci, npops=4, nind=8, nall=2, missing=0.0, seed=1,
+                 ploidy=2, haploid_samples=(), chroms=1, spacing=1000,
+                 indels=False, short_gt=(), unphased=(), gzip_vcf=False):
+    """Write a phased VCF whose haplotypes are known independently of ADZE.
+
+    The haplotype matrix is generated first -- one sequence of allele indices
+    per gene copy, along the whole chromosome -- and the VCF is written from
+    it, so a checker can assemble the expected haplotype of any gene copy
+    without parsing a single record the way ADZE does. The matrix is written
+    beside the VCF as <prefix>.haps:
+
+        SAMPLE  COPY  <locus> <locus> ...
+        ind0_0  0     0       1       .
+
+    with '.' for an uncalled copy. One uncalled call makes that copy's whole
+    block uncalled, so these dots are what the block-level missing rule acts
+    on, and a checker reads them rather than inferring them.
+
+    Deliberate irregularities, each switched on per fixture:
+      haploid_samples  (pop, individual) pairs carrying one gene copy
+      short_gt         (record, pop, individual): GT written with one fewer
+                       allele than the sample has, which makes the trailing
+                       copy uncalled there -- the ploidy shortfall rule
+      unphased         records written with '/' instead of '|', for the
+                       refusal test
+      indels           ALT alleles of differing length, so a haplotype label
+                       cannot be read as a fixed-width string
+
+    Returns the metadata the suites need, including the per-copy matrix.
+    """
+    rng = random.Random(seed)
+    if isinstance(nind, int):
+        nind = [nind] * npops
+    assert len(nind) == npops
+
+    coords = place_loci(nloci, chroms, spacing)
+    names = ["S%d" % l for l in range(nloci)]
+
+    # copies[(pop, individual)] = list of per-locus allele indices, one list
+    # per gene copy. A population's own allele frequencies differ, so private
+    # haplotypes exist rather than being a tie.
+    copies = {}
+    for p in range(npops):
+        freq = [rng.random() * 0.6 + 0.2 for _ in range(nloci)]
+        for i in range(nind[p]):
+            n = 1 if (p, i) in haploid_samples else ploidy
+            per_copy = []
+            for _ in range(n):
+                seq = []
+                for l in range(nloci):
+                    if rng.random() < missing:
+                        seq.append(None)
+                    elif nall <= 2:
+                        seq.append(1 if rng.random() < freq[l] else 0)
+                    else:
+                        seq.append(rng.randrange(nall))
+                per_copy.append(seq)
+            copies[(p, i)] = per_copy
+
+    samples = [(p, i) for p in range(npops) for i in range(nind[p])]
+
+    with open(prefix + ".haps", "w", newline="\n") as fh:
+        fh.write("SAMPLE\tCOPY\t" + "\t".join(names) + "\n")
+        for (p, i) in samples:
+            for c, seq in enumerate(copies[(p, i)]):
+                fh.write("ind%d_%d\t%d\t%s\n" % (
+                    p, i, c, "\t".join("." if a is None else str(a) for a in seq)))
+
+    with open(prefix + ".samples", "w", newline="\n") as fh:
+        fh.write("# sample\tgrouping\n")
+        for (p, i) in samples:
+            fh.write("ind%d_%d\tPOP%d\n" % (p, i, p))
+
+    alts = ["AT" * (a + 1) if indels else "ACGT"[a % 4]
+            for a in range(1, max(2, nall))]
+    header = ["##fileformat=VCFv4.2",
+              '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+              "#" + "\t".join(["CHROM", "POS", "ID", "REF", "ALT", "QUAL",
+                               "FILTER", "INFO", "FORMAT"]
+                              + ["ind%d_%d" % (p, i) for (p, i) in samples])]
+
+    lines = list(header)
+    for l in range(nloci):
+        sep = "/" if l in unphased else "|"
+        calls = []
+        for (p, i) in samples:
+            seq = copies[(p, i)]
+            drop = (l, p, i) in short_gt
+            out = [("." if seq[c][l] is None else str(seq[c][l]))
+                   for c in range(len(seq) - (1 if drop and len(seq) > 1 else 0))]
+            calls.append(sep.join(out))
+        chrom, pos = coords[l]
+        lines.append("\t".join([chrom, str(pos), names[l], "G",
+                                ",".join(alts[:max(1, nall - 1)]), ".",
+                                "PASS", ".", "GT"] + calls))
+
+    text = "\n".join(lines) + "\n"
+    with open(prefix + ".vcf", "w", newline="\n") as fh:
+        fh.write(text)
+    if gzip_vcf:
+        with gzip.open(prefix + ".vcf.gz", "wt", newline="\n") as fh:
+            fh.write(text)
+
+    return {"file": os.path.basename(prefix) + ".vcf",
+            "samples": os.path.basename(prefix) + ".samples",
+            "haps": os.path.basename(prefix) + ".haps",
+            "names": names, "coords": coords, "nloci": nloci,
+            "groups": ["POP%d" % p for p in range(npops)],
+            "copies": {("ind%d_%d" % (p, i)): copies[(p, i)] for (p, i) in samples}}
+
+
+def read_haps(path):
+    """The per-copy haplotype matrix back from a .haps file.
+
+    {(sample, copy): [allele index or None per locus]}, plus the locus names.
+    """
+    with open(path) as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        names = head[2:]
+        out = {}
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            out[(f[0], int(f[1]))] = [None if a == "." else int(a) for a in f[2:]]
+    return names, out
+
+
+# Phased fixtures for the haplotype suites. Each one isolates something that
+# block assembly has to get right.
+PHASED = [
+    ("hap_basic",   dict(npops=4, nind=6, nloci=24, nall=2, seed=11)),
+    ("hap_missing", dict(npops=4, nind=6, nloci=24, nall=2, missing=0.10, seed=12)),
+    ("hap_multi",   dict(npops=3, nind=5, nloci=18, nall=5, seed=13, indels=True)),
+    ("hap_haploid", dict(npops=3, nind=6, nloci=18, nall=2, seed=14, ploidy=1)),
+    ("hap_mixed",   dict(npops=3, nind=6, nloci=18, nall=2, seed=15,
+                         haploid_samples=((0, 0), (1, 2)))),
+    ("hap_short",   dict(npops=3, nind=5, nloci=12, nall=2, seed=16,
+                         short_gt=((3, 0, 1), (7, 2, 4)))),
+    ("hap_twochrom", dict(npops=3, nind=6, nloci=20, nall=2, seed=17, chroms=2)),
+    ("hap_uneven",  dict(npops=4, nind=[3, 6, 9, 12], nloci=16, nall=3, seed=18)),
+    ("hap_unphased", dict(npops=2, nind=4, nloci=8, nall=2, seed=19, unphased=(2,))),
+]
+
+
+def build_phased(outdir):
+    os.makedirs(outdir, exist_ok=True)
+    return {name: write_phased(os.path.join(outdir, name), **kw)
+            for name, kw in PHASED}
+
+
 def write_paramfile(path, meta, dfile, prefix, g=6, comb=0, k="", tol=1,
                     pp=0, full_r=0, full_p=0, full_c=0, missing="-9"):
     lines = ["MAX_G %d" % g,
