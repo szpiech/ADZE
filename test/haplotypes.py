@@ -12,6 +12,11 @@ What each group of cases holds:
              --hap-bp, on one and two chromosomes
   callable   the gene copies each block can score, under the rule that one
              uncalled genotype makes that copy's whole haplotype uncalled
+  assembly   the haplotype each gene copy carries, the per-grouping counts
+             they produce, and the order the allele slots come out in
+  degenerate a block of one SNP is the SNP, so --hap-snps 1 must reproduce an
+             ordinary run byte for byte
+  labels     that two haplotypes sharing their digits stay two alleles
   filter     which blocks --tolerance drops, and the MAX_G that follows
 
 The scan's own numbers come from ADZE_DUMP_SCAN, which writes one row per
@@ -203,6 +208,220 @@ def case_callable(s, adze, w):
                         len(bad), max(len(want), len(rows)), bad[:3]))
 
 
+def source_rows(path):
+    """{block name: {grouping: (callable copies, [count per slot])}} + order."""
+    out, order = {}, []
+    with open(path) as fh:
+        fh.readline()
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            name = f[0]
+            if name not in out:
+                out[name] = {}
+                order.append(name)
+            counts = [int(x) for x in f[7].split(",")] if f[7] else []
+            out[name][f[3]] = (int(f[4]), counts)
+    return out, order
+
+
+def expected_block(haps, ranks, groups, block, ngroups, gindex):
+    """What a block's allele table should hold, from the fixture's haplotypes.
+
+    Returns the per-slot counts in ADZE's slot order: a slot is created the
+    first time a haplotype is seen, scanning groupings in output order, then
+    samples by their rank within the grouping, then gene copies.
+    """
+    seen, slots = {}, []
+    for (sample, copy) in sorted(haps, key=lambda k: (gindex[groups[k[0]]],
+                                                      ranks[k[0]], k[1])):
+        seq = haps[(sample, copy)]
+        if any(seq[i] is None for i in block):
+            continue
+        label = "|".join(str(seq[i]) for i in block)
+        if label not in seen:
+            seen[label] = len(slots)
+            slots.append([0] * ngroups)
+        slots[seen[label]][gindex[groups[sample]]] += 1
+    return slots
+
+
+def sample_ranks(vcf, groups, gorder):
+    """Each sample's rank within its grouping, in VCF column order."""
+    _, samples = records(vcf)
+    seen = {g: 0 for g in gorder}
+    out = {}
+    for name in samples:
+        g = groups.get(name)
+        if g is None:
+            continue
+        out[name] = seen[g]
+        seen[g] += 1
+    return out
+
+
+def case_assembly(s, adze, w):
+    """Haplotypes, their counts, and the slot order they come out in."""
+    for name, kw in gen_data.PHASED:
+        if "unphased" in kw:
+            continue
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        vcf = os.path.join(w, meta["file"])
+        coords, _ = records(vcf)
+        _, haps = gen_data.read_haps(os.path.join(w, meta["haps"]))
+        groups = groups_of(os.path.join(w, meta["samples"]))
+        gorder = meta["groups"]
+        gindex = {g: i for i, g in enumerate(gorder)}
+        ranks = sample_ranks(vcf, groups, gorder)
+
+        for width in (3, 4):
+            dump = os.path.join(w, "%s_a%d.src" % (name, width))
+            r = run(adze, w, ["--data", meta["file"], "--samples", meta["samples"],
+                              "--tolerance", "1", "--hap-snps", str(width),
+                              "--dry-run"],
+                    env={"ADZE_DUMP_SOURCE": dump})
+            if r.returncode != 0:
+                s.check("assembly.%s.%d.runs" % (name, width), False,
+                        "exit %d: %s" % (r.returncode, r.stderr.strip()[:100]))
+                continue
+
+            rows, order = source_rows(dump)
+            blocks = blocks_by_snps(coords, width)
+            s.check("assembly.%s.%d.blocks" % (name, width),
+                    len(order) == len(blocks),
+                    "source yielded %d blocks, layout gives %d" % (len(order), len(blocks)))
+
+            bad = []
+            for b, block in enumerate(blocks):
+                if b >= len(order):
+                    break
+                want = expected_block(haps, ranks, groups, block,
+                                      len(gorder), gindex)
+                got = rows[order[b]]
+                for gi, g in enumerate(gorder):
+                    mine = [row[gi] for row in want]
+                    theirs = got.get(g, (0, []))[1]
+                    if mine != theirs:
+                        bad.append((order[b], g, mine, theirs))
+            s.check("assembly.%s.snps%d" % (name, width), not bad,
+                    "%d block-grouping tables differ, e.g. %s" % (len(bad), bad[:2]))
+
+
+def outputs(workdir, prefix):
+    """The result files a run wrote, excluding its parameter echo.
+
+    The summary legitimately differs: it records the flags the run was given,
+    and one of these runs was given --hap-snps.
+    """
+    return sorted(f for f in os.listdir(workdir)
+                  if f.startswith(prefix + ".") and "summary" not in f)
+
+
+def case_degenerate(s, adze, w):
+    """--hap-snps 1 reproduces an ordinary run byte for byte.
+
+    A block of one SNP is that SNP: the same gene copies are callable, the
+    haplotype label is the allele itself, and the block takes the record's own
+    name. So every output file must match an ordinary run exactly -- the
+    strongest invariant available here, since it holds the whole pipeline to
+    the one it replaces rather than to an expectation of mine.
+    """
+    runs = [
+        ("plain",   []),
+        ("pops",    ["--pops", "POP0,POP1"]),
+        ("windows", ["--window-bp", "6000", "--step-bp", "3000",
+                     "--min-window-loci", "2"]),
+        ("tuples",  ["--combinations", "--tuples-k", "1,2", "--full-tuples"]),
+        ("full",    ["--full-richness", "--full-private", "--max-g", "4"]),
+        ("atg",     ["--at-g", "max"]),
+        ("legacy",  ["--legacy", "--full-richness"]),
+    ]
+
+    for name, kw in gen_data.PHASED:
+        if "unphased" in kw:
+            continue
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        base = ["--data", meta["file"], "--samples", meta["samples"],
+                "--tolerance", "1"]
+
+        for tag, extra in runs:
+            a = "%s_%s_snp" % (name, tag)
+            b = "%s_%s_hap" % (name, tag)
+            ra = run(adze, w, base + extra + ["--out-prefix", a])
+            rb = run(adze, w, base + extra + ["--hap-snps", "1",
+                                              "--out-prefix", b])
+            s.check("degenerate.%s.%s.status" % (name, tag),
+                    ra.returncode == rb.returncode,
+                    "exit %d without, %d with --hap-snps 1" % (
+                        ra.returncode, rb.returncode))
+            if ra.returncode != 0:
+                continue
+
+            fa, fb = outputs(w, a), outputs(w, b)
+            s.check("degenerate.%s.%s.files" % (name, tag),
+                    [f[len(a):] for f in fa] == [f[len(b):] for f in fb],
+                    "file sets differ: %s vs %s" % (fa, fb))
+
+            diff = [f[len(a):] for f in fa
+                    if open(os.path.join(w, f), "rb").read()
+                    != open(os.path.join(w, b + f[len(a):]), "rb").read()]
+            s.check("degenerate.%s.%s.bytes" % (name, tag), not diff,
+                    "differs in %s" % diff)
+
+    # The comparison would be worthless if it passed for any block width, so
+    # one run with real blocks must differ from the SNP-level run.
+    meta = gen_data.write_phased(os.path.join(w, "hap_basic"),
+                                 **dict(gen_data.PHASED)["hap_basic"])
+    base = ["--data", meta["file"], "--samples", meta["samples"], "--tolerance", "1"]
+    run(adze, w, base + ["--out-prefix", "ctl_snp"])
+    run(adze, w, base + ["--hap-snps", "2", "--out-prefix", "ctl_hap"])
+    same = [f[len("ctl_snp"):] for f in outputs(w, "ctl_snp")
+            if open(os.path.join(w, f), "rb").read()
+            == open(os.path.join(w, "ctl_hap" + f[len("ctl_snp"):]), "rb").read()]
+    s.check("degenerate.control", not same,
+            "blocks of 2 SNPs produced identical %s, so the comparison proves "
+            "nothing" % same)
+
+
+def case_labels(s, adze, w):
+    """Two haplotypes that share their digits must stay two alleles.
+
+    A label is the copy's allele indices joined by '|'. Drop the separator and
+    the haplotypes 1,11 and 11,1 both read as "111", merging two alleles into
+    one -- which is visible in the counts, so this case is a real check rather
+    than an inspection of label text (ADZE never prints a label).
+
+    Written by hand: twelve alleles drawn at random almost never put a
+    digit-sharing pair in the same block.
+    """
+    vcf = os.path.join(w, "labels.vcf")
+    with open(vcf, "w", newline="\n") as fh:
+        fh.write("##fileformat=VCFv4.2\n")
+        fh.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n')
+        fh.write("#" + "\t".join(["CHROM", "POS", "ID", "REF", "ALT", "QUAL",
+                                  "FILTER", "INFO", "FORMAT", "s1", "s2"]) + "\n")
+        alt = ",".join("ACGT"[i % 4] * (i + 1) for i in range(11))
+        # s1 copy 0 carries 1 then 11; s2 copy 0 carries 11 then 1.
+        fh.write("\t".join(["chr1", "100", "r1", "G", alt, ".", "PASS", ".",
+                            "GT", "1|1", "11|11"]) + "\n")
+        fh.write("\t".join(["chr1", "200", "r2", "G", alt, ".", "PASS", ".",
+                            "GT", "11|11", "1|1"]) + "\n")
+    with open(os.path.join(w, "labels.samples"), "w", newline="\n") as fh:
+        fh.write("s1\tP1\ns2\tP1\n")
+
+    dump = os.path.join(w, "labels.src")
+    r = run(adze, w, ["--data", "labels.vcf", "--samples", "labels.samples",
+                      "--tolerance", "1", "--hap-snps", "2", "--dry-run"],
+            env={"ADZE_DUMP_SOURCE": dump})
+    s.check("labels.runs", r.returncode == 0, "exit %d" % r.returncode)
+    if r.returncode != 0:
+        return
+
+    rows, order = source_rows(dump)
+    counts = rows[order[0]]["P1"][1] if order else []
+    s.check("labels.distinct", sorted(counts, reverse=True) == [2, 2],
+            "1,11 and 11,1 should be two alleles of two copies each; got %s" % counts)
+
+
 def case_filter(s, adze, w):
     """Which blocks --tolerance drops, and the ceiling that follows."""
     name, kw = "hap_missing", dict(npops=4, nind=6, nloci=24, nall=2,
@@ -260,7 +479,8 @@ def main():
 
     os.makedirs(args.workdir, exist_ok=True)
     s = Suite(args.verbose)
-    for case in (case_layout, case_callable, case_filter):
+    for case in (case_layout, case_callable, case_assembly,
+                 case_degenerate, case_labels, case_filter):
         case(s, args.candidate, args.workdir)
 
     print("\n%d passed, %d failed" % (s.passed, len(s.failed)))

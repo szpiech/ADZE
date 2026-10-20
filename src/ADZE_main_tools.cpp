@@ -724,7 +724,8 @@ namespace {
   {
   public:
     VCFSource(ParamSet& p,const ScanResult& scan)
-      : param(p), rows(scan.groupRows), name(scan.groupName), records(0)
+      : param(p), hapMode(p.haplotypes()), blocker(p), copyCap(0),
+	rows(scan.groupRows), name(scan.groupName), records(0)
     {
       if(!in.open(p.dfile.val))
 	{
@@ -738,6 +739,11 @@ namespace {
     long long geneCopies(int grouping) const { return rows[grouping]; }
 
     bool next(LocusCounts& out)
+    {
+      return hapMode ? nextBlock(out) : nextRecord(out);
+    }
+
+    bool nextRecord(LocusCounts& out)
     {
       const int J = int(name.size());
       string line;
@@ -822,8 +828,236 @@ namespace {
       return false;
     }
 
+
+    /*
+     * One haplotype block.
+     *
+     * A gene copy's haplotype is its allele indices across the block's
+     * records, joined with '|' -- the phase separator, and unambiguous where
+     * an index runs to more than one digit. A copy uncalled at any record in
+     * the block carries no haplotype at all, so it is dropped rather than
+     * given a partial one: a partial haplotype would be a new allele that no
+     * copy actually carries, and would inflate every count that reads it.
+     *
+     * Detecting the end of a block means reading the record that starts the
+     * next one, so that line is held back and read first next time. Phase is
+     * not re-checked here: the counting pass refuses an unphased file before
+     * the sweep ever opens the data.
+     */
+    bool nextBlock(LocusCounts& out)
+    {
+      const int J = int(name.size());
+
+      for(;;)
+	{
+	  bool open = false;
+	  long long snps = 0, startPos = -1, lastPos = -1;
+	  int blockChrom = -1;
+	  string startName;
+
+	  for(;;)
+	    {
+	      string line;
+	      if(!pending.empty()) line.swap(pending);
+	      else if(!in.next(line)) break;
+
+	      if(line.empty()) continue;
+	      if(line[0] == '#') continue;
+
+	      tokenize(line,fields);
+	      if(fields.empty()) continue;
+
+	      const string chrom(fields[0].first,fields[0].second);
+	      const string posText(fields[1].first,fields[1].second);
+	      const int c = chromIndex(chrom);
+	      const long long pos = atoll(posText.c_str());
+
+	      if(open && blocker.opens(c,pos))
+		{
+		  pending.swap(line);          //belongs to the next block
+		  break;
+		}
+
+	      if(!open)
+		{
+		  blocker.begin(c,pos);
+		  open = true;
+		  blockChrom = c;
+		  startPos = pos;
+		  startName.assign(fields[2].first,fields[2].second);
+		  if(startName == ".")
+		    {
+		      startName = chrom + ":" + posText;
+		    }
+		  for(size_t k = 0; k < hapText.size(); k++)
+		    {
+		      hapText[k].clear();
+		      broken[k] = 0;
+		    }
+		}
+	      else blocker.add();
+
+	      lastPos = pos;
+	      snps++;
+	      addRecord();
+	      records++;
+	    }
+
+	  if(!open) return false;
+
+	  //Too short to report: the counting pass skipped it, so this does too.
+	  if(snps < (long long)(param.min_hap_snps.val)) continue;
+
+	  out.chrom = blockChrom;
+	  out.pos = startPos;
+	  if(snps == 1) out.name = startName;
+	  else
+	    {
+	      ostringstream nm;
+	      nm << chromName[blockChrom] << ":" << startPos << "-" << lastPos;
+	      out.name = nm.str();
+	    }
+
+	  tally.label.clear();
+	  tally.firstSeen.clear();
+	  tally.count.clear();
+
+	  for(size_t c = 0; c < sampleGroup.size(); c++)
+	    {
+	      const int g = sampleGroup[c];
+	      if(g < 0) continue;
+
+	      const long long sampleKey =
+		(long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
+
+	      for(int k = 0; k < copyCap; k++)
+		{
+		  const size_t slot = c*size_t(copyCap) + size_t(k);
+		  if(slot >= hapText.size()) break;
+		  if(broken[slot] || hapText[slot].empty()) continue;
+
+		  const int sl = tally.slot(hapText[slot],sampleKey + k,J);
+		  tally.count[size_t(sl)*J + g]++;
+		}
+	    }
+
+	  finish(out,J);
+	  return true;
+	}
+    }
+
+    /*
+     * Fold the record currently in `fields` into each gene copy's haplotype.
+     * A copy first seen part-way through a block was absent from the records
+     * before it, which is the same as uncalled there, so it opens broken.
+     */
+    void addRecord()
+    {
+      const int gtField = gtPosition(fields[8]);
+
+      for(size_t c = 0; c < sampleGroup.size(); c++)
+	{
+	  if(sampleGroup[c] < 0) continue;
+
+	  const char* f = fields[c+9].first;
+	  const size_t n = fields[c+9].second;
+
+	  size_t i = 0;
+	  for(int skip = 0; skip < gtField && i < n; skip++)
+	    {
+	      while(i < n && f[i] != ':') i++;
+	      if(i < n) i++;
+	    }
+	  size_t stop = i;
+	  while(stop < n && f[stop] != ':') stop++;
+
+	  if(i >= stop || (stop - i == 1 && f[i] == '.'))
+	    {
+	      breakAll(c);
+	      continue;
+	    }
+
+	  int copies = 0;
+	  size_t a = i;
+	  while(a < stop)
+	    {
+	      size_t b = a;
+	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
+
+	      const size_t slot = reserve(c,copies);
+	      copies++;
+
+	      if(b - a == 1 && f[a] == '.') broken[slot] = 1;
+	      else if(!broken[slot])
+		{
+		  if(!hapText[slot].empty()) hapText[slot] += '|';
+		  hapText[slot].append(f + a, b - a);
+		}
+
+	      a = (b < stop) ? b + 1 : stop;
+	    }
+
+	  //Copies this record does not carry are uncalled here.
+	  for(int k = copies; k < copyCap; k++)
+	    {
+	      const size_t slot = c*size_t(copyCap) + size_t(k);
+	      if(slot < broken.size()) broken[slot] = 1;
+	    }
+	}
+
+      return;
+    }
+
+    //The slot for one gene copy, widening the table when a sample turns out to
+    //carry more copies than any seen so far.
+    size_t reserve(size_t c, int k)
+    {
+      if(k >= copyCap)
+	{
+	  const int want = k + 1;
+	  vector<string> wider(sampleGroup.size() * size_t(want));
+	  /*
+	   * A copy slot created on the block's first record opens callable;
+	   * one created later was absent from the records before it, which is
+	   * the same as uncalled there. Same rule as the counting pass.
+	   */
+	  vector<char> widerBroken(sampleGroup.size() * size_t(want),
+				   blocker.held == 1 ? 0 : 1);
+	  for(size_t s = 0; s < sampleGroup.size(); s++)
+	    {
+	      for(int j = 0; j < copyCap; j++)
+		{
+		  wider[s*size_t(want) + size_t(j)].swap(
+		    hapText[s*size_t(copyCap) + size_t(j)]);
+		  widerBroken[s*size_t(want) + size_t(j)] =
+		    broken[s*size_t(copyCap) + size_t(j)];
+		}
+	    }
+	  hapText.swap(wider);
+	  broken.swap(widerBroken);
+	  copyCap = want;
+	}
+      return c*size_t(copyCap) + size_t(k);
+    }
+
+    void breakAll(size_t c)
+    {
+      for(int k = 0; k < copyCap; k++)
+	{
+	  const size_t slot = c*size_t(copyCap) + size_t(k);
+	  if(slot < broken.size()) broken[slot] = 1;
+	}
+      return;
+    }
+
   private:
     ParamSet& param;
+    const bool hapMode;
+    HapBlocker blocker;
+    vector<string> hapText;            //[sample*copyCap + copy], within a block
+    vector<char> broken;               //uncalled somewhere in this block
+    int copyCap;
+    string pending;                    //the record that started the next block
     const vector<long long>& rows;
     const vector<string>& name;
     LineSource in;
