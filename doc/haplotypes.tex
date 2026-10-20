@@ -50,6 +50,13 @@ For the same reason the \structureprog\ layout is not supported in this mode:
 it has no way to say which copy an allele belongs to. Supplying
 \flag{--hap-snps} with \structureprog\ input is refused as a usage error.
 
+The records must also be sorted, by chromosome and then position. A block is
+a run of \emph{consecutive} records, so out of order they would join SNPs that
+are not neighbours and report the result as a haplotype. An ordinary run needs
+sorted input only for sliding windows; a haplotype run needs it always, and
+stops at the first record that goes backwards or returns to a chromosome it
+has left (\texttt{bcftools sort} fixes either).
+
 \subsection{One uncalled genotype makes the block uncalled}
 
 A gene copy carries a haplotype allele in a block only if it is called at
@@ -112,6 +119,33 @@ chr1:5000-8000    chr1   5000   8000   4     11          yes   12    8
 could score and whether the filter kept it. Two runs can report the same mean
 richness over blocks of five haplotypes and blocks of fifty, so this file is
 what makes the difference visible.
+
+\subsection{Haplotype blocks in sliding windows}
+
+The two combine: a windowed haplotype run averages over the blocks in each
+window, exactly as an ordinary windowed run averages over loci
+(section~\ref{sec:windows}), and \flag{--window-loci} counts blocks. A block
+is placed by its first SNP. Two consequences follow.
+
+With \flag{--window-loci}, a window's reported interval runs from its first
+block's first SNP to its last block's \emph{last} SNP, so it is the span of
+the data the window actually holds.
+
+With \flag{--window-bp}, a block belongs to the window containing its start,
+and can run past that window's end; its haplotypes then include SNPs outside
+the window's reported interval. \prog\ counts such blocks and says so. They
+disappear when the two grids nest: blocks from \flag{--hap-bp} $h$ fall wholly
+inside basepair windows whenever $h$ divides both \flag{--window-bp} and
+\flag{--step-bp}, both grids being anchored at position~1.
+
+\begin{Verbatim}[frame=single,fontsize=\small]
+adze --data cohort.vcf.gz --samples pops.tsv --hap-bp 5000 \
+     --window-bp 100000 --step-bp 25000 --out-prefix scan
+\end{Verbatim}
+
+\noindent Blocks from \flag{--hap-snps} have no fixed width, so they cannot be
+made to nest; at typical marker densities a block is short against a window
+and only those at a window's edge are affected.
 
 \flag{--dry-run} reports the layout a given width produces --- the blocks it
 yields, the SNPs they hold and how wide they came out --- from the counting

@@ -360,6 +360,40 @@ int main(int argc, char* argv[])
       kept.compact(scan.dropped);
       buildWindows(kept,p,windows);
 
+      /*
+       * A block belongs to the basepair window that contains its start, so it
+       * can run past that window's end; its haplotypes then include SNPs the
+       * window's interval does not. Counted and reported rather than refused:
+       * it is a property of the two grids, and the fix is to choose them so
+       * they nest.
+       */
+      if(p.win_bp.set && !kept.end.empty())
+	{
+	  vector<char> over(kept.size(),0);
+	  long long n = 0;
+	  for(size_t wi = 0; wi < windows.size(); wi++)
+	    {
+	      for(int l = windows[wi].first; l < windows[wi].last; l++)
+		{
+		  if(kept.end[size_t(l)] > windows[wi].end && !over[size_t(l)])
+		    {
+		      over[size_t(l)] = 1;
+		      n++;
+		    }
+		}
+	    }
+	  if(n > 0)
+	    {
+	      adzelog() << "NOTE: " << n << " of " << kept.size()
+			<< (n == 1 ? " block extends past the end of a window it is"
+			           : " blocks extend past the end of a window they are")
+			<< " counted in.\n"
+			<< "      A block is placed by its first SNP. Blocks nest "
+			<< "inside windows when --hap-bp\n      divides both "
+			<< "--window-bp and --step-bp.\n";
+	    }
+	}
+
       if(windows.empty())
 	{
 	  cerr << "ERROR: no window holds at least --min-window-loci "
@@ -369,7 +403,8 @@ int main(int argc, char* argv[])
 
       adzelog() << "Laid out " << windows.size() << " window"
 		<< (windows.size() == 1 ? "" : "s") << " over "
-		<< scan.survivors << " loci.\n";
+		<< scan.survivors
+		<< (scan.blocked() ? " haplotype blocks.\n" : " loci.\n");
 
       adzelog() << "Completed at (d:h:m:s) ";
       displayTime(adzelog());

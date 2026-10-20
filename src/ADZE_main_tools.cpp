@@ -225,11 +225,13 @@ void LocusMap::compact(const vector<char>& del)
       if(del[l]) continue;
       chrom[keep] = chrom[l];
       pos[keep] = pos[l];
+      if(!end.empty()) end[keep] = end[l];
       keep++;
     }
 
   chrom.resize(keep);
   pos.resize(keep);
+  if(!end.empty()) end.resize(keep);
   return;
 }
 
@@ -400,7 +402,9 @@ long long buildWindows(const LocusMap& lmap, const ParamSet& p,
 	      Window w;
 	      w.chrom = lmap.chrom[b];
 	      w.start = lmap.pos[i];
-	      w.end = lmap.pos[hi-1];
+	      //A window's span is what it holds: for a haplotype block that runs
+	      //to the block's last SNP, not to the position it is placed by.
+	      w.end = lmap.end.empty() ? lmap.pos[hi-1] : lmap.end[hi-1];
 	      w.first = i;
 	      w.last = hi;
 	      out.push_back(w);
@@ -2048,6 +2052,7 @@ static void closeHapBlock(ScanResult& out,const ParamSet& p,
 
   out.lmap.chrom.push_back(blocker.chrom);
   out.lmap.pos.push_back(start);
+  out.lmap.end.push_back(last);
   out.blockEnd.push_back(last);
   out.blockSnps.push_back(int(blocker.held));
 
@@ -2109,6 +2114,9 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
    */
   const bool haploMode = p.haplotypes();
   vector<string> sampleName;
+  int lastChrom = -1;
+  long long lastPos = -1;
+  vector<char> chromSeen;
   HapBlocker blocker(p);
   vector< vector<char> > callable;       //[sample][copy], within the open block
   long long blockStart = 0, blockLast = 0;
@@ -2221,6 +2229,42 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
        * its row appended, so a block too short to report (--min-hap-snps)
        * simply never gets one.
        */
+      /*
+       * A haplotype is a run of alleles along a chromosome, so records must
+       * arrive in chromosome order: a block assembled from out-of-order
+       * records joins SNPs that are not neighbours and reports the result as a
+       * haplotype. A windowed SNP-level run checks this too, but only on the
+       * positions windows are laid by -- which for blocks are their starts,
+       * and those can be ascending while the records inside a block are not.
+       * So the check is made here, record by record, and always.
+       */
+      if(haploMode)
+	{
+	  if(recChrom >= int(chromSeen.size())) chromSeen.resize(recChrom+1,0);
+	  if(recChrom != lastChrom && chromSeen[recChrom])
+	    {
+	      ostringstream m;
+	      m << "record " << (records+1) << " of " << p.dfile.val << " returns to "
+		<< out.lmap.chromName[recChrom] << " after another chromosome.\n"
+		<< "       Haplotype blocks are runs of consecutive SNPs, so the "
+		<< "records must be sorted\n       (bcftools sort).";
+	      badData(m.str());
+	    }
+	  if(recChrom == lastChrom && recPos < lastPos)
+	    {
+	      ostringstream m;
+	      m << "record " << (records+1) << " of " << p.dfile.val << " is at "
+		<< out.lmap.chromName[recChrom] << ":" << recPos
+		<< ", before the record ahead of it at " << lastPos << ".\n"
+		<< "       Haplotype blocks are runs of consecutive SNPs, so the "
+		<< "records must be sorted\n       (bcftools sort).";
+	      badData(m.str());
+	    }
+	  chromSeen[recChrom] = 1;
+	  lastChrom = recChrom;
+	  lastPos = recPos;
+	}
+
       if(haploMode && blocker.opens(recChrom,recPos))
 	{
 	  closeHapBlock(out,p,callable,sampleGroup,blocker,blockStart,blockLast);

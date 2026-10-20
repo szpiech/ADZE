@@ -301,9 +301,11 @@ adze --data cohort.vcf.gz --samples pops.tsv --hap-snps 5 --out-prefix hap
 The estimators are unchanged — a block is a locus whose alleles happen to be
 haplotypes — but three things follow from that:
 
-- **Phase is required.** Every multi-copy `GT` must use `|`; a `/` stops the
-  run, naming the record and the sample. The STRUCTURE layout cannot say which
-  copy an allele sits on, so it is not supported in this mode.
+- **Phase and sort order are required.** Every multi-copy `GT` must use `|`; a
+  `/` stops the run, naming the record and the sample. Records must be sorted
+  by chromosome and position (`bcftools sort`), since a block is a run of
+  consecutive records. The STRUCTURE layout cannot say which copy an allele
+  sits on, so it is not supported in this mode.
 - **One uncalled genotype makes the whole block uncalled** for that gene copy.
   Missing data compounds along a block: at 2% per-call missingness a block of
   50 SNPs keeps about a third of its gene copies, which shows up as a smaller
@@ -313,6 +315,11 @@ haplotypes — but three things follow from that:
   run says how many blocks have reached that state, and the `_blocks` file
   (block, span, SNPs, distinct haplotypes, callable copies per grouping) is
   where it can be watched.
+
+Blocks combine with sliding windows: each window averages over the blocks
+whose first SNP it contains, and `--window-loci` counts blocks. A block can run
+past the end of its basepair window, which the run reports; use `--hap-bp` that
+divides both `--window-bp` and `--step-bp` to make blocks nest exactly.
 
 `--hap-snps 1` reproduces an ordinary SNP-level run byte for byte, which is
 what the test suite uses as its strongest check. `--dry-run` reports the block

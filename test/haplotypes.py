@@ -26,6 +26,9 @@ What each group of cases holds:
   closed     the statistics at one gene copy, where they have exact closed
              forms in the haplotype frequencies
   refusals   what the program refuses, and with which exit status
+  windows    windows over blocks: a locus window's span runs to its last
+             block's end, and a block running past its basepair window is
+             reported
   filter     which blocks --tolerance drops, and the MAX_G that follows
 
 The scan's own numbers come from ADZE_DUMP_SCAN, which writes one row per
@@ -833,6 +836,82 @@ def case_refusals(s, adze, w):
                         says, r.stderr.strip()[:140]))
 
 
+def case_windows(s, adze, w):
+    """Windows laid over blocks report what they hold."""
+    meta = gen_data.write_phased(os.path.join(w, "win"), npops=3, nind=6,
+                                 nloci=20, nall=2, seed=5, chroms=2)
+    coords, _ = records(os.path.join(w, meta["file"]))
+    base = ["--data", meta["file"], "--samples", meta["samples"], "--tolerance", "1"]
+
+    # --window-loci: a window's END is its last block's last SNP
+    r = run(adze, w, base + ["--hap-snps", "3", "--window-loci", "2",
+                             "--step-loci", "2", "--out-prefix", "wl"])
+    blocks = blocks_by_snps(coords, 3)
+    want = []
+    for chrom in ("chr1", "chr2"):
+        on = [b for b in blocks if coords[b[0]][0] == chrom]
+        for i in range(0, len(on), 2):
+            grp = on[i:i+2]
+            want.append((chrom, coords[grp[0][0]][1], coords[grp[-1][-1]][1]))
+    got = []
+    with open(os.path.join(w, "wl.richness_windows")) as fh:
+        fh.readline()
+        for line in fh:
+            f = line.split("\t")
+            if f[3] == "POP0" and f[4] == "1":
+                got.append((f[0], int(f[1]), int(f[2])))
+    s.check("windows.loci_span", r.returncode == 0 and got == want,
+            "expected %s; got %s" % (want, got))
+
+    # --window-bp: a block placed by its start can run past the window's end
+    for flag, val, wbp, step, expect in (("--hap-snps", "3", "4000", "4000", True),
+                                         ("--hap-bp", "2000", "4000", "2000", False)):
+        r = run(adze, w, base + [flag, val, "--window-bp", wbp, "--step-bp", step,
+                                 "--out-prefix", "wb"])
+        said = "past the end of a window" in r.stderr
+        s.check("windows.straddle.%s%s_in_%s" % (flag[6:], val, wbp),
+                r.returncode == 0 and said == expect,
+                "expected the note %s; stderr: %s" % (
+                    "to appear" if expect else "to be absent", r.stderr.strip()[-160:]))
+
+
+def case_order(s, adze, w):
+    """Records out of chromosome order are refused, windows or not.
+
+    A block assembled from out-of-order records joins SNPs that are not
+    neighbours, so haplotype mode refuses them always -- where the SNP-level
+    path, which assumes no adjacency, only does so when windows are laid out.
+    """
+    meta = gen_data.write_phased(os.path.join(w, "ord"), npops=2, nind=4,
+                                 nloci=12, nall=2, seed=7, chroms=2)
+    lines = open(os.path.join(w, meta["file"])).read().splitlines()
+    head = [l for l in lines if l.startswith("#")]
+    body = [l for l in lines if not l.startswith("#")]
+
+    swapped = list(body)
+    swapped[1], swapped[4] = swapped[4], swapped[1]
+    c1 = [l for l in body if l.startswith("chr1\t")]
+    c2 = [l for l in body if l.startswith("chr2\t")]
+    returning = c1[:3] + c2 + c1[3:]
+
+    for tag, rows in (("descending", swapped), ("returning", returning)):
+        name = "ord_%s.vcf" % tag
+        with open(os.path.join(w, name), "w", newline="\n") as fh:
+            fh.write("\n".join(head + rows) + "\n")
+        for extra in ([], ["--window-bp", "4000"]):
+            r = run(adze, w, ["--data", name, "--samples", meta["samples"],
+                              "--tolerance", "1", "--hap-snps", "3"] + extra)
+            s.check("order.%s%s" % (tag, ".windowed" if extra else ""),
+                    r.returncode == 4 and "must be sorted" in r.stderr,
+                    "exit %d: %s" % (r.returncode, r.stderr.strip()[-140:]))
+
+    # the SNP-level path, with no windows, still accepts the same file
+    r = run(adze, w, ["--data", "ord_descending.vcf", "--samples", meta["samples"],
+                      "--tolerance", "1"])
+    s.check("order.snplevel_unaffected", r.returncode == 0,
+            "exit %d" % r.returncode)
+
+
 def case_filter(s, adze, w):
     """Which blocks --tolerance drops, and the ceiling that follows."""
     name, kw = "hap_missing", dict(npops=4, nind=6, nloci=24, nall=2,
@@ -893,7 +972,7 @@ def main():
     for case in (case_layout, case_callable, case_assembly,
                  case_degenerate, case_labels, case_reencode,
                  case_blocks, case_dryrun, case_closed, case_refusals,
-                 case_filter):
+                 case_windows, case_order, case_filter):
         case(s, args.candidate, args.workdir)
 
     print("\n%d passed, %d failed" % (s.passed, len(s.failed)))

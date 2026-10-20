@@ -34,6 +34,7 @@ struct LocusMap
   vector<string> chromName;   //chromosomes, in order of first appearance
   vector<int> chrom;          //per locus: index into chromName
   vector<long long> pos;      //per locus: position
+  vector<long long> end;      //per locus: last position, haplotype blocks only
 
   bool empty() const { return chrom.empty(); }
   size_t size() const { return chrom.size(); }
