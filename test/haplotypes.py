@@ -17,6 +17,8 @@ What each group of cases holds:
   degenerate a block of one SNP is the SNP, so --hap-snps 1 must reproduce an
              ordinary run byte for byte
   labels     that two haplotypes sharing their digits stay two alleles
+  reencode   the whole path, against a VCF in which each block has been
+             rewritten as a single record carrying its haplotypes as alleles
   filter     which blocks --tolerance drops, and the MAX_G that follows
 
 The scan's own numbers come from ADZE_DUMP_SCAN, which writes one row per
@@ -422,6 +424,138 @@ def case_labels(s, adze, w):
             "1,11 and 11,1 should be two alleles of two copies each; got %s" % counts)
 
 
+def record_fields(vcf):
+    """[(chromosome, position, id)] in file order, and the sample names."""
+    rows, samples = [], []
+    with open(vcf) as fh:
+        for line in fh:
+            if line.startswith("##"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if line.startswith("#"):
+                samples = f[9:]
+                continue
+            rows.append((f[0], int(f[1]), f[2]))
+    return rows, samples
+
+
+def reencode(src, dst, haps, samples, blocks, minsnps=1):
+    """Rewrite a phased VCF with one record per haplotype block.
+
+    Each block becomes a single record whose alleles are the distinct
+    haplotypes its gene copies carry, so running ADZE on this file WITHOUT
+    haplotype mode must reproduce the haplotype run on the original. The
+    allele indices need not match ADZE's slot numbering: slots are created in
+    first-seen order over the same samples in the same column order, so any
+    consistent assignment gives the same ordering.
+
+    A copy whose haplotype is uncalled is written '.', and every sample keeps
+    its own number of gene copies, so the gene-copy totals and the
+    missing-data denominators are the ones the original run had.
+    """
+    rows, _ = record_fields(src)
+    ploidy = {}
+    for (sample, copy) in haps:
+        ploidy[sample] = max(ploidy.get(sample, 0), copy + 1)
+
+    out = ["##fileformat=VCFv4.2",
+           '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+           "#" + "\t".join(["CHROM", "POS", "ID", "REF", "ALT", "QUAL",
+                            "FILTER", "INFO", "FORMAT"] + samples)]
+
+    for block in blocks:
+        if len(block) < minsnps:
+            continue
+        chrom, start, first_id = rows[block[0]]
+        name = first_id if len(block) == 1 else "%s:%d-%d" % (
+            chrom, start, rows[block[-1]][1])
+        if len(block) == 1 and first_id == ".":
+            name = "%s:%d" % (chrom, start)
+
+        index, calls = {}, []
+        for sample in samples:
+            copies = []
+            for c in range(ploidy.get(sample, 0)):
+                seq = haps.get((sample, c))
+                if seq is None or any(seq[i] is None for i in block):
+                    copies.append(".")
+                    continue
+                label = tuple(seq[i] for i in block)
+                if label not in index:
+                    index[label] = len(index)
+                copies.append(str(index[label]))
+            calls.append("|".join(copies) if copies else ".")
+
+        nalt = max(1, len(index) - 1)
+        alt = ",".join("A" * (i + 1) for i in range(nalt))
+        out.append("\t".join([chrom, str(start), name, "G", alt, ".", "PASS",
+                              ".", "GT"] + calls))
+
+    with open(dst, "w", newline="\n") as fh:
+        fh.write("\n".join(out) + "\n")
+    return len(out) - 3
+
+
+def case_reencode(s, adze, w):
+    """The haplotype path against the ordinary path on re-encoded input."""
+    shapes = [
+        ("plain",   []),
+        ("full",    ["--full-richness", "--full-private", "--max-g", "4"]),
+        ("tuples",  ["--combinations", "--tuples-k", "1,2", "--full-tuples"]),
+        ("pops",    ["--pops", "POP0,POP1"]),
+        ("windows", ["--window-bp", "9000", "--step-bp", "9000",
+                     "--min-window-loci", "1"]),
+        ("tol",     ["--tolerance", "0.4"]),
+    ]
+
+    for name, kw in gen_data.PHASED:
+        if "unphased" in kw:
+            continue
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        vcf = os.path.join(w, meta["file"])
+        coords, samples = records(vcf)
+        _, haps = gen_data.read_haps(os.path.join(w, meta["haps"]))
+
+        for width in (3, 5):
+            blocks = blocks_by_snps(coords, width)
+            flat = os.path.join(w, "%s_re%d.vcf" % (name, width))
+            reencode(vcf, flat, haps, samples, blocks)
+
+            for tag, extra in shapes:
+                a = "%s_re%d_%s_hap" % (name, width, tag)
+                b = "%s_re%d_%s_flat" % (name, width, tag)
+                base = ["--samples", meta["samples"]]
+                if "--tolerance" not in extra:
+                    base += ["--tolerance", "1"]
+
+                ra = run(adze, w, ["--data", meta["file"]] + base + extra +
+                         ["--hap-snps", str(width), "--out-prefix", a])
+                rb = run(adze, w, ["--data", os.path.basename(flat)] + base +
+                         extra + ["--out-prefix", b])
+
+                s.check("reencode.%s.%d.%s.status" % (name, width, tag),
+                        ra.returncode == rb.returncode,
+                        "haplotype run exited %d, re-encoded run %d" % (
+                            ra.returncode, rb.returncode))
+                if ra.returncode != 0:
+                    continue
+
+                fa, fb = outputs(w, a), outputs(w, b)
+                s.check("reencode.%s.%d.%s.files" % (name, width, tag),
+                        [f[len(a):] for f in fa] == [f[len(b):] for f in fb],
+                        "file sets differ: %s vs %s" % (fa, fb))
+
+                diff = []
+                for f in fa:
+                    other = os.path.join(w, b + f[len(a):])
+                    if not os.path.exists(other):
+                        continue
+                    if open(os.path.join(w, f), "rb").read() != open(other, "rb").read():
+                        diff.append(f[len(a):])
+                s.check("reencode.%s.%d.%s.bytes" % (name, width, tag), not diff,
+                        "differs in %s" % diff)
+
+
 def case_filter(s, adze, w):
     """Which blocks --tolerance drops, and the ceiling that follows."""
     name, kw = "hap_missing", dict(npops=4, nind=6, nloci=24, nall=2,
@@ -480,7 +614,8 @@ def main():
     os.makedirs(args.workdir, exist_ok=True)
     s = Suite(args.verbose)
     for case in (case_layout, case_callable, case_assembly,
-                 case_degenerate, case_labels, case_filter):
+                 case_degenerate, case_labels, case_reencode,
+                 case_filter):
         case(s, args.candidate, args.workdir)
 
     print("\n%d passed, %d failed" % (s.passed, len(s.failed)))
