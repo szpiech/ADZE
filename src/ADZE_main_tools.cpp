@@ -3024,7 +3024,8 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 	       bool do_rich,bool do_priv,bool do_tuple,
 	       const string& richness_out,const string& private_out,
 	       bool full_rich,bool full_priv,bool full_comb,
-	       const string& deleted_out,bool appendTuples)
+	       const string& deleted_out,bool appendTuples,
+	       const string& blocks_out)
 {
   const int J = int(scan.groupName.size());
   const int numLoci = int(scan.survivors);
@@ -3186,6 +3187,27 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
       del_out << deletedHeader(scan.numLoci - scan.survivors,param.tol.val);
     }
 
+  /*
+   * The haplotype blocks, written as they go past.
+   *
+   * What a block turned out to be is not recoverable from the statistics: two
+   * runs with the same mean richness can rest on blocks of five haplotypes
+   * and blocks of fifty. This file carries the shape -- the span, the SNPs it
+   * holds, how many distinct haplotypes its copies carry, and how many copies
+   * each grouping could score, which is where the all-or-nothing missing rule
+   * shows up as a number rather than as something to infer.
+   */
+  ofstream blk_out;
+  long long saturated = 0, blocksWritten = 0;
+  if(!blocks_out.empty() && scan.blocked())
+    {
+      const string name = nameCreate(blocks_out,"_blocks");
+      blk_out.open(name.c_str());
+      blk_out << "BLOCK\tCHROM\tSTART\tEND\tSNPS\tHAPLOTYPES\tKEPT";
+      for(int j = 0; j < J; j++) blk_out << "\t" << scan.groupName[j];
+      blk_out << "\n";
+    }
+
   WindowCursor richCursor, privCursor, combCursor;
   richCursor.init(windows);
   privCursor.init(windows);
@@ -3206,6 +3228,27 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
   while(src.next(locus))
     {
       const bool keep = (size_t(seen) >= scan.dropped.size()) || !scan.dropped[size_t(seen)];
+
+      if(blk_out.is_open())
+	{
+	  long long copies = 0;
+	  for(int j = 0; j < J; j++) copies += locus.nj[j];
+
+	  blk_out << locus.name << "\t"
+		  << (locus.chrom >= 0 ? scan.lmap.chromName[locus.chrom] : string("."))
+		  << "\t" << locus.pos << "\t"
+		  << (size_t(seen) < scan.blockEnd.size() ? scan.blockEnd[size_t(seen)] : locus.pos)
+		  << "\t"
+		  << (size_t(seen) < scan.blockSnps.size() ? scan.blockSnps[size_t(seen)] : 1)
+		  << "\t" << locus.slots
+		  << "\t" << (keep ? "yes" : "no");
+	  for(int j = 0; j < J; j++) blk_out << "\t" << locus.nj[j];
+	  blk_out << "\n";
+
+	  blocksWritten++;
+	  if(keep && copies > 0 && (long long)(locus.slots) == copies) saturated++;
+	}
+
       seen++;
       if(!keep)
 	{
@@ -3404,6 +3447,24 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
     }
 
   if(param.pp.val) bar.done();
+
+  /*
+   * A block carrying as many distinct haplotypes as it has callable gene
+   * copies has no repeated haplotype at all, and rarefaction on it is
+   * arithmetic rather than measurement: every draw of g copies yields g
+   * distinct haplotypes, so richness is exactly g whatever the data says.
+   * Longer blocks reach that state sooner, and the count in _blocks is how it
+   * is seen coming, so the warning points there.
+   */
+  if(saturated > 0)
+    {
+      adzelog() << "WARNING: " << saturated << " of " << blocksWritten
+		<< (blocksWritten == 1 ? " block carries" : " blocks carry")
+		<< " as many haplotypes as callable gene copies.\n"
+		<< "         Allelic richness there is g by construction, not "
+		<< "by measurement;\n         shorter blocks (--hap-snps) "
+		<< "would measure something. See the _blocks file.\n";
+    }
 
   //Summaries, in the order the passes wrote them: grouping outer, g inner.
   for(int j = 0; do_rich && j < J; j++)

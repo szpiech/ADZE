@@ -19,6 +19,8 @@ What each group of cases holds:
   labels     that two haplotypes sharing their digits stay two alleles
   reencode   the whole path, against a VCF in which each block has been
              rewritten as a single record carrying its haplotypes as alleles
+  blocks     the _blocks report: spans, SNP counts, distinct haplotypes,
+             callable copies, and which blocks survived the filter
   closed     the statistics at one gene copy, where they have exact closed
              forms in the haplotype frequencies
   refusals   what the program refuses, and with which exit status
@@ -312,13 +314,18 @@ def case_assembly(s, adze, w):
 
 
 def outputs(workdir, prefix):
-    """The result files a run wrote, excluding its parameter echo.
+    """The result files a run wrote, excluding two that cannot be compared.
 
-    The summary legitimately differs: it records the flags the run was given,
-    and one of these runs was given --hap-snps.
+    The summary records the flags the run was given, and one run in each of
+    these pairs was given --hap-snps. The _blocks report describes the blocks
+    themselves, so only a haplotype run writes one at all; its contents are
+    checked in case_blocks instead. What is left -- the statistics, the
+    per-locus files, the window files, the tuple files and the deleted-loci
+    list -- is what the comparisons are about.
     """
     return sorted(f for f in os.listdir(workdir)
-                  if f.startswith(prefix + ".") and "summary" not in f)
+                  if f.startswith(prefix + ".")
+                  and "summary" not in f and not f.endswith("_blocks"))
 
 
 def case_degenerate(s, adze, w):
@@ -575,6 +582,76 @@ def read_stats(path):
     return out
 
 
+def case_blocks(s, adze, w):
+    """Every column of the _blocks report, from the fixture's own haplotypes."""
+    for name in ("hap_basic", "hap_missing", "hap_twochrom", "hap_mixed"):
+        kw = dict(gen_data.PHASED)[name]
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        vcf = os.path.join(w, meta["file"])
+        coords, _ = records(vcf)
+        _, haps = gen_data.read_haps(os.path.join(w, meta["haps"]))
+        groups = groups_of(os.path.join(w, meta["samples"]))
+        gorder = meta["groups"]
+
+        width, prefix = 4, "%s_blk" % name
+        r = run(adze, w, ["--data", meta["file"], "--samples", meta["samples"],
+                          "--hap-snps", str(width), "--tolerance", "0.5",
+                          "--out-prefix", prefix])
+        if r.returncode != 0:
+            s.check("blocks.%s.runs" % name, False, "exit %d" % r.returncode)
+            continue
+
+        path = os.path.join(w, prefix + ".richness_blocks")
+        s.check("blocks.%s.written" % name, os.path.exists(path),
+                "no _blocks file")
+        if not os.path.exists(path):
+            continue
+
+        with open(path) as fh:
+            head = fh.readline().rstrip("\n").split("\t")
+            rows = [l.rstrip("\n").split("\t") for l in fh if l.strip()]
+
+        s.check("blocks.%s.header" % name, head[7:] == gorder,
+                "grouping columns %s, expected %s" % (head[7:], gorder))
+
+        blocks = blocks_by_snps(coords, width)
+        s.check("blocks.%s.count" % name, len(rows) == len(blocks),
+                "%d rows for %d blocks" % (len(rows), len(blocks)))
+
+        bad = []
+        for row, block in zip(rows, blocks):
+            chrom, start = coords[block[0]]
+            end = coords[block[-1]][1]
+            have = callable_copies(haps, groups, block)
+
+            labels = set()
+            for (sample, copy), seq in haps.items():
+                if all(seq[i] is not None for i in block):
+                    labels.add(tuple(seq[i] for i in block))
+
+            want = [chrom, str(start), str(end), str(len(block)), str(len(labels))]
+            got = row[1:6]
+            if want != got:
+                bad.append((row[0], want, got))
+            for gi, g in enumerate(gorder):
+                if int(row[7 + gi]) != have.get(g, 0):
+                    bad.append((row[0], g, have.get(g, 0), row[7 + gi]))
+
+        s.check("blocks.%s.rows" % name, not bad,
+                "%d mismatches, e.g. %s" % (len(bad), bad[:2]))
+
+        # KEPT must agree with the deleted-loci list
+        deleted = set()
+        dpath = os.path.join(w, prefix + ".private_deletedloci")
+        if os.path.exists(dpath):
+            deleted = {l.strip() for l in open(dpath) if l.strip()
+                       and not l.startswith("The")}
+        marked = {row[0] for row in rows if row[6] == "no"}
+        s.check("blocks.%s.kept" % name, marked <= deleted or not deleted,
+                "marked dropped but absent from the deleted list: %s"
+                % sorted(marked - deleted)[:3])
+
+
 def case_closed(s, adze, w):
     """At one gene copy the statistics are known exactly.
 
@@ -757,7 +834,8 @@ def main():
     s = Suite(args.verbose)
     for case in (case_layout, case_callable, case_assembly,
                  case_degenerate, case_labels, case_reencode,
-                 case_closed, case_refusals, case_filter):
+                 case_blocks, case_closed, case_refusals,
+                 case_filter):
         case(s, args.candidate, args.workdir)
 
     print("\n%d passed, %d failed" % (s.passed, len(s.failed)))

@@ -608,7 +608,8 @@ int main(int argc, char* argv[])
 		    p.r_out.val,p.p_out.val,
 		    p.full_r.val,p.full_p.val,p.full_c.val,
 		    (b == 0 && p.tol.val != 1) ? p.p_out.val : string(),
-		    b > 0);
+		    b > 0,
+		    (b == 0) ? p.r_out.val : string());
 
 	  delete src;
 	}
