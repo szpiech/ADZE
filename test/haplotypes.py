@@ -19,6 +19,9 @@ What each group of cases holds:
   labels     that two haplotypes sharing their digits stay two alleles
   reencode   the whole path, against a VCF in which each block has been
              rewritten as a single record carrying its haplotypes as alleles
+  closed     the statistics at one gene copy, where they have exact closed
+             forms in the haplotype frequencies
+  refusals   what the program refuses, and with which exit status
   filter     which blocks --tolerance drops, and the MAX_G that follows
 
 The scan's own numbers come from ADZE_DUMP_SCAN, which writes one row per
@@ -556,6 +559,145 @@ def case_reencode(s, adze, w):
                         "differs in %s" % diff)
 
 
+def read_stats(path):
+    """{(label, g): (loci, mean, variance, standard error)} from a result file."""
+    out = {}
+    with open(path) as fh:
+        for line in fh:
+            f = line.split()
+            if len(f) < 6 or f[0] == "POP_GROUPING":
+                continue
+            try:
+                out[(f[0], int(f[1]))] = (int(f[2]), float(f[3]), float(f[4]),
+                                          float(f[5]))
+            except ValueError:
+                continue
+    return out
+
+
+def case_closed(s, adze, w):
+    """At one gene copy the statistics are known exactly.
+
+    Drawing a single gene copy from a grouping yields exactly one haplotype,
+    so allelic richness is 1 at every block the grouping scored -- hence a mean
+    of 1 and a variance of 0 across blocks. Private allelic richness has the
+    closed form
+
+        sum over haplotypes of  p_ji * product over j' != j of (1 - p_j'i)
+
+    with p the haplotype's frequency in that grouping at that block: every
+    haplotype the grouping carries contributes, weighted by the chance that one
+    draw from each other grouping misses it. Both are computed here from the
+    fixtures' own haplotype matrices, so this is the one place the output is
+    checked against an exact expectation rather than against another run.
+    """
+    for name in ("hap_basic", "hap_missing", "hap_multi", "hap_uneven"):
+        kw = dict(gen_data.PHASED)[name]
+        meta = gen_data.write_phased(os.path.join(w, name), **kw)
+        vcf = os.path.join(w, meta["file"])
+        coords, _ = records(vcf)
+        _, haps = gen_data.read_haps(os.path.join(w, meta["haps"]))
+        groups = groups_of(os.path.join(w, meta["samples"]))
+        gorder = meta["groups"]
+
+        width = 4
+        prefix = "%s_g1" % name
+        r = run(adze, w, ["--data", meta["file"], "--samples", meta["samples"],
+                          "--tolerance", "1", "--hap-snps", str(width),
+                          "--at-g", "1", "--out-prefix", prefix])
+        if r.returncode != 0:
+            s.check("closed.%s.runs" % name, False, "exit %d" % r.returncode)
+            continue
+
+        blocks = blocks_by_snps(coords, width)
+
+        # frequency of each haplotype in each grouping, per block
+        freq = []
+        for block in blocks:
+            per = {g: {} for g in gorder}
+            for (sample, copy), seq in haps.items():
+                if any(seq[i] is None for i in block):
+                    continue
+                label = tuple(seq[i] for i in block)
+                g = groups[sample]
+                per[g][label] = per[g].get(label, 0) + 1
+            freq.append({g: {k: v / float(sum(per[g].values()))
+                             for k, v in per[g].items()}
+                         for g in gorder if sum(per[g].values()) > 0})
+
+        rich = read_stats(os.path.join(w, prefix + ".richness"))
+        priv = read_stats(os.path.join(w, prefix + ".private"))
+
+        for g in gorder:
+            scored = [b for b in range(len(blocks)) if g in freq[b]]
+            if not scored:
+                continue
+
+            got = rich.get((g, 1))
+            s.check("closed.%s.%s.richness" % (name, g),
+                    got is not None and got[0] == len(scored)
+                    and abs(got[1] - 1.0) < 1e-12 and abs(got[2]) < 1e-12,
+                    "expected 1 at each of %d blocks with variance 0; got %s"
+                    % (len(scored), got))
+
+            want = []
+            for b in scored:
+                total = 0.0
+                for label, p in freq[b][g].items():
+                    other = 1.0
+                    for g2 in gorder:
+                        if g2 == g or g2 not in freq[b]:
+                            continue
+                        other *= (1.0 - freq[b][g2].get(label, 0.0))
+                    total += p * other
+                want.append(total)
+            mean = sum(want) / len(want)
+
+            got = priv.get((g, 1))
+            s.check("closed.%s.%s.private" % (name, g),
+                    got is not None and got[0] == len(want)
+                    and abs(got[1] - mean) < 1e-5,
+                    "expected mean %.6f over %d blocks; got %s" % (
+                        mean, len(want), got))
+
+
+def case_refusals(s, adze, w):
+    """What the program refuses, and with which exit status."""
+    meta = gen_data.write_phased(os.path.join(w, "hap_unphased"),
+                                 **dict(gen_data.PHASED)["hap_unphased"])
+    ok = gen_data.write_phased(os.path.join(w, "hap_ok"),
+                               npops=2, nind=4, nloci=8, nall=2, seed=31)
+    stru = gen_data.write_pair(os.path.join(w, "plain"), npops=2, nind=4,
+                               nloci=8, nall=4, seed=32)
+
+    cases = [
+        ("unphased", ["--data", meta["file"], "--samples", meta["samples"],
+                      "--hap-snps", "4", "--tolerance", "1"], 4, "unphased"),
+        ("unphased_snplevel",
+         ["--data", meta["file"], "--samples", meta["samples"],
+          "--tolerance", "1", "--out-prefix", "up"], 0, ""),
+        ("structure", ["--data", stru["file"], "--group-col", "2",
+                       "--hap-snps", "4"], 2, "phase"),
+        ("both_widths", ["--data", ok["file"], "--samples", ok["samples"],
+                         "--hap-snps", "4", "--hap-bp", "1000"], 2, "give one"),
+        ("zero_width", ["--data", ok["file"], "--samples", ok["samples"],
+                        "--hap-snps", "0"], 2, "at least 1"),
+        ("min_too_big", ["--data", ok["file"], "--samples", ok["samples"],
+                         "--hap-snps", "2", "--min-hap-snps", "99",
+                         "--tolerance", "1"], 4, "or more SNPs"),
+    ]
+
+    for name, args, status, says in cases:
+        r = run(adze, w, args)
+        s.check("refusals.%s.status" % name, r.returncode == status,
+                "expected exit %d, got %d: %s" % (
+                    status, r.returncode, (r.stderr or r.stdout).strip()[:120]))
+        if says:
+            s.check("refusals.%s.says" % name, says in r.stderr + r.stdout,
+                    "message did not mention %r: %s" % (
+                        says, r.stderr.strip()[:140]))
+
+
 def case_filter(s, adze, w):
     """Which blocks --tolerance drops, and the ceiling that follows."""
     name, kw = "hap_missing", dict(npops=4, nind=6, nloci=24, nall=2,
@@ -615,7 +757,7 @@ def main():
     s = Suite(args.verbose)
     for case in (case_layout, case_callable, case_assembly,
                  case_degenerate, case_labels, case_reencode,
-                 case_filter):
+                 case_closed, case_refusals, case_filter):
         case(s, args.candidate, args.workdir)
 
     print("\n%d passed, %d failed" % (s.passed, len(s.failed)))
