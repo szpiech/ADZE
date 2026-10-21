@@ -10,41 +10,30 @@ ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for c
 
 ## Binaries
 
-Tagged releases carry pre-built archives, built and checked by
-`.github/workflows/release.yml` on the tag itself:
+Tagged releases include pre-built archives, which are built and checked by
+`.github/workflows/release.yml` from the tagged commit:
 
 | archive | contents |
 |---|---|
-| `adze-<version>-linux-x86_64.tar.gz` | statically linked, with zlib and OpenMP |
+| `adze-<version>-linux-x86_64.tar.gz` | statically linked, with zlib |
 | `adze-<version>-macos-universal2.tar.gz` | x86\_64 and arm64 in one binary, with zlib |
-| `adze-<version>-windows-x86_64.zip` | statically linked, with zlib and OpenMP |
+| `adze-<version>-windows-x86_64.zip` | statically linked, with zlib |
 
-Each holds the binary, this README, the manual and the `example/` directory,
-and needs nothing installed: the Linux and Windows binaries are static, and
-the macOS one loads only libraries in `/usr/lib`. `SHA256SUMS` covers all
-three.
+Each archive contains the binary, this README, the manual and the `example/`
+directory, and nothing else needs to be installed. The Linux and Windows
+binaries are statically linked, and the macOS binary only loads libraries in
+`/usr/lib`. `SHA256SUMS` covers all three archives.
 
-The macOS build is serial. Linking OpenMP there would tie the binary to a
-Homebrew `libomp` that a machine downloading it will not have, so `--threads`
-on macOS wants a local build — the third `make` line below.
-
-Every archive is checked before it is published, with the binary that will
-ship: it re-runs the distributed example and compares against the committed
-output, and runs the format suite against itself.
+Before an archive is published, the binary in it is used to re-run the
+distributed example, the output is compared with the committed output, and the
+format suite is run against the same binary.
 
 ## Building
 
-On Windows, MSYS2's MINGW64 shell works with the same commands; install
-`mingw-w64-x86_64-gcc`, and `mingw-w64-x86_64-cmake` with
-`mingw-w64-x86_64-ninja` for the CMake route. The compiler appends `.exe` to an
-output name that has none, so the Makefile route wants
-`make -C src TARGET=adze.exe`. Input files with Windows line endings are read
-as they are; the carriage return never reaches an allele label, which the
-format suite checks on every platform.
-
-Nothing is required beyond a C++17 compiler. OpenMP (for `--threads`) and zlib
-(for compressed input) are used when the toolchain provides them, and the
-program builds and runs without either.
+Only a C++17 compiler is required. If zlib is available, it is used to read
+compressed input, and the program builds and runs without it. The build also
+detects OpenMP, but the current version computes the statistics on a single
+thread, so `--threads` has no effect.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -52,7 +41,7 @@ cmake --build build -j
 cmake --install build --prefix ~/.local     # optional
 ```
 
-Or with plain make:
+Or with `make`:
 
 ```sh
 make -C src                        # serial, no compressed input
@@ -61,9 +50,9 @@ make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
                                    # Apple clang, with libomp installed
 ```
 
-`EXTRA_CXXFLAGS` and `EXTRA_LDFLAGS` add flags that belong to a build rather
-than to the program — a static link, or several architectures — and are how
-the release archives are built:
+`EXTRA_CXXFLAGS` and `EXTRA_LDFLAGS` add flags for a particular build, such as
+a static link or several architectures, and they are used to build the release
+archives:
 
 ```sh
 make -C src ZLIB=1 OPENMP=1 EXTRA_LDFLAGS=-static
@@ -71,10 +60,18 @@ make -C src ZLIB=1 EXTRA_CXXFLAGS="-arch x86_64 -arch arm64" \
                    EXTRA_LDFLAGS="-arch x86_64 -arch arm64"
 ```
 
-Setting `CXXFLAGS` itself on the command line would replace the value in the
-Makefile, and make then ignores the `+=` lines that `ZLIB=1` and `OPENMP=1`
-rely on — so `ZLIB=1 CXXFLAGS=...` builds without compressed-input support and
-says nothing about it. The `EXTRA_` hooks exist to avoid that.
+Note that setting `CXXFLAGS` on the command line replaces the value in the
+Makefile, and `make` then ignores the `+=` lines that `ZLIB=1` and `OPENMP=1`
+depend on. For example, `ZLIB=1 CXXFLAGS=...` builds without support for
+compressed input, and no warning is given. The `EXTRA_` variables avoid this
+problem.
+
+On Windows, the same commands work in the MINGW64 shell of MSYS2. Install
+`mingw-w64-x86_64-gcc`, and also `mingw-w64-x86_64-cmake` and
+`mingw-w64-x86_64-ninja` to build with CMake. The compiler adds `.exe` to an
+output name that does not have it, so the `make` build needs
+`make -C src TARGET=adze.exe`. Input files with Windows line endings are read
+correctly, and the format suite checks this on every platform.
 
 ## Running
 
@@ -88,107 +85,122 @@ adze --help
 
 ### Input formats
 
-Two are read, chosen by `--format` or, by default, by the file name:
+ADZE reads two input formats, chosen with `--format` or, by default, from the
+file name:
 
-- the STRUCTURE-like layout ADZE has always taken — one row per gene copy,
-  label columns then one allele code per locus;
-- VCF, plain or `gzip`/`bgzip` compressed. Each record is one locus and each
-  allele index one allele type; a sample contributes as many gene copies as its
-  `GT` field holds, so haploid and diploid records can mix, and only `GT` is
-  read. Because a VCF carries no population labels, `--samples FILE` is
-  required: two whitespace-separated columns, sample name then grouping name,
-  `#` for comments, further columns ignored.
+- The STRUCTURE format used by version 1.0, with one row per gene copy, a
+  number of label columns, and then one allele code per locus.
+- VCF, uncompressed or compressed with `gzip` or `bgzip`. Each record is one
+  locus, and each allele index is one allele type. A sample contributes as many
+  gene copies as its `GT` field holds, so haploid and diploid records can be in
+  the same file, and only `GT` is read. Because a VCF does not give population
+  labels, `--samples FILE` is required. This file has two whitespace-separated
+  columns, the sample name and then the grouping name. A `#` starts a comment,
+  and any further columns are ignored.
 
-The same genotypes in either format give byte-identical results; `test/formats.py`
-checks that.
+The same genotypes in either format give byte-identical results, and
+`test/formats.py` checks this.
 
 ### Sliding windows
 
-Any of the three statistics can be reported along the genome instead of once
-for the whole dataset. A window is measured either in basepairs (`--window-bp`,
-anchored at position 1 so the intervals do not depend on where the loci fall)
-or in surviving loci (`--window-loci`), never both; each `--step-*` defaults to
-its window width, so the default is a non-overlapping tiling. No window crosses
-a chromosome.
+Any of the three statistics can be reported in windows along the genome, in
+addition to once for the whole data set. The size of a window is given either
+in basepairs (`--window-bp`) or in loci (`--window-loci`). Basepair windows
+start at position 1, so the windows do not depend on where the loci are.
+Locus windows count the loci that remain after filtering. By default, each
+`--step-*` is equal to the window size, so the windows do not overlap. No
+window spans two chromosomes.
 
-Each statistic then writes an extra `*_windows` file — always with a header,
-always tab-separated — with columns `CHROM START END POP_GROUPING G NUM_LOCI
-MEAN VAR STD_ERR`. The whole-dataset files are unchanged.
+Each statistic then writes an additional `*_windows` file, which always has a
+header and is always tab-separated, with the columns `CHROM START END
+POP_GROUPING G NUM_LOCI MEAN VAR STD_ERR`. The files for the whole data set do
+not change.
 
-Windows need coordinates for every locus: VCF supplies them, STRUCTURE input
-needs `--loci-map`, and a locus with no coordinate is an error rather than a
-locus quietly left out. `MAX_G` stays resolved genome-wide so every window
-covers the same range of *g* and the scan is comparable end to end. Loci must
-be in genome order; ADZE says which locus breaks the order rather than sorting
-the file for you.
+Every locus must have a position. A VCF gives the positions, and STRUCTURE
+input needs `--loci-map`. A locus without a position is an error. `MAX_G` is
+determined from the whole genome, so every window covers the same range of g
+and the windows can be compared with each other. The loci must be in genome
+order, and if they are not, ADZE reports the first locus that is out of order
+rather than sorting the file.
 
 ### Standardized sample sizes
 
-Every statistic is reported at each g from 1 to `MAX_G`. At g = 1 allelic
-richness is exactly 1 by construction (one gene copy carries one allele), which
-makes that row a check on the allele binning rather than a measurement; private
-allelic richness at g = 1 is the chance that a single copy drawn from the
-grouping carries an allele that single draws from every other grouping all
-miss.
+Every statistic is reported at each g from 1 to `MAX_G`. At g = 1, allelic
+richness is exactly 1, because one gene copy always carries one allele, so this
+row is a check on how the alleles were counted rather than a measurement.
+Private allelic richness at g = 1 is the probability that a single gene copy
+drawn from the grouping carries an allele that is missed by a single draw from
+each of the other groupings.
 
-Result files are tab-separated with a header row, and a statistic undefined at
-a given g is written as `NA`. `--legacy` is the only way to change that: it
-asks for 1.0's layout — no
-header, space separators, undefined rows omitted rather than marked. That
-omission is why the default changed: a grouping undefined at every g disappears
-from the legacy file entirely, so a run can complete and report nothing with no
-visible reason. Window files were always tab-separated with a header, and `_deletedloci` and
-`_summary` are unaffected either way. The `_fulldata` files are **transposed with respect to 1.0** — one row per
-locus and grouping with a column per g, tab-separated with a header, `NA` where
-the value is undefined — in both layouts, so `--legacy` does not reproduce that
-file. 1.0's orientation (a row per g, a column per locus) cannot be written
-until the whole sweep is finished and is unreadable at genome scale; the locus
-leads the row because the program computes a locus's values for every grouping
-together and never returns to it. The manual's "Locus-specific output" section
-shows both and how to transpose back.
+The statistics files are tab-separated with a header row, and a statistic that
+is undefined at a given g is written as `NA`. `--legacy` writes the version
+1.0 layout instead, with no header, space-separated columns, and undefined
+rows left out rather than marked. Leaving out these rows is the reason the
+default changed. A grouping that is undefined at every g does not appear in the
+version 1.0 layout at all, so a run can finish and report nothing for that
+grouping without any explanation. The window files are always tab-separated
+with a header, and the `_deletedloci` and `_summary` files are not affected by
+`--legacy`.
 
-`_deletedloci` lists dropped loci in input order (1.0 listed them in descending
-order of position) and is written even when every locus is dropped.
+The `_fulldata` files are transposed relative to version 1.0, with one row for
+each locus and grouping and one column for each g. They are tab-separated with
+a header, and an undefined value is written as `NA`. This is the same in both
+layouts, so `--legacy` does not reproduce these files. In the version 1.0
+layout (one row for each g, one column for each locus), the file cannot be
+written until every locus has been computed, and at genome scale it has more
+columns than most tools can read. The locus is in the first column because the
+values for every grouping at a locus are computed together, before the next
+locus is read. The "Locus-specific output" section of the manual shows both
+layouts.
 
-The `--tolerance` default is 0.1, not 1.0's `1`. Keeping every locus means a
-single locus where one grouping scored nothing drives `MAX_G` to 1 and leaves
-that grouping undefined at every g, so the run completes and reports nothing;
-`--tolerance 1` restores the old behaviour, and a parameter file that declares
-`TOLERANCE` is unaffected. When a grouping is left unusable, adze now names it
-with the locus count rather than leaving you to infer it from empty files, and
-`--dry-run` reports the same ceiling before computing anything.
+`_deletedloci` lists the dropped loci in the order of the input (version 1.0
+listed them in descending order of position), and it is written even when
+every locus is dropped.
 
-`--at-g N` reports one g instead, and `--at-g max` reports at whatever `MAX_G`
-resolves to without needing to know the number. A request above the reachable
-ceiling — `MAX_G`, or the smallest number of gene copies scored anywhere — is
-met at that ceiling with a warning. Since the recurrence in g is sequential the
-sweep still climbs to the requested g, so the saving scales with how low it is:
-on 20k loci in 12 groupings with all 66 pairwise tuples and `MAX_G` 33,
-`--at-g 2` took 0.58s against 6.72s for the full ladder.
+The default `--tolerance` is 0.1, while version 1.0 used 1. If every locus is
+kept, a single locus at which one grouping has no scored gene copies reduces
+`MAX_G` to 1 and makes that grouping undefined at every g, so the run finishes
+without reporting any statistics. `--tolerance 1` gives the version 1.0
+behavior, and a parameter file that sets `TOLERANCE` is not affected. When a
+grouping cannot be used, ADZE reports it by name, with the number of loci
+involved, and `--dry-run` reports the same information before computing any
+statistics.
+
+`--at-g N` reports a single g, and `--at-g max` reports g = `MAX_G` without
+the value needing to be known in advance. If the request is larger than
+`MAX_G`, or larger than the smallest number of gene copies scored at any locus,
+ADZE uses that value instead and prints a warning. Most of the cost of a full
+run is in accumulating and writing the statistics at every g, so reporting one
+g is much faster. For example, on 20 000 loci in 12 groupings with all 66 pairs
+of groupings and `MAX_G` of 33, the full run took 3.42 s, `--at-g 2` took
+0.60 s and `--at-g 33` took 0.65 s.
 
 `LOCI`, `DATA_LINES` and `NON_DATA_COLS` are measured from the input file, and
-`MAX_G` defaults to the largest standardized sample size the surviving loci
-support, so the minimum invocation is a data file and (for multi-column
-headers) which label column names the grouping. `--dry-run` reports the
-detected layout, the per-grouping sample sizes, the largest feasible `MAX_G`
-and the number of tuples an analysis would evaluate, without computing
-anything.
+by default `MAX_G` is the largest standardized sample size that the loci
+remaining after filtering support. A run therefore only needs a data file and,
+for STRUCTURE input with several label columns, the label column that names the
+grouping. `--dry-run` reports the measured dimensions, the sample size of each
+grouping, the largest feasible `MAX_G` and the number of combinations an
+analysis would evaluate, and then exits without computing any statistics.
 
-Parameter files from ADZE 1.0 still work, with the same keywords and the same
-short flags, and command-line options override the file:
+Parameter files from version 1.0 still work, with the same keywords and the
+same short flags, and options given on the command line take precedence over
+the file:
 
 ```sh
 adze small_paramfile.txt -t 0.2
 ```
 
-Diagnostics, warnings and progress bars go to stderr; results go to the output
-files. Exit status is 0 on success, 2 for a usage error, 3 for an I/O error and
-4 when the data file disagrees with itself or with the parameters.
+Messages, warnings and progress bars are written to standard error, and the
+results are written to the output files. The exit status is 0 on success, 2
+for a usage error, 3 for an input or output error, and 4 when the data file is
+inconsistent or does not match the parameters.
 
-### Options worth knowing
+### Options
 
-Defaults are those the program actually applies; `adze --help` prints the same
-values, both being read from the one option table in `src/ADZE_pfile.cpp`.
+The defaults listed here are the values the program uses. `adze --help` prints
+the same values, since both are read from the table of options in
+`src/ADZE_pfile.cpp`.
 
 | option | effect | default |
 |---|---|---|
@@ -220,7 +232,7 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 | `--min-window-loci N` | skip windows holding fewer than N loci | `1` |
 | `--full-richness`, `--full-private`, `--full-tuples` | also write the per-locus values | off |
 | `--legacy` | write version 1.0's output layout | off |
-| `--threads N` | parallelize the per-locus loops (OpenMP builds) | `1` |
+| `--threads N` | accepted, but currently has no effect (the statistics are computed on one thread) | `1` |
 | `--progress` | progress bars | on when stderr is a terminal |
 | `--quiet` | suppress progress and informational messages | off |
 | `--dry-run` | report the detected layout, groupings and feasible `MAX_G`, then stop | off |
@@ -229,46 +241,42 @@ values, both being read from the one option table in `src/ADZE_pfile.cpp`.
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes to `master` and `devel`, and on any
-pull request proposing to merge into either — so a topic branch is checked when
-it is proposed rather than on every push:
+pull request into either branch, so a topic branch is checked when it is
+proposed rather than on every push:
 
-| job | what it establishes |
+| job | what it checks |
 |---|---|
-| `suites` | all four suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
+| `suites` | the test suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
 | `plain make` | the three Makefile configurations (bare, `ZLIB=1`, `ZLIB=1 OPENMP=1`) build and pass the suites |
-| `MSYS2 MINGW64` | builds and runs on Windows through MSYS2, and reproduces the distributed example's committed output |
+| `MSYS2 MINGW64` | the program builds and runs on Windows through MSYS2, and reproduces the committed output of the distributed example |
 | `distributed example` | `adze small_paramfile.txt` in `example/` reproduces the tracked result files |
-| `manual` | the manual builds from source and its generated option reference agrees with the option table |
+| `manual` | the manual builds from source, and its generated option reference agrees with the option table |
 
-The 1.0 reference is rebuilt from `master` on every run rather than kept as a
-binary, so the byte-identity claim is re-established rather than inherited. It
-is the only thing in CI that needs GSL.
+The version 1.0 reference is built from `master` in every run rather than kept
+as a binary, so the comparison with version 1.0 is repeated on every run. This
+is the only step in CI that needs GSL.
 
-The differential comparison runs on Linux and macOS only. ADZE 1.0's
-`Population::putNj` stores its value and then falls off the end of a `bool`
-function, which its own build hides with `-w`; in a mingw-w64 build that store
-does not survive, so every sample size stays 0, every statistic is undefined,
-and 1.0 writes headers without numbers while reporting success. There is
-nothing to compare against there, so Windows instead re-runs the distributed
-example and compares against output committed from another platform, which
-pins this build's numbers without involving 1.0.
-
-Results do not depend on `--threads`: loci are processed independently and
-accumulated in locus order, so any thread count gives bit-identical output —
-checked at 1, 2, 4 and 8 threads over the statistics, `_fulldata` and window
-files.
+The comparison with version 1.0 is only run on Linux and macOS. In version
+1.0, `Population::putNj` stores its value and then reaches the end of a `bool`
+function without returning, and the version 1.0 build hides the compiler
+warning with `-w`. In a mingw-w64 build the stored value is lost, so every
+sample size is 0, every statistic is undefined, and version 1.0 writes headers
+without numbers while reporting success. Because there is nothing to compare
+against, the Windows job instead re-runs the distributed example and compares
+it with output committed from another platform.
 
 ## Memory
 
-The data is never held in memory. A run reads the input twice: the first pass
-counts gene copies per grouping per locus — enough to decide the missing-data
-filter, each grouping's ceiling, `MAX_G` and the window layout — and the second
-computes every statistic from one *Q* table per locus, keeping a running mean
-and variance rather than the per-locus values. `--dry-run` is answered from the
-first pass alone.
+The genotypes are not held in memory. A run reads the input twice. The first
+pass counts the gene copies for each grouping at each locus, which is enough to
+determine the missing-data filter, the largest g for each grouping, `MAX_G`
+and the windows. The second pass computes every statistic from one table of
+*Q* per locus, and it keeps a running mean and variance rather than the
+per-locus values. `--dry-run` only uses the first pass.
 
-Measured on synthetic diploid data, 10 groupings of 20 individuals, both
-statistics, `--max-g 10` (peak RSS, median of three):
+The following peak memory use was measured on simulated diploid data with 10
+groupings of 20 individuals, both statistics and `--max-g 10` (median of three
+runs):
 
 | loci | VCF before | VCF now | STRUCTURE before | STRUCTURE now |
 |---|---|---|---|---|
@@ -277,78 +285,87 @@ statistics, `--max-g 10` (peak RSS, median of three):
 | 320 000 | 195 MB | 32 MB | 216 MB | 133 MB |
 | 1 280 000 | 764 MB | 145 MB | 886 MB | 260 MB |
 
-"before" is the same program with the dataset resident, at the branch point.
-VCF runs take the same time as before; STRUCTURE runs take 1.3× to 1.9× longer,
-since the file is individual-major and is converted to locus-major counts
-first, into a temporary file beside the output that is removed when the run
-ends. The conversion is small — an 80 000-locus file of 122 MB becomes 7.2 MB —
-and the chunk it holds while converting is what keeps STRUCTURE's peak above
-the VCF one. `--count-file FILE` keeps that file instead of deleting it, and
-reuses it on the next run over the same data — it is refused, with the reason,
-if the data file has changed size or date, or if the grouping filters, missing
-code or column layout differ. `--convert-chunk N` sets the loci per pass.
+"Before" is the version 2.0 build from before this change, which held the data
+in memory. VCF runs take the same time as before. STRUCTURE runs take 1.3 to
+1.9 times as long, because the file has one row per gene copy and is first
+converted to counts arranged by locus. The converted file is written in the
+same directory as the output and removed when the run ends. It is small (an
+80 000-locus file of 122 MB becomes 7.2 MB), and the block of loci held in
+memory during the conversion is why the peak for STRUCTURE input is higher than
+for VCF. `--count-file FILE` keeps the converted file, and the next run over
+the same data reuses it. The file is not used, and the reason is reported, if
+the data file has changed in size or date, or if the grouping filters, the
+missing-data code or the column layout differ. `--convert-chunk N` sets the
+number of loci converted in each pass.
 
 ## Haplotype alleles
 
-Given a phased VCF, `--hap-snps N` (or `--hap-bp N`) collapses consecutive SNPs
-into blocks and counts the haplotypes the gene copies carry, instead of the
-alleles at single SNPs:
+With a phased VCF, `--hap-snps N` (or `--hap-bp N`) collapses consecutive SNPs
+into blocks, and the haplotypes carried by the gene copies are counted instead
+of the alleles at single SNPs:
 
 ```sh
 adze --data cohort.vcf.gz --samples pops.tsv --hap-snps 5 --out-prefix hap
 ```
 
-The estimators are unchanged — a block is a locus whose alleles happen to be
-haplotypes — but three things follow from that:
+The estimators do not change, since a block is treated as a locus whose
+alleles are haplotypes. However, this has three consequences:
 
-- **Phase and sort order are required.** Every multi-copy `GT` must use `|`; a
-  `/` stops the run, naming the record and the sample. Records must be sorted
-  by chromosome and position (`bcftools sort`), since a block is a run of
-  consecutive records. The STRUCTURE layout cannot say which copy an allele
-  sits on, so it is not supported in this mode.
-- **One uncalled genotype makes the whole block uncalled** for that gene copy.
-  Missing data compounds along a block: at 2% per-call missingness a block of
-  50 SNPs keeps about a third of its gene copies, which shows up as a smaller
+- Phase and sort order are required. Every `GT` with more than one allele must
+  use `|`, and a `/` stops the run with an error that gives the record and the
+  sample. Records must be sorted by chromosome and position (`bcftools sort`),
+  since a block is a run of consecutive records. The STRUCTURE format does not
+  say which chromosome copy an allele is on, so it is not supported in this
+  mode.
+- One uncalled genotype makes the whole block uncalled for that gene copy, so
+  missing data accumulate along a block. With 2% missing genotypes, a block of
+  50 SNPs keeps about a third of its gene copies, which reduces the largest
   feasible `MAX_G`.
-- **Richness saturates.** A long block gives every copy its own haplotype, and
-  allelic richness is then `g` by construction rather than by measurement. The
-  run says how many blocks have reached that state, and the `_blocks` file
-  (block, span, SNPs, distinct haplotypes, callable copies per grouping) is
-  where it can be watched.
+- Allelic richness saturates. In a long block, every gene copy carries a
+  different haplotype, and allelic richness is then equal to g regardless of
+  the data. Private allelic richness reaches the same limit. The run reports
+  how many blocks are in this state, and the `_blocks` file (block, region,
+  SNPs, distinct haplotypes, and callable gene copies in each grouping) shows
+  how close each block is to it.
 
-Blocks combine with sliding windows: each window averages over the blocks
-whose first SNP it contains, and `--window-loci` counts blocks. A block can run
-past the end of its basepair window, which the run reports; use `--hap-bp` that
-divides both `--window-bp` and `--step-bp` to make blocks nest exactly.
+Haplotype blocks can be used with sliding windows. Each window averages over
+the blocks whose first SNP it contains, and `--window-loci` counts blocks. A
+block can extend past the end of its basepair window, and the run reports how
+many do. Blocks always fall inside windows when `--hap-bp` divides both
+`--window-bp` and `--step-bp`.
 
-`--hap-snps 1` reproduces an ordinary SNP-level run byte for byte, which is
-what the test suite uses as its strongest check. `--dry-run` reports the block
-layout a given width produces before anything is computed.
+`--hap-snps 1` gives exactly the same output as an ordinary run, and the test
+suite checks this. `--dry-run` reports the blocks that a given block size
+produces before any statistic is computed.
 
 ## Documentation
 
-`ADZE_Manual.pdf` documents the estimators, the input format, every option, the
-output files, and what changed from version 1.0. Its sources are in `doc/`; the
-option reference is generated from the option table in the source, so it cannot
-drift from the parser:
+`ADZE_Manual.pdf` describes the estimators, the input formats, every option,
+the output files, and what changed from version 1.0. Its source files are in
+`doc/`. The option reference is generated from the table of options in the
+source code, so it always matches the options the program accepts:
 
 ```sh
 make -C doc            # build doc/ADZE_Manual.pdf (needs pdflatex)
-make -C doc install    # refresh ADZE_Manual.pdf at the repository root
+make -C doc install    # copy it to ADZE_Manual.pdf at the top of the repository
 ```
 
 ## Testing
 
-`test/regress.py` is a differential test against a reference build: it runs
-both binaries over the same inputs and requires the outputs to agree — labels,
-locus counts and per-locus values exactly, the three summary columns to `1e-9`
-relative (2.0 accumulates them in one pass, so the last bits of a variance can
-differ; see `test/README.md`). Build a binary from the 1.0 sources, then:
+`test/regress.py` compares the output of a build with the output of a
+reference build on the same inputs. The labels, the numbers of loci and the
+per-locus values must agree exactly, and the mean, variance and standard error
+must agree to a relative tolerance of `1e-9`. Version 2.0 computes the mean and
+variance in a single pass, so the last digits of a variance can differ (see
+`test/README.md`). To run it, build a binary from the version 1.0 sources, and
+then:
 
 ```sh
 ./test/regress.py --candidate src/adze --reference /path/to/adze-1.0
 ```
 
-`test/bench.py` measures the same axes as the performance work (locus
-filtering, the `MAX_G` sweep, tuple enumeration, read time and memory, thread
-scaling). See `test/README.md`.
+`test/haplotypes.py` checks the haplotype blocks against haplotypes assembled
+from the simulated data without using ADZE. `test/bench.py` measures run time
+and memory against a version 1.0 build (locus filtering, the sweep over g,
+the combinations of groupings, and reading the data). See `test/README.md` for
+the other suites.

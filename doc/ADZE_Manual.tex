@@ -42,11 +42,13 @@
 \prog\ implements a rarefaction approach to estimating allelic richness,
 private allelic richness, and private allelic richness for combinations of
 populations, correcting for differences in sample size between populations.
-Version 2.0 computes the same estimators as version 1.0 --- results are
-identical to the last bit --- but reads its data in one pass, caches the
-rarefaction probabilities, parallelizes over loci, and replaces the parameter
-file with a conventional command-line interface. Section~\ref{sec:changes}
-lists everything that changed.
+Version 2.0 computes the same estimators as version 1.0, and at every sample
+size that version 1.0 reports it gives the same values. In addition, version
+2.0 reads the variant files produced by current sequencing studies, can report
+each statistic in windows along the genome and for haplotypes of consecutive
+SNPs, and is run from the command line rather than from a parameter file. It
+also uses much less memory and time than version 1.0.
+Section~\ref{sec:changes} lists everything that changed.
 \end{abstract}
 
 \tableofcontents
@@ -58,33 +60,67 @@ lists everything that changed.
 The analysis of the distributions of alleles across populations is important
 for elucidating genetic diversity and population relationships. Two
 fundamental quantities for a population at a given locus are the number of
-distinct alleles in the population and the number of alleles found in that
-population and no other. Both are strongly dependent on sample size: a larger
-sample of gene copies is more likely to contain any given allele, so counts
-taken from samples of different sizes cannot be compared directly.
+distinct alleles in the population and the number of alleles private to the
+population (that is, not found in other populations). These quantities are
+especially informative when populations are studied for highly variable
+multiallelic markers, such as microsatellites.
 
-Rarefaction addresses this by computing, for a standardized sample size $g$,
-the expected number of alleles that \emph{would} be observed if $g$ gene
-copies were drawn from each population. The estimators \prog\ computes are
-exact expectations under sampling without replacement, not resampling
-averages, so no random number generator and no seed are involved.
+The number of distinct alleles and the number of private alleles depend
+heavily on sample size, and they can be difficult to interpret when sample
+sizes differ across populations. The rarefaction approach has been an
+important strategy for producing estimates that are comparable in different
+populations (Hurlbert, 1971; Petit et al., 1998; Kalinowski, 2004, 2005). The
+idea of the rarefaction method is to trim unequal samples to the same
+standardized sample size, a number less than or equal to the smallest sample
+size across populations. For a standardized size $g$, populations are compared
+by considering the estimates of ``allelic richness'' and ``private allelic
+richness'' that would be obtained when averaging across all subsamples of size
+$g$. In the rarefaction framework, the estimated allelic richness of a
+population is the number of distinct alleles expected in a random subsample of
+size $g$ drawn from the population (Hurlbert, 1971; Petit et al., 1998). The
+estimated private allelic richness is the number of private alleles expected
+in the population when random subsamples of size $g$ are taken from each of
+$J$ populations under consideration (Kalinowski, 2004). Combinatorial formulas
+make it possible to compute these statistics relatively quickly. Note that
+these are exact expectations under sampling without replacement rather than
+averages over random subsamples, so the results do not depend on a random
+seed.
 
-\prog\ implements these computations for allelic richness, private allelic
-richness, and a generalization of private allelic richness to combinations of
-populations, as described in Szpiech et al. (2008).
+Often, as was noted by Kalinowski (2004), especially if several populations in
+a sample are closely related, few alleles are private to individual
+populations. Instead, alleles may be private to groups of populations (that
+is, alleles may be found in each of several members of a larger set of
+populations). We therefore introduce a generalization of the private allelic
+richness concept of Kalinowski (2004). We compute a generalized private
+allelic richness statistic that uses a rarefaction approach to measure the
+number of distinct alleles private to a group of populations and found in all
+populations in the group. This statistic makes it possible to evaluate the
+sample size-corrected number of distinct alleles private to any set of
+populations, and it reduces to private allelic richness when the group of
+populations consists of only a single population. We demonstrate the
+application of the new generalized private allelic richness statistic using
+microsatellite genotypes from human populations (Szpiech et al., 2008). By
+considering the sample size-corrected number of distinct alleles private to
+various combinations of major geographic regions, this analysis produces
+evidence in support of the hypothesis that an early human migration from
+Africa to Oceania did not have an appreciable effect on genetic variation in
+modern populations of Asia. We have developed a computer program, \prog\ (a
+tool for ``chopping'' samples down to standardized sizes for data analysis),
+that implements computations of allelic richness, private allelic richness,
+and our new measure of generalized private allelic richness.
 
 \subsection{Allelic richness}
 
 Consider a locus with $I$ distinct alleles, and define $N_{ij}$ as the number
-of copies of allele type $i$ in a sample from population $j$. Let
-$N_j = \sum_{i=1}^{I} N_{ij}$ be the sample size of population $j$ at the
+of copies of allele type $i$ in a sample from population $j$.
+$N_j = \sum_{i=1}^{I} N_{ij}$ is the sample size of population $j$ at the
 locus. The probability of finding no copies of allele type $i$ in a subsample
 of $g$ gene copies from population $j$ is
 \begin{equation}
   Q_{ijg} = \frac{\binom{N_j - N_{ij}}{g}}{\binom{N_j}{g}}.
 \end{equation}
-The probability of finding at least one copy of allele type $i$ in a sample of
-size $g$ from population $j$ is $P_{ijg} = 1 - Q_{ijg}$, and
+Then the probability of finding at least one copy of allele type $i$ in a
+sample of size $g$ alleles from population $j$ is $P_{ijg} = 1 - Q_{ijg}$, and
 \begin{equation}
   \hat{\alpha}_g^{(j)} = \sum_{i=1}^{I} P_{ijg}
 \end{equation}
@@ -95,103 +131,122 @@ $j$ in a sample of size $g$.
 
 \subsection{Private allelic richness}
 
-Using this notation, the estimated private allelic richness for a sample of
-size $g$ from population $j$ is
+Using this notation, the estimated private allelic richness for a sample size
+$g$ from population $j$ can be written as
 \begin{equation}
   \hat{\pi}_g^{(j)} = \sum_{i=1}^{I}
     \left[ P_{ijg} \left( \prod_{\substack{j'=1 \\ j' \neq j}}^{J}
       Q_{ij'g} \right) \right],
 \end{equation}
 where $J$ is the total number of populations (Kalinowski, 2004). This formula
-sums over distinct allele types $i$ the probability that a random subsample of
-size $g$ from population $j$ contains allele type $i$ and that subsamples of
-size $g$ from the remaining populations do not.
+sums over distinct allele types, $i$, the probability that a random subsample
+of size $g$ from population $j$ contains allele type $i$ and that subsamples of
+size $g$ from the remaining populations do not contain $i$.
 
 \subsection{Private allelic richness for a combination of populations}
 
 Generalizing the concept of private allelic richness, we can consider the
 number of distinct alleles private to some combination of $k$ populations
-selected from $\{1, 2, \ldots, J\}$. Let $S = \{1, 2, \ldots, J\}$ and let
-$C_k$ be the set of all combinations of $k$ elements from $S$; there are
-$\binom{J}{k}$ of them. Labelling these combinations $C_{km}$, where $m$
-ranges from 1 to $\binom{J}{k}$, the estimated number of distinct alleles
+selected from $\{1, 2, \ldots, J\}$. Consider a set of $J$ populations labeled
+1 to $J$, and let $S = \{1, 2, \ldots, J\}$. Let $C_k$ be the set of all
+possible combinations of $k$ elements from $S$. There are $\binom{J}{k}$
+possible combinations in $C_k$. We label these combinations by $C_{km}$, where
+$m$ ranges from 1 to $\binom{J}{k}$. Using the following equation we can
+calculate $\hat{\pi}_{gk}^{(m)}$, the estimated number of distinct alleles
 private to the $m$th combination of $k$ populations, when samples of size $g$
-are drawn from each of the $J$ populations, is
+are drawn from each of the $J$ populations:
 \begin{equation}
   \hat{\pi}_{gk}^{(m)} = \sum_{i=1}^{I}
     \left[ \left( \prod_{j \in C_{km}} P_{ijg} \right)
            \left( \prod_{j' \in S \setminus C_{km}} Q_{ij'g} \right) \right].
 \end{equation}
-Here $S \setminus C_{km}$ denotes the set $S$ excluding the elements of
+$S \setminus C_{km}$ denotes the set $S$ excluding the elements of
 $C_{km}$. For $k = 1$, $\hat{\pi}_{gk}^{(m)}$ reduces to private allelic
 richness as in Equation~3. For $k = J-1$, Equation~4 can be considered a
-measure of ``missing allelic richness'', and it reduces to
+measure for ``missing allelic richness'', and it reduces to
 \begin{equation}
   \hat{\mu}_g^{(j)} = \sum_{i=1}^{I}
     \left[ Q_{ijg} \left( \prod_{\substack{j'=1 \\ j' \neq j}}^{J}
-      P_{ij'g} \right) \right],
+      P_{ij'g} \right) \right].
 \end{equation}
-the expected number of alleles absent from population $j$ but present in every
-other population.
+In this equation, $\hat{\mu}_g^{(j)}$ gives a sample size-corrected measure of
+the number of distinct alleles found in all populations other than population
+$j$.
 
 \subsection{Summary statistics}
 \label{sec:summarystats}
 
-\prog\ evaluates Equations~2--4 at each of many loci in a data set, and its
-primary method of reporting results gives the mean, variance, and standard
-error of the mean across these loci. Locus-specific estimates can also be
-written out (section~\ref{sec:fulldata}). The mean across loci is calculated at
-each $g$ and for each population or population grouping as
+\prog\ implements these calculations (Equations~2--4) at each of many loci in
+a data set, and its primary method of reporting results gives the mean,
+variance, and standard error of the mean across these loci.
+Section~\ref{sec:fulldata} has information on how to output locus-specific
+estimates in addition to the summary statistics. The mean across loci is
+calculated at each $g$ and for each population (or population grouping) in the
+following manner:
 \begin{equation}
   \bar{x} = \frac{1}{L} \sum_{\ell=1}^{L} x_\ell,
 \end{equation}
-where $L$ is the number of loci used in the calculation and $x_\ell$ is one of
-the statistics above evaluated at locus $\ell$. The variance across loci is
+where $L$ is the total number of loci used in the calculations, and $x_\ell$
+is one of the statistics described in the above sections calculated at locus
+$\ell$. Variance across loci is calculated at each $g$ and for each grouping
+as
 \begin{equation}
   s^2 = \frac{1}{L-1} \sum_{\ell=1}^{L} (x_\ell - \bar{x})^2,
 \end{equation}
-and the standard error of the mean is
+and standard error is calculated at each $g$ and for each grouping as
 \begin{equation}
   \mathrm{SE} = \frac{s}{\sqrt{L}}.
 \end{equation}
-A statistic is reported at a given $g$ only if it is defined at that $g$ for
-every locus used, which requires $g \leq N_j$ at each locus for the grouping
-concerned. With a single locus ($L = 1$) the variance and standard error are
-undefined and are reported as \texttt{nan}.
+Note that a statistic is only defined at a given $g$ if it is defined at that
+$g$ for every locus used. For allelic richness this requires $g \leq N_j$ at
+each locus. For private allelic richness, $g$ can be no larger than the
+smallest $N_j$ across populations at each locus. Where a statistic is not
+defined, \prog\ reports \texttt{NA} (section~\ref{sec:legacy}). With a single
+locus ($L = 1$), the variance and standard error are undefined and are reported
+as \texttt{nan}.
 
 \subsection{One gene copy}
 \label{sec:gone}
 
-The sweep starts at $g = 1$, which is worth reading once because each
-statistic means something different there and one of them is a constant.
+\prog\ reports each statistic starting at $g = 1$. At this sample size the
+statistics have simple closed forms, and allelic richness takes the same value
+at every locus.
 
-Allelic richness at $g = 1$ is exactly 1 at every locus: with
-$Q_{ji1} = (N_j - N_{ji})/N_j$ each allele contributes its own frequency
-$p_{ji}$, and the frequencies sum to 1. Drawing a single gene copy always
-yields one distinct allele, so the row is the estimator agreeing with a
-certainty rather than reporting anything about the data. It is still useful as
-a check: a locus that does not give 1 means the allele binning or the
-recurrence is wrong. Its variance across loci comes out as a number around
-$10^{-33}$, the square of the rounding in a sum of ones, which is numerically
-zero.
+At $g = 1$, $Q_{ij1} = (N_j - N_{ij})/N_j$, so $P_{ij1} = N_{ij}/N_j = p_{ij}$,
+the frequency of allele type $i$ in population $j$. Allelic richness is then
+$\sum_i p_{ij} = 1$ at every locus, because a single gene copy always carries
+exactly one allele. This value says nothing about the data, but it is a useful
+check, since a locus where it is not 1 indicates a problem with how the alleles
+were counted. The variance across loci is reported as a number near
+$10^{-33}$. This is rounding error in a sum of ones, and it is zero for
+practical purposes.
 
 Private allelic richness at $g = 1$ is
-$\sum_i p_{ji} \prod_{j' \neq j} (1 - p_{j'i})$: the chance that a single gene
-copy drawn from $j$ carries an allele that single draws from every other
-grouping all miss. Note that every allele present in $j$ contributes, weighted
-by how likely it is to be missed elsewhere --- this is not the summed frequency
-of the alleles strictly private to $j$. The tuple statistic at $g = 1$ is the
-same form with the product of $p$ taken over the tuple's members.
+$\hat{\pi}_1^{(j)} = \sum_i p_{ij} \prod_{j' \neq j} (1 - p_{ij'})$, the
+probability that a single gene copy drawn from population $j$ carries an
+allele that is missed by a single draw from each of the other populations.
+Note that every allele found in population $j$ contributes to this sum,
+weighted by the probability that it is missed in the other populations. It is
+therefore not the same as the summed frequency of the alleles private to
+population $j$. Private allelic richness for a combination of populations at
+$g = 1$ has the same form, with the product of $p_{ij}$ taken over the
+populations in the combination.
 
 \section{Getting started}
 
 \subsection{Obtaining \prog}
 
-Source is at \url{https://github.com/szpiech/ADZE}. Version 2.0 requires
-nothing but a C++17 compiler. Two libraries are used when the toolchain
-provides them, and the program builds and runs without either: OpenMP for
-\flag{--threads}, and zlib for compressed input. Without zlib a \texttt{.gz}
-file is refused with a message rather than misread.
+Source code is available at \url{https://github.com/szpiech/ADZE}. Version
+2.0 requires only a C++17 compiler. If zlib is available, it is used to read
+compressed input. Without zlib, the program builds and runs, and a \texttt{.gz}
+file is refused with an error message instead of being misread. The build also
+detects OpenMP. Note, however, that the current version computes the statistics
+on a single thread, so \flag{--threads} is accepted but has no effect.
+
+Use the following citation for \prog: Szpiech, Z. A., M. Jakobsson, and
+N. A. Rosenberg. 2008. \prog: a rarefaction approach for counting alleles
+private to combinations of populations. \textit{Bioinformatics} 24:
+2498--2504.
 
 \subsection{Building}
 
@@ -210,9 +265,8 @@ make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
                              # Apple clang, with libomp installed
 \end{Verbatim}
 
-\noindent CMake reports at configure time which of the two it found; the
-\texttt{make} build takes each as a flag. Without OpenMP, \flag{--threads} is
-accepted but warns that it is being ignored.
+\noindent CMake reports which of the two libraries it found when it
+configures the build. The \texttt{make} build takes each as a flag.
 
 \subsection{Running}
 \label{sec:running}
@@ -223,51 +277,56 @@ adze --data mydata.stru --group-col 5 --out-prefix mypops
 adze myparamfile.txt --tolerance 0.05
 \end{Verbatim}
 
-\noindent The first form takes everything from the command line. The second
-reads a parameter file in the version 1.0 format --- the same keywords, and the
-same short flags --- with command-line options taking precedence over the file.
-Three sources are consulted, in increasing order of precedence: built-in
-defaults, then the parameter file if one is given, then the command line.
+\noindent The first form takes every parameter from the command line. The
+second reads a parameter file in the version 1.0 format, with the same
+keywords and the same short flags, and any option given on the command line
+takes precedence over the file. In other words, parameters are taken first
+from the built-in defaults, then from the parameter file if one is given, and
+then from the command line, with each overriding the one before.
 
-\flag{--help} lists every option; \flag{--version} prints the version and the
-method reference. Both work with no data file and no parameter file.
-\flag{--write-template} writes a commented parameter file that runs as it
-stands once \texttt{DATA\_FILE} is filled in.
+\flag{--help} lists every option, and \flag{--version} prints the version and
+the citation for the method. Both work without a data file or a parameter
+file. \flag{--write-template} writes a commented parameter file that can be run
+as it is once \texttt{DATA\_FILE} is filled in.
 
-Only the data file is strictly required. Everything else either has a default
-or is measured from the data (section~\ref{sec:autodetect}).
+Only the data file is required. Every other parameter either has a default or
+is measured from the data (section~\ref{sec:autodetect}).
 
 \section{Input}
 
 \subsection{Choosing a format}
 
-Two input formats are read: the \structureprog-like layout that \prog\ has
-always taken (section~\ref{sec:format}), and VCF (section~\ref{sec:vcf}),
-optionally compressed with \texttt{gzip} or \texttt{bgzip}. \flag{--format}
-selects one; its default, \texttt{auto}, reads the file name --- anything
-ending \texttt{.vcf}, after an optional \texttt{.gz} or \texttt{.bgz}, is
-treated as VCF.
+\prog\ reads two input formats: the \structureprog\ format used by version
+1.0 (section~\ref{sec:format}), and VCF (section~\ref{sec:vcf}), which can be
+compressed with \texttt{gzip} or \texttt{bgzip}. \flag{--format} selects the
+format. Its default, \texttt{auto}, decides from the file name, so that a file
+whose name ends in \texttt{.vcf}, \texttt{.vcf.gz} or \texttt{.vcf.bgz} is read
+as VCF.
 
-The two paths converge immediately: both reduce each locus to per-grouping
-allele counts and missing-data tallies, which is all the estimators use, and
-both lay those counts out identically for the same genotypes. Results
-therefore do not depend on which format the data arrived in --- the same
-genotypes written both ways produce byte-identical output, which
-\texttt{test/formats.py} checks.
+Both formats are reduced to the same quantities at each locus, the allele
+counts and the missing-data counts for each grouping, and these are all that
+the estimators use. The results therefore do not depend on the input format.
+The same genotypes written in both formats give byte-identical output, and
+\texttt{test/formats.py} checks that they do.
 
 \subsection{\structureprog\ format}
 \label{sec:format}
 
-This file is expected in the same format used by \structureprog: one row
-per gene copy, so a diploid individual occupies two consecutive rows, preceded
-by a header row of locus names. Each data row begins with one or more label
-columns and continues with one allele code per locus. Allele codes are
-arbitrary tokens --- integers, as in the example below, or any other strings
-that do not contain whitespace.
+The data file is in the same format used by \structureprog\
+(Figure~\ref{fig:datafile}). The first line is a listing of locus names,
+optionally followed by a specified number of non-data lines. Then each
+individual is printed on two consecutive lines (for haploid or polyploid data,
+the number of lines per individual may differ). Immediately preceding the data
+on every line is a specified number of columns that contain classifications of
+the individual. Allele representation is not limited to numbers, and any
+string without whitespace can serve to represent an allele.
 
-Figure~\ref{fig:datafile} shows \texttt{example/small\_data.stru}, distributed
-with \prog: five loci, three groupings, and eleven diploid individuals, with
-missing alleles coded \texttt{-9}.
+Figure~\ref{fig:datafile} shows \texttt{example/small\_data.stru}, which is
+distributed with \prog. It contains five loci for eleven diploid individuals,
+and missing alleles are coded \texttt{-9}. The five columns before the
+genotype data represent (1) individual code numbers, (2) population code
+numbers, (3) population names, (4) countries of origin, and (5) geographic
+regions of origin. Grouping by the fifth column gives three groupings.
 
 \begin{figure}[htbp]
 \begin{Verbatim}[fontsize=\small,frame=single]
@@ -285,59 +344,62 @@ D12S1638 D14S1007 D9S1779 D9S1825 D7S2477
    ...
 \end{Verbatim}
 \caption{The distributed example data file, abridged. Row~1 holds the locus
-names; each subsequent row is one gene copy, with five label columns followed
-by five allele codes.}
+names, and each subsequent row is one gene copy, with five label columns
+followed by five allele codes.}
 \label{fig:datafile}
 \end{figure}
 
-\subsection{Dimensions are measured, not declared}
+\subsection{Dimensions of the data file}
 \label{sec:autodetect}
 
 Version 1.0 required \texttt{LOCI}, \texttt{DATA\_LINES},
-\texttt{NON\_DATA\_ROWS} and \texttt{NON\_DATA\_COLS} to be supplied by hand,
-and validated them against the file. Version 2.0 measures them while reading:
+\texttt{NON\_DATA\_ROWS} and \texttt{NON\_DATA\_COLS} to be given in the
+parameter file, and it used them to check the data file. Version 2.0 measures
+them as it reads the file:
 
 \begin{description}[style=nextline,leftmargin=1em]
-\item[\flag{--loci}] from the number of names in the header row.
-\item[\flag{--data-lines}] by counting data rows.
-\item[\flag{--non-data-cols}] from the width of the first data row minus the
-  locus count.
-\item[\flag{--group-col}] defaults to the last label column.
-\item[\flag{--non-data-rows}] defaults to 1, the locus-name row. This is the
-  one value that cannot be inferred, so give it explicitly if the file has
-  additional header rows.
-\item[\flag{--max-g}] defaults to the largest standardized sample size the
-  data supports, which is the smallest $N_j$ over all groupings and all
-  \emph{surviving} loci --- resolved after missing-data filtering, since
-  dropping loci can raise it.
+\item[\flag{--loci}] is the number of names in the header row.
+\item[\flag{--data-lines}] is the number of data rows.
+\item[\flag{--non-data-cols}] is the number of fields in the first data row
+  minus the number of loci.
+\item[\flag{--group-col}] is the last label column by default.
+\item[\flag{--non-data-rows}] is 1 by default, for the row of locus names.
+  This is the one value that cannot be measured, so it must be given if the
+  file has additional header rows.
+\item[\flag{--max-g}] is by default the largest standardized sample size the
+  data supports. This is the smallest $N_j$ over all groupings and all loci
+  that remain after missing-data filtering. It is computed after filtering
+  because dropping loci can raise it.
 \end{description}
 
-Any of these may still be given, in which case the declared value is used and
-a warning is printed if it disagrees with what was measured. \flag{--dry-run}
-reports the detected layout, the per-grouping sample sizes, the largest
+Any of these can still be given. In that case the given value is used, and a
+warning is printed if it differs from the measured value. \flag{--dry-run}
+reports the measured dimensions, the sample size of each grouping, the largest
 feasible \texttt{MAX\_G} and the number of tuples an analysis would evaluate,
-then exits without computing anything.
+and then exits without computing any statistics.
 
 \subsection{VCF format}
 \label{sec:vcf}
 
-Each record is one locus and each allele index is one allele type, so the
-reference allele is allele 0 and the alternates follow. A sample contributes as
-many gene copies as its \texttt{GT} field holds, which lets haploid and diploid
-records sit in the same file, and a \texttt{.} is an uncalled copy. A sample's
-ploidy is the largest number of alleles any of its \texttt{GT} fields holds,
-since that is how many gene copies it could have contributed; a record where it
-carries fewer --- a haploid call in an otherwise diploid file, say --- counts
-the difference as missing, and so tells against that locus under
-\flag{--tolerance}. Only
-\texttt{GT} is read: no other \texttt{FORMAT} field, and no \texttt{INFO},
-\texttt{QUAL} or \texttt{FILTER} value, affects the counts, so filtering must
-be done before \prog\ sees the file. Locus names come from the \texttt{ID}
-column, or from \texttt{CHROM:POS} where \texttt{ID} is \texttt{.}.
+Each VCF record is one locus, and each allele index is one allele type, so
+the reference allele is allele 0 and the alternate alleles follow. A sample
+contributes as many gene copies as its \texttt{GT} field holds, so haploid and
+diploid records can be in the same file. A \texttt{.} is an uncalled gene
+copy. A sample's ploidy is the largest number of alleles held by any of its
+\texttt{GT} fields, since that is the number of gene copies it could
+contribute. At a record where the sample has fewer alleles (for example, a
+haploid call in an otherwise diploid file), the difference is counted as
+missing, and so it counts against that locus under \flag{--tolerance}.
 
-A VCF names its samples but says nothing about which population each belongs
+Only \texttt{GT} is read. No other \texttt{FORMAT} field, and no
+\texttt{INFO}, \texttt{QUAL} or \texttt{FILTER} value, affects the counts, so
+any filtering must be done before the file is given to \prog. Locus names are
+taken from the \texttt{ID} column, or are written as \texttt{CHROM:POS} where
+\texttt{ID} is \texttt{.}.
+
+A VCF names its samples but does not say which population each sample belongs
 to, so \flag{--samples} is required with VCF input. It takes a file of two
-whitespace-separated columns, sample name then grouping name:
+whitespace-separated columns, the sample name and then the grouping name:
 
 \begin{Verbatim}[xleftmargin=1em]
 # sample        grouping
@@ -346,17 +408,17 @@ HG00097         GBR
 NA18939         JPT
 \end{Verbatim}
 
-\noindent Anything after \texttt{\#} is a comment and any further columns are
-ignored, so an existing sample sheet can usually be passed as it stands.
+\noindent Anything after a \texttt{\#} is a comment, and any further columns
+are ignored, so an existing sample sheet can usually be used as it is.
 Groupings are numbered in the order they first appear in this file, which is
-the order they appear in the output. A sample in the VCF that the map does not
-mention is skipped, and a sample the map names that the VCF does not contain is
-ignored; both are reported as warnings with a count.
+also the order in which they appear in the output. A sample in the VCF that is
+not in the map is skipped, and a sample in the map that is not in the VCF is
+ignored. Both cases are reported as warnings with a count.
 
-Because a sample's gene copies are what the missing-data fraction is measured
-against, \flag{--tolerance} means the same thing here as for
-\structureprog\ input: the fraction of a grouping's gene copies that are not
-called at that locus (section~\ref{sec:tolerance}).
+Because the missing-data fraction is measured against a sample's gene copies,
+\flag{--tolerance} means the same thing here as for \structureprog\ input. It
+is the fraction of a grouping's gene copies that are not called at that locus
+(section~\ref{sec:tolerance}).
 
 \begin{Verbatim}[xleftmargin=1em]
 adze --data cohort.vcf.gz --samples populations.tsv \
@@ -364,111 +426,118 @@ adze --data cohort.vcf.gz --samples populations.tsv \
 \end{Verbatim}
 
 \noindent \texttt{NON\_DATA\_ROWS}, \texttt{NON\_DATA\_COLS} and
-\texttt{GROUP\_BY\_COL} describe the \structureprog\ layout and are ignored,
-with a warning, for VCF input.
+\texttt{GROUP\_BY\_COL} describe the \structureprog\ format, and they are
+ignored with a warning for VCF input.
 
 \subsection{Groupings}
 
-With \structureprog\ input, rows are grouped by the value in the
-\flag{--group-col} label column; with VCF input the grouping comes from
-\flag{--samples}. In both cases groupings appear in output in the order they
-are first seen;
-any label column can be used, so a file annotated with population, region and
-continent can be analysed at any of those levels without being rewritten, and
-the same VCF can be analysed at several levels by swapping the map file.
-\flag{--pops} restricts the analysis to a comma-separated list of groupings and
-\flag{--exclude-pops} removes them; both change $J$, and therefore change what
-``private'' means, so they are a way of asking a different question rather than
-a way of subsetting output.
+With \structureprog\ input, rows are grouped by the value in the label column
+given by \flag{--group-col}. With VCF input, the groupings come from
+\flag{--samples}. In both cases, groupings appear in the output in the order in
+which they are first seen. Any label column can be used, so a file with columns
+for population, region and continent can be analyzed at any of these levels
+without being rewritten. Similarly, the same VCF can be analyzed at several
+levels by using a different map file.
+
+\flag{--pops} restricts the analysis to a comma-separated list of groupings,
+and \flag{--exclude-pops} removes groupings from it. Note that both change $J$,
+and so they also change which alleles count as private. Removing a grouping can
+make an allele private to another grouping that was not private before.
 
 \subsection{Missing data and locus filtering}
 \label{sec:filter}
 \label{sec:tolerance}
 
-An allele code equal to \flag{--missing} (default \texttt{-9}) is treated as
-unobserved and reduces $N_j$ at that locus. Because a statistic is reported at
-a given $g$ only when it is defined at every locus, one locus with a small
-$N_j$ limits the whole analysis.
+An allele code equal to \flag{--missing} (by default \texttt{-9}) is treated
+as unobserved and reduces $N_j$ at that locus. Because a statistic is only
+reported at a given $g$ when it is defined at every locus, a single locus with
+a small $N_j$ limits the whole analysis.
 
 \flag{--tolerance} $x$ drops any locus at which some grouping has more than a
-fraction $x$ of its gene copies missing. Loci dropped this way are listed in
-the \texttt{\_deletedloci} file (section~\ref{sec:deletedloci}). Filtering is a
-trade: it discards loci to buy a larger \texttt{MAX\_G}, and
-section~\ref{sec:examplesmall} works through the trade-off on the example data.
+fraction $x$ of its gene copies missing. Loci dropped in this way are listed in
+the \texttt{\_deletedloci} file (section~\ref{sec:deletedloci}). Filtering
+removes loci in exchange for a larger \texttt{MAX\_G}, and
+section~\ref{sec:examplesmall} works through this trade-off on the example
+data.
 
-The default is $x = 0.1$. Version 1.0's default, $x = 1$, keeps every locus,
-and on modern data that is rarely what is wanted: a single locus at which one
-grouping scored nothing drives \texttt{MAX\_G} to 1 and leaves that grouping
-undefined at every $g$, so a genome-wide run can complete and report nothing.
-\flag{--tolerance 1} restores the old behaviour for anyone who wants it. A
-parameter file that declares \texttt{TOLERANCE} is unaffected, and 1.0's files
-all declare it.
+The default is $x = 0.1$. Version 1.0 used $x = 1$ by default, which keeps
+every locus. For genome-wide data this is rarely what is wanted. A single locus
+at which one grouping has no scored gene copies reduces \texttt{MAX\_G} to 1
+and makes that grouping undefined at every $g$, so that a run can finish
+without reporting any statistics. \flag{--tolerance 1} gives the version 1.0
+behaviour. Note that a parameter file that sets \texttt{TOLERANCE} is not
+affected by the new default, and all version 1.0 parameter files set it.
 
-Two conditions make a grouping unusable, and both are now reported by name
-rather than left to be inferred from empty output. A locus at which no allele
-is observed in any grouping contributes nothing: such loci are counted and
-reported, and treated as undefined at every $g$. A locus at which one
-particular grouping scored fewer than $g$ gene copies makes that grouping
-undefined at $g$ --- and because the sentinel propagates through the average,
-one such locus is enough. \prog\ therefore reports, per grouping, the fewest
-copies it scored anywhere, how many loci sit at that floor, and how many it did
-not score at all, adding an explicit remedy when the floor leaves nothing
-usable. \flag{--dry-run} reports the same ceiling without computing anything.
-Under \flag{--legacy} such a grouping is absent from the result file entirely,
-which is what the warning is there to explain.
-If filtering removes every locus, \prog\ stops with an error rather than
-reporting statistics over no data.
+There are two ways in which a grouping can become unusable, and \prog\ reports
+both. First, a locus at which no allele is observed in any grouping
+contributes nothing. Such loci are counted and reported, and they are treated
+as undefined at every $g$. Second, a locus at which one grouping has fewer than
+$g$ scored gene copies makes that grouping undefined at $g$, and one such locus
+is enough to make the grouping's mean undefined. For each grouping, \prog\
+therefore reports the smallest number of gene copies it has at any locus, how
+many loci have that number, and how many loci it has no scored copies at. When
+this leaves nothing usable for a grouping, the warning also says how to fix
+it. \flag{--dry-run} reports the same information without computing any
+statistics. With \flag{--legacy}, such a grouping does not appear in the result
+file at all, and the warning explains why. If filtering removes every locus,
+\prog\ stops with an error rather than reporting statistics over no data.
 
 \subsection{How a run proceeds}
 \label{sec:how}
 
-Version 2.0 reads the data twice and holds none of it.
+Version 2.0 reads the data twice and does not hold the genotypes in memory.
 
-The first pass counts. It reads every gene copy and records, for each
-grouping and each locus, how many copies were scored there --- one integer
-per locus per grouping, and nothing about which alleles they were. That is
-enough to decide everything the analysis needs to know about the dataset as
-a whole: which loci fail the missing-data filter (the filter's denominator
-is a grouping's total, which is only final at the end of the file), how
-large $g$ can be for each grouping and overall, where the windows fall, and
-what a \flag{--dry-run} should report.
+The first pass counts gene copies. For each grouping and each locus, it
+records how many gene copies were scored, which is one integer per locus per
+grouping and nothing about which alleles were seen. This is enough to decide
+everything that depends on the data set as a whole: which loci fail the
+missing-data filter, how large $g$ can be for each grouping and overall, where
+the windows fall, and what \flag{--dry-run} should report. Note that the
+filter cannot be applied during the first pass, because it is measured against
+a grouping's total number of gene copies, which is only known at the end of the
+file.
 
-The second pass computes. Loci arrive one at a time; for each, the
-non-detection probabilities $Q_{jig}$ are built once and every requested
-statistic reads them --- allelic richness, private allelic richness, and
-each tuple. Each statistic keeps a running mean and sum of squared
-deviations per $g$, and one per window per $g$, so nothing per-locus is
-stored: when a locus's rows have been written it is forgotten.
+The second pass computes the statistics. The loci are read one at a time, and
+for each locus the probabilities $Q_{ijg}$ are computed once and used by every
+requested statistic (allelic richness, private allelic richness, and private
+allelic richness for each combination of populations). Each statistic keeps a
+running mean and sum of squared deviations for each $g$, and for each window
+at each $g$, so no per-locus values are stored. Once a locus has been written
+to the output, it is no longer held in memory.
 
-Peak memory therefore does not follow the genotypes. On a VCF of 320\,000
-loci and 10 groupings, version 1.0's successor-in-design --- the same
-program with the dataset resident --- peaks at 195\,MB where 2.0 peaks at
-32\,MB; the gap widens with the number of loci.
+As a result, peak memory does not grow with the number of genotypes. For
+example, on a VCF of 320\,000 loci and 10 groupings, the version 2.0 build from
+before this change, which held the data in memory, used 195\,MB, and the
+current version uses 32\,MB. The difference grows with the number of loci.
 
-A \flag{--dry-run} answers from the first pass alone and never opens the
-data a second time, so asking what a large file would do no longer costs
-most of doing it.
+\flag{--dry-run} uses only the first pass and does not read the data a second
+time, so it is much cheaper than a full run.
 
 \subsubsection*{\structureprog\ input is converted first}
 
-A \structureprog\ file is individual-major: one row per gene copy, one
-column per locus, so no locus can be finished without reading every row.
-Rather than a second engine, such a file is converted once into locus-major
-counts --- a chunk of locus columns at a time, sized to a memory budget ---
-and the analysis reads those. The converted file holds counts rather than
-genotypes and is correspondingly small: an 80\,000-locus file of 122\,MB
-converts to 7.2\,MB. It is written beside the output and removed when the
-run ends, unless \flag{--count-file} names it, in which case it is kept and
-reused by the next run over the same data. A kept file records where it came
-from --- the data file's path, size and modification time, the grouping
-filters, the missing code and the column layout --- and is refused with the
-reason if any of those has changed, rather than being used with a warning.
-\flag{--convert-chunk} sets the loci per conversion pass.
+A \structureprog\ file has one row per gene copy and one column per locus, so
+no locus can be computed until every row has been read. Such a file is
+therefore first converted into allele counts arranged by locus. The conversion
+reads a block of locus columns at a time, with the block size chosen to fit in
+a fixed amount of memory, and the second pass then reads the counts. Because
+the converted file holds counts rather than genotypes, it is much smaller than
+the data file. For example, an 80\,000-locus file of 122\,MB converts to
+7.2\,MB.
 
-The cost is honest: a \structureprog\ run reads its input twice and its
-conversion once, so it is slower than it was (on 320\,000 loci, 4.1\,s
-against 5.7\,s) while using roughly half the memory. A VCF run pays only the
-extra scan.
+The converted file is written in the same directory as the output and removed
+when the run ends. If \flag{--count-file} is given, the file is kept instead,
+and the next run over the same data reuses it. A kept file records the data
+file's path, size and modification time, the grouping filters, the missing-data
+code and the column layout. If any of these has changed, the file is not used,
+and \prog\ reports the reason and converts the data again.
+\flag{--convert-chunk} sets the number of loci converted in each pass.
+
+The conversion has a cost. A \structureprog\ run reads its input twice and
+also writes and reads the converted file, so it is slower than before. On
+320\,000 loci it took 5.7\,s, compared with 4.1\,s for the build that held the
+data in memory, while using 133\,MB rather than 216\,MB. The memory saving
+grows with the number of loci (260\,MB rather than 886\,MB at 1.28 million
+loci). A VCF run only pays for the extra pass.
 
 \section{Parameters and options}
 
@@ -483,80 +552,84 @@ TOLERANCE 0.24
 # everything after a hash is a comment
 \end{Verbatim}
 
-\noindent Anything after \texttt{\#} is ignored. The value is the rest of the
-line with surrounding whitespace removed, so values may contain spaces and may
-contain other keywords as substrings. Boolean parameters take \texttt{0} or
-\texttt{1}.
+\noindent Anything after a \texttt{\#} is ignored. The value of a parameter is
+the rest of the line with the surrounding whitespace removed, so a value can
+contain spaces and can contain other keywords. Boolean parameters take
+\texttt{0} or \texttt{1}.
 
 \subsection{Reporting a single \texorpdfstring{$g$}{g}}
 \label{sec:atg}
 
-By default every $g$ from 1 to \texttt{MAX\_G} is reported. \flag{--at-g}
-asks for one instead:
+By default, every $g$ from 1 to \texttt{MAX\_G} is reported. \flag{--at-g}
+reports a single $g$ instead:
 
 \begin{description}[leftmargin=2em,style=nextline]
-\item[\flag{--at-g} \textit{N}] report only $g = N$.
-\item[\flag{--at-g max}] report only at whatever \texttt{MAX\_G} resolves to,
-  without having to know the number in advance.
+\item[\flag{--at-g} \textit{N}] reports only $g = N$.
+\item[\flag{--at-g max}] reports only $g = $ \texttt{MAX\_G}, so the value of
+  \texttt{MAX\_G} does not need to be known in advance.
 \end{description}
 
-\noindent One flag governs every output: the three statistics, their
-per-locus companions and their window files all carry the single $g$, with the
-same columns as a full run --- including the $g$ column --- so a consumer reads
-either the same way.
+\noindent This applies to every output. The three statistics, their
+per-locus files and their window files all report the single $g$, with the
+same columns as a full run (including the column for $g$), so they can be read
+in the same way.
 
-Two ceilings bind the request: \texttt{MAX\_G}, which is what the run was
-asked to sweep, and the smallest number of gene copies scored anywhere, which
-is the largest $g$ with defined values. A request above the lower of the two is
-met at that ceiling, with a warning naming the value asked for, the value used
-and which bound applied. This differs deliberately from an over-large
-\texttt{MAX\_G}, which keeps its shape and reports the unreachable rows as
-undefined: a ladder with \texttt{NA} at the top is still a ladder, whereas a
-single-$g$ report of nothing but \texttt{NA} would be no answer at all. A
-value below 1 is refused rather than rounded up, $g$ being a sample size.
+The requested $g$ is limited by two values: \texttt{MAX\_G}, and the smallest
+number of gene copies scored at any locus, which is the largest $g$ at which the
+statistics are defined. If the request is larger than the smaller of these two
+values, \prog\ uses that value instead and prints a warning giving the value
+requested, the value used and which limit applied. Note that this is different
+from what happens when \texttt{MAX\_G} is too large. In that case \prog\ still
+reports every $g$ up to \texttt{MAX\_G} and gives \texttt{NA} for the values
+that cannot be computed, which still gives a useful result for the smaller
+values of $g$. A report at a single $g$ that contained only \texttt{NA} would not
+be useful. A value below 1 is refused, because $g$ is a sample size.
 
-Because the recurrence in $g$ is sequential, the sweep still has to climb to
-the $g$ being reported --- but no further, and the buffers hold no more than
-that. The saving therefore scales with how far below \texttt{MAX\_G} the
-request sits: on 20\,000 loci in 12 groupings with all 66 pairwise tuples and
-\texttt{MAX\_G} at 33, \flag{--at-g 2} ran in 0.58\,s against 6.72\,s for the
-full ladder, while \flag{--at-g 33} saved 3\%, the climb being the whole
-ladder anyway.
+Reporting a single $g$ is also faster. The probabilities $Q_{ijg}$ are
+computed by a recurrence in $g$, so they must still be computed for every $g$
+up to the one being reported. However, most of the cost of a full run is in
+accumulating and writing the statistics at every $g$, and this is only done
+for the requested $g$. For example, on 20\,000 loci in 12 groupings with all
+66 pairs of groupings and \texttt{MAX\_G} of 33, the full run took 3.42\,s,
+\flag{--at-g 2} took 0.60\,s and \flag{--at-g 33} took 0.65\,s.
 
 \subsection{Option reference}
 \label{sec:options}
 
-The following is generated from the option table in the source, so it lists
-exactly what the program accepts. Each entry gives the long option, the
-version 1.0 short flag where one exists, the parameter-file keyword where one
-exists, and the default the program applies when the option is not given. That
-default is declared once, in the same table, and is what \flag{--help} prints
-and what the README tabulates; \texttt{test/docs.py} fails if the README and
-the table disagree about a value.
+The following list is generated from the table of options in the source
+code, so it lists exactly the options that the program accepts. Each entry
+gives the long option, the version 1.0 short flag and the parameter-file
+keyword where these exist, and the default value that is used when the option
+is not given. The default is defined once, in the same table, and the same
+value is printed by \flag{--help} and listed in the README.
+\texttt{test/docs.py} fails if the README and the table disagree about a
+value.
 
 \input{options.tex}
 
 \section{Output}
 \label{sec:output}
 
-By default \prog\ writes \texttt{adze.richness}, \texttt{adze.private} and
-\texttt{adze.summary.txt} in the current directory; \flag{--out-prefix}
-replaces the \texttt{adze} stem. Giving an explicit name with
-\flag{--out-richness}, \flag{--out-private} or \flag{--out-tuples} uses that
-name literally and appends version 1.0's suffixes (\texttt{\_summary},
-\texttt{\_fulldata}, \texttt{\_deletedloci}) to it.
+By default, \prog\ writes \texttt{adze.richness}, \texttt{adze.private} and
+\texttt{adze.summary.txt} in the current directory. \flag{--out-prefix}
+replaces \texttt{adze} in these names. If a file name is given with
+\flag{--out-richness}, \flag{--out-private} or \flag{--out-tuples}, that name
+is used as it is, and the version 1.0 suffixes (\texttt{\_summary},
+\texttt{\_fulldata} and \texttt{\_deletedloci}) are added to it.
 
-Results go to files; progress, warnings and errors go to standard error, so
-redirecting standard output captures results alone. \flag{--quiet} silences the
-diagnostics. Progress bars are drawn only when standard error is a terminal.
+Results are written to files. Progress messages, warnings and errors are
+written to standard error, so redirecting standard output captures only the
+results. \flag{--quiet} turns off these messages. A progress bar is only shown
+when standard error is a terminal.
 
 \subsection{Allelic richness and private allelic richness}
 
-One row per grouping per $g$: the grouping name, the $g$ at which the
-statistics were computed, the number of loci used, and then the mean, variance
-and standard error across those loci (Equations~6--8). The columns are named on
-the first line and separated by tabs, and a statistic undefined at that $g$ is
-written as \texttt{NA}.
+There is one row for each grouping at each $g$. Each row gives the grouping
+name, the value of $g$, the number of loci used, and then the mean, variance
+and standard error across those loci (Equations~6--8). The columns are
+separated by tabs and named on the first line, and a statistic that is
+undefined at that $g$ is written as \texttt{NA}. The following lines are from
+\texttt{example/small\_r}:
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 POP_GROUPING    G   NUM_LOCI    MEAN        VAR         STD_ERR
@@ -564,111 +637,125 @@ AMERICA         1   3           1           0           0
 AMERICA         2   3           1.34524     0.0973639   0.180152
 \end{Verbatim}
 
-\noindent \flag{--legacy} writes version 1.0's layout instead
+\noindent \flag{--legacy} writes the version 1.0 layout instead
 (section~\ref{sec:legacy}).
 
 \subsection{Private allelic richness of tuples}
 
-The same layout, with the tuple's grouping names in place of the single name.
-With \flag{--tuples-k} the tuple size $k$ is appended to the file name, one
-file per $k$; with \flag{--tuples} the named tuples all go to one file.
+These files have the same layout, with the names of the groupings in the
+combination in place of the single grouping name. With \flag{--tuples-k}, one
+file is written for each combination size $k$, and $k$ is added to the file
+name. With \flag{--tuples}, all of the named combinations are written to one
+file.
 
 \subsection{Locus-specific output}
 \label{sec:fulldata}
 
-\flag{--full-richness}, \flag{--full-private} and \flag{--full-tuples} add a
-\texttt{\_fulldata} file carrying the statistic at every locus: one row per
-locus and grouping, one column per $g$, tab-separated with a header. A value
-undefined at that $g$ is \texttt{NA}.
+\flag{--full-richness}, \flag{--full-private} and \flag{--full-tuples} also
+write a \texttt{\_fulldata} file, which gives the statistic at every locus.
+There is one row for each locus and grouping and one column for each $g$, the
+columns are separated by tabs, and the first line names them. A value that is
+undefined at a given $g$ is written as \texttt{NA}. The following example is
+from a small data set of four loci and two groupings, in which \texttt{POP1}
+has only two scored gene copies at \texttt{L2}:
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 LOCUS   POP_GROUPING    G1      G2      G3
-L0      POP1            1       1.53571 1.80357
-L0      POP2            1       1.48214 1.75
-L1      POP1            1       1.60714 2
-L1      POP2            1       1.55357 1.91071
+L0      POP0            1       1.53571 1.80357
+L0      POP1            1       1.25    1.375
+   ...
+L2      POP0            1       1.53571 1.80357
+L2      POP1            1       1       NA
+   ...
 \end{Verbatim}
 
-The locus leads the row because the program reads one locus at a time and
-computes every grouping's value for it before moving on (section~\ref{sec:how}):
-a locus's rows are written together and never returned to.
+\noindent The locus is in the first column because the loci are read one at a
+time, and the values for every grouping at a locus are computed before the
+next locus is read (section~\ref{sec:how}). The rows for a locus are therefore
+written together.
 
-\textbf{This is the transpose of what version 1.0 wrote}, and the one output
-format that 2.0 deliberately breaks. 1.0 put a row per grouping and $g$ with a
-column per locus, the locus names in the header and the summary appended at the
-end of each row:
+This layout is the transpose of the version 1.0 layout, and it is the main
+change to the output format in version 2.0. Version 1.0 wrote one row for each
+grouping and $g$, with one column for each locus and the summary statistics at
+the end of the row. For the same data, version 1.0 wrote:
 
-\begin{Verbatim}[xleftmargin=1em,fontsize=\small]
+\begin{Verbatim}[xleftmargin=1em,fontsize=\footnotesize]
 POP_GROUPING G NUM_LOCI L0 L1 L2 L3 MEAN VAR STD_ERR
-POP1 2 4 1.53571 1.60714 1 1.67857 1.45536 0.095557 0.154561
+POP0 2 4 1.53571 1.42857 1.53571 1.53571 1.50893 0.0028699 0.0267857
+POP0 3 4 1.80357 1.64286 1.80357 1.80357 1.76339 0.00645727 0.0401786
+
+POP1 2 4 1.25 1.53571 1 1.42857 1.30357 0.0548469 0.117097
 \end{Verbatim}
 
-\noindent A file as wide as the dataset is unreadable by ordinary tools at
-genome scale --- a million loci gave a handful of rows of a million fields,
-past the column limit of every spreadsheet and most parsers --- and it cannot
-be written until every locus has been computed, which is what forced the whole
-ladder of per-locus values to be held in memory (section~\ref{sec:changes}).
-One row per locus streams as the sweep runs, and joins to a locus table the way
-a reader expects. The layout is the same under \flag{--legacy}, which governs
-the statistics files; the summary columns are not repeated here, being the
-statistics file's business. To recover 1.0's orientation, transpose it:
+\noindent With genome-wide data, the version 1.0 layout gives a few rows of a
+million or more fields each, which is more columns than spreadsheets and many
+other tools can read. In addition, such a file cannot be written until every
+locus has been computed, which required the per-locus values at every $g$ to be
+held in memory (section~\ref{sec:changes}). With one row per locus, the file is
+written as the loci are read. The summary statistics are not repeated in the
+\texttt{\_fulldata} file, since they are in the statistics file. The values
+for one grouping at one $g$ can be extracted as a column, for example for
+\texttt{POP1} at $g = 2$:
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
-awk -F'\t' 'NR>1 {print $1, $2, $3}' out.richness_fulldata    # locus, label, g=1
+awk -F'\t' '$2 == "POP1" {print $1, $4}' out.richness_fulldata
 \end{Verbatim}
 
-\noindent In the example above \texttt{POP1} scored only two gene copies at
-\texttt{L2}, so its richness there is undefined at $g = 3$ and the whole
-grouping is undefined at that $g$; 
-that locus is undefined from $g = 3$ up, and the summary columns with it.
-Version 1.0 dropped the whole row as soon as one locus was undefined, so a
-grouping with a single badly scored locus disappeared from the file at every
-$g$ with nothing to say why; \flag{--legacy} reproduces that.
+\noindent In this example, the allelic richness of \texttt{POP1} at
+\texttt{L2} is undefined at $g = 3$, so its mean across loci at $g = 3$ is also
+undefined. Version 2.0 writes \texttt{NA} in that cell, and the statistics file
+reports \texttt{NA} for \texttt{POP1} at $g = 3$. Version 1.0 omitted the row
+for \texttt{POP1} at $g = 3$ from both files, without saying why. Note that
+\flag{--legacy} only applies to the statistics files. The \texttt{\_fulldata}
+files are written in the same way in both layouts.
 
 \subsection{Filtered loci}
 \label{sec:deletedloci}
 
-When \flag{--tolerance} is below 1, a \texttt{\_deletedloci} file records how
-many loci were dropped, the threshold applied, and the name of each dropped
-locus, in the order they appear in the input. (Version 1.0 listed them in
-descending order of position; the change is a consequence of naming each
-locus as it is read rather than collecting the names first.) The file is
-written even when every locus is dropped --- the run that produces no
-statistics at all is the one whose user most needs the list.
+When \flag{--tolerance} is below 1, a \texttt{\_deletedloci} file gives the
+number of loci that were dropped, the threshold that was applied, and the name
+of each dropped locus, in the order in which the loci appear in the input.
+Version 1.0 listed them in descending order of position. The order changed
+because each dropped locus is now written as it is read, instead of the names
+being collected first. The file is written even when every locus is dropped,
+since that is the case in which the list is most needed.
 
 \subsection{Run summary}
 
 A \texttt{\_summary} (or \texttt{.summary.txt}) file is written on every run.
-It echoes the parameters actually used --- including values that were measured
-rather than declared, and \texttt{MAX\_G} when it was resolved from the data
---- and records the elapsed time at which each phase finished.
+It lists the parameters that were used, including values that were measured
+from the data and the value of \texttt{MAX\_G} when it was determined from the
+data, and it records the elapsed time at which each step of the run finished.
 
 \subsection{Version 1.0's layout}
 \label{sec:legacy}
 
-The result files are tab-separated with a header row, and a statistic that is
-undefined at a given $g$ is written as \texttt{NA}.
+The statistics files are tab-separated with a header row, and a statistic
+that is undefined at a given $g$ is written as \texttt{NA}.
 
-\flag{--legacy} asks for version 1.0's layout: no header, space separators,
-groupings separated by a blank line, and rows that are undefined at a given $g$
-omitted entirely rather than marked. That omission is why the default changed.
-A consumer of the legacy format cannot distinguish ``not computable here'' from
-``not run'', and a grouping that is undefined at every $g$ --- which one badly
-scored locus is enough to cause (section~\ref{sec:tolerance}) --- disappears
-from the file altogether, leaving a run that completed and reported nothing
-with no visible explanation. There is one flag and no way to ask for
-both layouts at once.
+\flag{--legacy} writes the statistics files in the version 1.0 layout. In this
+layout there is no header, the columns are separated by spaces, groupings are
+separated by a blank line, and a row that is undefined at a given $g$ is left
+out rather than marked. Leaving out these rows is the reason the default
+changed. In the version 1.0 layout, a missing row could mean either that the
+statistic could not be computed or that it was not requested. In addition, a
+grouping that is undefined at every $g$ does not appear in the file at all,
+and one poorly scored locus is enough to cause this
+(section~\ref{sec:tolerance}). A run can then finish and report nothing for
+that grouping without any explanation in the file. Only one of the two layouts
+can be written in a run.
 
-Tuple labels are comma-joined in the default layout and space-joined in the
-legacy one, so under tabs a tuple stays a single column.
+In the default layout, the names of the groupings in a combination are joined
+with commas, so that a combination stays in a single tab-separated column. In
+the version 1.0 layout they are joined with spaces.
 
-The window files (section~\ref{sec:windows}) have always been tab-separated
-with a header, whichever layout is in force: they are new in 2.0 and have no
-earlier consumer to stay compatible with. The \texttt{\_fulldata},
-\texttt{\_deletedloci} and \texttt{\_summary} files are likewise unaffected by
-the flag --- and note that \texttt{\_fulldata} is transposed with respect to
-1.0 in both modes (section~\ref{sec:fulldata}), so \flag{--legacy} does not
-reproduce that file.
+The window files (section~\ref{sec:windows}) are always tab-separated with a
+header, whichever layout is used, since they are new in version 2.0. The
+\texttt{\_fulldata}, \texttt{\_deletedloci} and \texttt{\_summary} files are
+also not affected by \flag{--legacy}. Note in particular that the
+\texttt{\_fulldata} files are transposed relative to version 1.0 in both
+layouts (section~\ref{sec:fulldata}), so \flag{--legacy} does not reproduce
+these files.
 
 \subsection{Exit status}
 
@@ -684,32 +771,34 @@ reproduce that file.
 \section{Sliding windows}
 \label{sec:windows}
 
-Every statistic in section~\ref{sec:intro} can be reported window by window
-along the genome instead of, or as well as, once for the whole dataset.
+Every statistic in section~\ref{sec:intro} can be reported in windows along
+the genome, in addition to being reported once for the whole data set.
 
 \subsection{What a windowed statistic is here}
 
-For each window, \prog\ takes the loci inside it and reports the same mean,
-variance and standard error over those loci that it would report over all of
-them. Nothing about the estimators changes: $\hat{\alpha}_{jg}$ and
-$\hat{\pi}_{jg}$ are expectations for a single locus, and a window is simply a
-different set to average over.
+For each window, \prog\ reports the same mean, variance and standard error
+over the loci in the window that it reports over all loci. The estimators do
+not change. $\hat{\alpha}_g^{(j)}$ and $\hat{\pi}_g^{(j)}$ are expectations at
+a single locus, and a window only changes the set of loci that they are
+averaged over.
 
-Two consequences are worth stating plainly. The statistic has no haplotype or
-linkage component --- it does not know that the loci in a window are near each
-other, only that they were grouped together --- so a window here is a
-smoothing device, not a measure of local haplotype structure. (For alleles
-that are haplotypes, see section~\ref{sec:haplotypes}; the two combine, a
-windowed haplotype run averaging over the blocks in each window.) And the
-variance and standard error are taken across the loci in the window, so with
-few loci they are noisy; with one locus the variance is undefined and
-\prog\ writes \texttt{nan}. Use \flag{--min-window-loci} to set a floor.
+This has two consequences. First, the windowed statistics do not use any
+information about linkage between the loci in a window. A windowed statistic
+is an average over nearby loci, and it does not measure haplotype structure in
+the window. For alleles that are haplotypes, see
+section~\ref{sec:haplotypes}. The two can be combined, in which case each
+window averages over the haplotype blocks it contains. Second, the variance and
+standard error are computed across the loci in the window, so they are noisy
+when a window contains few loci. With one locus, the variance is undefined and
+\prog\ writes \texttt{nan}. \flag{--min-window-loci} sets the smallest number
+of loci a window must contain to be reported.
 
 \subsection{Coordinates}
 
-A window is a range of the genome, so every locus has to be placed on it.
-With VCF input the coordinates come from \texttt{CHROM} and \texttt{POS}. The
-\structureprog\ layout carries none, so \flag{--loci-map} supplies them:
+Because a window is a region of the genome, every locus must have a position.
+With VCF input, the positions are taken from \texttt{CHROM} and \texttt{POS}.
+The \structureprog\ format has no positions, so they are given in a separate
+file with \flag{--loci-map}:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 # locus   chromosome   position
@@ -718,84 +807,89 @@ L1        chr1         10000
 L2        chr2         5000
 \end{Verbatim}
 
-\noindent Whitespace-separated, \texttt{\#} starts a comment, further columns
-are ignored. Every locus in the data must appear: a window over loci whose
-positions are unknown would be a window in name only, so a missing coordinate
-stops the run rather than producing a quietly meaningless scan. Loci must
-arrive in genome order --- positions increasing within a chromosome, and each
-chromosome in one block --- and \prog\ says which locus breaks the order
-rather than sorting a dataset it is streaming.
+\noindent The columns are separated by whitespace, a \texttt{\#} starts a
+comment, and any further columns are ignored. Every locus in the data must be
+in this file. A locus without a position stops the run with an error, since a
+window over loci whose positions are not known would not correspond to a
+region of the genome. The loci must also be in genome order, with positions
+increasing within a chromosome and all loci on a chromosome together. If they
+are not, \prog\ reports the first locus that is out of order rather than
+sorting the data.
 
 \subsection{Defining the windows}
 
-A window is measured either in basepairs or in loci, never both:
+The size of a window is given either in basepairs or in loci:
 
 \begin{description}[leftmargin=2em,style=nextline]
-\item[\flag{--window-bp} \textit{N}] windows \textit{N} basepairs wide,
-  anchored at position~1 and advancing by \flag{--step-bp}. The intervals do
-  not depend on where the loci fall, so the same region gives the same windows
-  in every run and two datasets can be compared window by window. How many
-  loci a window holds varies with locus density.
-\item[\flag{--window-loci} \textit{N}] windows of \textit{N} surviving loci,
-  advancing by \flag{--step-loci}. Each window carries the same weight in the
-  averaging; its width in basepairs varies with density. The interval reported
-  is the span of the loci it holds.
+\item[\flag{--window-bp} \textit{N}] gives windows that are \textit{N}
+  basepairs wide, starting at position~1 and moving by \flag{--step-bp}. The
+  windows do not depend on where the loci are, so the same region gives the
+  same windows in every run, and two data sets can be compared window by
+  window. The number of loci in a window varies with the density of loci.
+\item[\flag{--window-loci} \textit{N}] gives windows of \textit{N} loci that
+  remain after filtering, moving by \flag{--step-loci}. Each window has the
+  same number of loci, and its width in basepairs varies with the density of
+  loci. The reported interval runs from the first to the last locus in the
+  window.
 \end{description}
 
-\noindent Each step defaults to its window width, so the default is a
-non-overlapping tiling; a step smaller than the width is the sliding case. No
-window crosses a chromosome. Windows are laid out over the loci that survive
-the missing-data filter (section~\ref{sec:filter}), so a locus dropped there
-is absent from every window, and a locus-counted window of $N$ means $N$
-surviving loci.
+\noindent By default, the step is equal to the window size, so the windows do
+not overlap. A step smaller than the window size gives overlapping (sliding)
+windows. No window spans two chromosomes. Windows are laid out over the loci
+that remain after missing-data filtering (section~\ref{sec:filter}), so a
+locus that is dropped there is not in any window, and a window of $N$ loci
+contains $N$ loci that remain after filtering.
 
-\flag{--min-window-loci} \textit{N} suppresses windows holding fewer than
-\textit{N} loci; the default of 1 reports every window that holds anything.
-Windows holding no loci at all are never reported.
+\flag{--min-window-loci} \textit{N} leaves out windows that contain fewer than
+\textit{N} loci. The default of 1 reports every window that contains at least
+one locus. Windows that contain no loci are never reported.
 
 \subsection{\texorpdfstring{$g$}{g} is fixed across the scan}
 \label{sec:wing}
 
-\texttt{MAX\_G} is resolved genome-wide, as it is for the whole-dataset
-statistics: the largest standardized sample size every grouping supports at
-every surviving locus. It is not re-resolved per window. A window in a
-sample-rich region is therefore not reported at a larger $g$ than the rest of
-the scan, which is what makes windows comparable with each other --- the point
-of a scan. Since a set containing a locus that cannot reach $g$ is undefined
-at that $g$, this also means that under the default every window is defined
-at every reported $g$. If you raise \texttt{MAX\_G} past what some locus
-supports, the windows containing such loci are written as \texttt{NA} rather
-than dropped, so the file keeps one row per window per $g$.
+\texttt{MAX\_G} is determined from the whole genome, as it is for the
+statistics over the whole data set. It is the largest standardized sample size
+that every grouping supports at every locus that remains after filtering, and
+it is not determined separately for each window. A window in a region with
+larger sample sizes is therefore not reported at a larger $g$ than the rest of
+the genome, so that all windows can be compared with each other. Because a set
+of loci is undefined at $g$ if any locus in it cannot reach $g$, this also
+means that with the default \texttt{MAX\_G} every window is defined at every
+reported $g$. If \texttt{MAX\_G} is set larger than some locus supports, the
+windows containing that locus are written as \texttt{NA} rather than left out,
+so the file still has one row for each window at each $g$.
 
 \subsection{Output}
 
-Each requested statistic writes an extra file named by appending
-\texttt{\_windows}: with \flag{--out-prefix scan}, \texttt{scan.richness}
-gains \texttt{scan.richness\_windows}. The whole-dataset files are written
-exactly as before; asking for windows never changes them.
+Each requested statistic writes an additional file, with \texttt{\_windows}
+added to its name. For example, with \flag{--out-prefix scan},
+\texttt{scan.richness} is accompanied by \texttt{scan.richness\_windows}. The
+files for the whole data set are the same whether or not windows are
+requested.
 
-Window files always carry a header and are always tab-separated, whatever
-\flag{--legacy} asks for --- they are new output with no version 1.0 consumer to stay
-compatible with, and a scan is read by machine. The columns are
+Window files always have a header and are always tab-separated, even with
+\flag{--legacy}, since they are new in version 2.0. The columns are
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 CHROM  START  END  POP_GROUPING  G  NUM_LOCI  MEAN  VAR  STD_ERR
 \end{Verbatim}
 
-\noindent with \texttt{TUPLE} in place of \texttt{POP\_GROUPING} in the tuple
-file, where the grouping names are joined with commas so the label stays one
-field. Rows are ordered by grouping, then by $g$, then along the genome, so
-the track for one grouping at one $g$ is a contiguous block.
+\noindent In the file for combinations of populations, \texttt{TUPLE} takes
+the place of \texttt{POP\_GROUPING}, and the grouping names are joined with
+commas so that each combination is in one column. The rows are ordered by
+grouping, then by $g$, and then by position along the genome, so the rows for
+one grouping at one $g$ are together.
 
-A scan is usually read at one $g$, and \flag{--at-g}
-(section~\ref{sec:atg}) is the economical way to ask for it: the file holds one
-row per window per grouping instead of one per window per grouping per $g$. On
-the scan below that is the difference between 912 rows and 48.
+A genome scan is usually examined at a single $g$, and \flag{--at-g}
+(section~\ref{sec:atg}) reports only that $g$. The file then has one row for
+each window and grouping, rather than one for each window, grouping and $g$.
+For the scan in section~\ref{sec:scanexample}, this is 48 rows rather than 1056.
 
-Windowed tuple output is large: one row per window per $g$ per tuple.
-\flag{--dry-run} reports the row count each statistic would write, along with
-the window count and how many windows fell below the threshold, before
-anything is computed.
+Windowed output for combinations of populations can be large, since there is
+one row for each window, $g$ and combination. \flag{--dry-run} reports the
+number of rows each statistic would write, the number of windows, and how many
+windows contain too few loci to be reported, before any statistic is
+computed.
 
 \input{haplotypes.tex}
 
@@ -804,86 +898,91 @@ anything is computed.
 \subsection{The distributed example data set}
 \label{sec:examplesmall}
 
-The data set in Figure~\ref{fig:datafile} has five loci and three groupings.
-Running it with nothing but the data file and the grouping column,
+In this example we use the small data set in Figure~\ref{fig:datafile}, which
+has five loci and three groupings, to work through the basic operation of
+\prog. Running \prog\ with only the data file and the grouping column,
 \begin{Verbatim}[xleftmargin=1em]
 adze --data small_data.stru --group-col 5 --out-prefix small
 \end{Verbatim}
-\noindent reports on standard error
+\noindent reports the following, among other messages, on standard error:
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 Read 22 gene copies at 5 loci in 3 groupings (d:h:m:s 0:0:0:0.00)
 2 loci have at least one grouping with more than 10% missing data.
 MAX_G not given; using 6, the largest the 3 surviving loci support.
 \end{Verbatim}
-\noindent Two of the five loci exceed the default tolerance of 0.1 and are
-dropped, and the analysis runs to $g = 6$ over the three that remain. Asking
-instead for every locus,
+\noindent Two of the five loci have more missing data than the default
+tolerance of 0.1 allows, so they are dropped, and the analysis runs to $g = 6$
+over the three loci that remain. If instead every locus is kept,
 \begin{Verbatim}[xleftmargin=1em]
 adze --data small_data.stru --group-col 5 --out-prefix keep --tolerance 1
 \end{Verbatim}
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 MAX_G not given; using 3, the largest the 5 surviving loci support.
 \end{Verbatim}
-\noindent halves the standardized sample size. Three is low for 22 gene copies,
-and the reason is missing data rather than sample size: the \texttt{EUROPE}
-grouping has six gene copies in total, but at locus \texttt{D9S1825} three of
-those six are missing, leaving $N_j = 3$. \texttt{D9S1825} is also missing
-25\% of the \texttt{AMERICA} grouping, and \texttt{D14S1007} is missing 25\% of
-\texttt{EAST\_ASIA} --- which is why the default drops exactly those two.
+\noindent the largest standardized sample size is halved. The reason is
+missing data rather than sample size. The \texttt{EUROPE} grouping has six gene
+copies in total, but three of them are missing at the fourth locus
+(\texttt{D9S1825}), which leaves $N_j = 3$. The fourth locus is also missing
+25\% of the data in the \texttt{AMERICA} grouping, and the second locus
+(\texttt{D14S1007}) is missing 25\% of the data in the \texttt{EAST\_ASIA}
+grouping. These are the two loci that the default tolerance drops.
 
-Which run to prefer is a judgement about the data: the second uses all five
-loci but compares populations only at $g \leq 3$; the first compares them over
-a much wider range of $g$ using three loci. The default leans towards the
-larger $g$, on the grounds that a locus one grouping barely scored constrains
-every grouping.
+Which of the two runs to use depends on the data. The second run uses all five
+loci, but it only compares populations at $g \leq 3$. The first run compares
+them over a wider range of $g$, but with only three loci. The default
+tolerance favors the larger $g$, because a single locus that is poorly scored
+in one grouping limits $g$ for every grouping.
 
 The parameter file distributed with the example, \texttt{small\_paramfile.txt},
-runs the same analysis in version 1.0's style, declaring all four dimensions
-along with \texttt{MAX\_G 8} and \texttt{TOLERANCE 0.2}:
+runs the same analysis in the version 1.0 style. It gives all four dimensions
+of the data file, along with \texttt{MAX\_G 8} and \texttt{TOLERANCE 0.2}:
 \begin{Verbatim}[xleftmargin=1em]
 adze small_paramfile.txt
 \end{Verbatim}
-\noindent Its results agree with the run above wherever the two overlap, and
-the private allelic richness files are identical. The richness files are not:
-declaring \texttt{MAX\_G 8} reports \texttt{AMERICA} and \texttt{EAST\_ASIA}
-at $g = 7$ and $8$, which their own sample sizes reach, whereas the default
-stops at the largest $g$ that \emph{every} grouping supports. Private allelic
-richness stops at 6 in both, because no allele can be private at a $g$ that
-some grouping cannot reach.
+\noindent Its results agree with the first run above wherever the two
+overlap, and the private allelic richness files are identical. The allelic
+richness files differ. With \texttt{MAX\_G 8}, \texttt{AMERICA} and
+\texttt{EAST\_ASIA} are also reported at $g = 7$ and $8$, which their own sample
+sizes allow, and \texttt{EUROPE} is reported as \texttt{NA} at those values of
+$g$. The default stops at the largest $g$ that every grouping supports.
+Private allelic richness stops at $g = 6$ in both runs, since private allelic
+richness can only be computed at a $g$ that every grouping can reach.
 
 \subsection{A larger data set}
 
-The next example uses the data of Rosenberg et al. (2002): 1056 individuals
-from 52 populations typed at 377 microsatellite loci, available at
-\url{https://rosenberglab.stanford.edu/diversity.html}. Because computing
-private alleles for all combinations at the population level would be
-prohibitive, the published analysis groups the individuals by region instead,
-which is column~5 of that file's labels and reduces the number of groupings
-from 52 to 7.
+The next example uses a larger data set with 1056 individuals from 52
+populations across 377 microsatellite loci. This data file is from the
+Rosenberg et al. (2002) study and can be downloaded at
+\url{https://rosenberglab.stanford.edu/diversity.html}. Because calculating
+private alleles for all combinations at the population level would be very
+time consuming, for the purposes of this example we run \prog\ at the level of
+geographic regions. The region is in the fifth label column of the file, and
+grouping by region reduces the number of groupings from 52 to 7.
 
 The version 1.0 parameter file for this analysis (Figure~3 of the version 1.0
-manual) declared \texttt{MAX\_G 70}, \texttt{DATA\_LINES 2112},
+manual) gave \texttt{MAX\_G 70}, \texttt{DATA\_LINES 2112},
 \texttt{LOCI 377}, \texttt{NON\_DATA\_ROWS 1}, \texttt{NON\_DATA\_COLS 5},
 \texttt{GROUP\_BY\_COL 5}, \texttt{K\_RANGE 2-6} and \texttt{TOLERANCE 1}. In
-version 2.0 the four dimensions are measured from the file, so the same run is
+version 2.0, the four dimensions are measured from the file, so the same
+analysis is run with
 
 \begin{Verbatim}[xleftmargin=1em]
 adze --data diversitydata.stru --group-col 5 --max-g 70 \
      --stat richness,private,tuples --tuples-k 2-6 \
-     --out-prefix hgdp --threads 8
+     --out-prefix hgdp
 \end{Verbatim}
 
-Figures~\ref{fig:hgdprich}--\ref{fig:hgdpmiss} show the published analysis of
-these data: mean allelic richness against $g$, mean private allelic richness
-against $g$, and mean private allelic richness for combinations of six of the
-seven regions --- that is, ``missing'' allelic richness, Equation~5. These
-figures are reproduced from the version 1.0 manual and were produced with
-version 1.0; version 2.0 computes the same values.
+Figure~\ref{fig:hgdprich} gives the mean allelic richness against $g$,
+Figure~\ref{fig:hgdppriv} the mean private allelic richness against $g$, and
+Figure~\ref{fig:hgdpmiss} the mean private allelic richness for combinations
+of six of the seven regions (``missing'' alleles, Equation~5). These figures
+are reproduced from the version 1.0 manual and were made with version 1.0.
+Version 2.0 computes the same values.
 
-Africa carries both the highest allelic richness and, by a wide margin, the
-highest private allelic richness, while the Americas and Oceania have the
-highest missing allelic richness --- the alleles absent there but present
-everywhere else.
+Africa has the highest allelic richness and by far the highest private allelic
+richness. The Americas and Oceania have the highest missing allelic richness at
+larger values of $g$ (above about $g = 12$). In other words, many alleles found
+in all other regions are absent from these two regions.
 
 \begin{figure}[htbp]
 \centering
@@ -912,9 +1011,10 @@ function of standardized sample size.}
 
 \subsection{Naming the tuples of interest}
 
-A full sweep over tuple sizes evaluates $\binom{J}{k}$ combinations for each
-$k$, which is $2^J$ tuples if every $k$ is requested. When only a few
-groupings matter, list them in a file, one tuple per line:
+Computing private allelic richness for every combination of size $k$ requires
+$\binom{J}{k}$ combinations for each $k$, which is $2^J - 1$ combinations if
+every $k$ is requested. When only a few combinations are of interest, they can
+be listed in a file, one combination per line:
 \begin{Verbatim}[xleftmargin=1em]
 # tuples.txt
 AMERICA, EUROPE
@@ -925,18 +1025,19 @@ AMERICA, EUROPE, EAST_ASIA
 adze --data small_data.stru --group-col 5 --tuples tuples.txt \
      --stat tuples --out-prefix regions
 \end{Verbatim}
-\noindent Each line is a comma- or space-separated list of grouping names as
-they appear in the data file; \texttt{\#} starts a comment. This computes only
-the tuples named, at any mixture of sizes.
+\noindent Each line is a list of grouping names, separated by commas or
+spaces, as they appear in the data file, and a \texttt{\#} starts a comment.
+Only the listed combinations are computed, and they can be of different
+sizes.
 
 
 \subsection{A genome scan}
 \label{sec:scanexample}
 
-The generator that drives the test suite writes coordinates as well as
-genotypes, so a scan can be reproduced from the repository alone. This makes
-60 loci spaced 5\,kb apart over two chromosomes, in four groupings of twelve
-diploid individuals:
+The script that generates the test data also writes positions for each locus,
+so this example can be reproduced from the repository alone. The following
+command makes 60 loci spaced 5\,kb apart on two chromosomes, in four groupings
+of twelve diploid individuals:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 python3 -c "import sys; sys.path.insert(0,'test'); import gen_data
@@ -944,8 +1045,8 @@ gen_data.write_pair('scan', npops=4, nind=12, nloci=60, nall=6,
                     missing=0.03, seed=3, chroms=2, spacing=5000)"
 \end{Verbatim}
 
-\noindent Ask what a 50\,kb window stepping 25\,kb would cover before running
-it:
+\noindent Before running the scan, \flag{--dry-run} reports what 50\,kb windows
+with a step of 25\,kb would contain:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 adze --data scan.vcf --samples scan.samples \
@@ -962,11 +1063,12 @@ Windows:          12 of 50000 bp, step 25000
   private rows:    960
 \end{Verbatim}
 
-\noindent Twelve windows and, before filtering, $g$ running to 20, every
-grouping having 24 gene copies and the sparsest locus carrying 20. The
-projection is deliberately conservative about its own arithmetic: filtering
-happens first and raises both the reachable $g$ and the row count, as the run
-itself then reports. Then run it, with a floor on how thin a window may be:
+\noindent There are twelve windows, and before filtering $g$ can go up to 20,
+because every grouping has 24 gene copies and the locus with the most missing
+data has 20. Note that the dry run reports these numbers before filtering.
+Filtering drops loci first, which can increase both the largest $g$ and the
+number of rows, as the full run then reports. The scan is then run, here
+requiring at least three loci in each window:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 adze --data scan.vcf --samples scan.samples \
@@ -976,14 +1078,14 @@ adze --data scan.vcf --samples scan.samples \
 
 \begin{Verbatim}[xleftmargin=1em,fontsize=\small]
 7 loci have at least one grouping with more than 10% missing data.
-Laid out 12 windows over 60 loci.
+Laid out 12 windows over 53 loci.
 MAX_G not given; using 22, the largest the 53 surviving loci support.
 \end{Verbatim}
 
-\noindent The filter drops seven of the sixty loci, which raises the reachable
-$g$ from 20 to 22 and the output to 1056 rows --- more than a scan is usually
-read at. Adding \flag{--at-g 10} asks for one $g$ and gives 48, one row per
-window per grouping:
+\noindent The filter drops seven of the 60 loci, which increases the largest
+$g$ from 20 to 22, and the window file has 1056 rows. Adding
+\flag{--at-g 10} reports only $g = 10$, which gives 48 rows, one for each
+window and grouping:
 
 \begin{Verbatim}[frame=single,fontsize=\small]
 CHROM  START   END     POP_GROUPING  G   NUM_LOCI  MEAN     VAR        STD_ERR
@@ -991,27 +1093,29 @@ chr1   1       50000   POP0          10  8         3.45471  0.0842792  0.10264
 chr1   25001   75000   POP0          10  8         3.56664  0.0605046  0.0869659
 \end{Verbatim}
 
-\noindent The consecutive windows overlap by 25\,kb, so each interior locus
-contributes to two of them. \texttt{scan.richness} holds the whole-dataset
-figures unchanged alongside, and the rows here are the same bytes the full
-ladder gives at $g = 10$.
+\noindent Consecutive windows overlap by 25\,kb, so each locus that is not at
+the end of a chromosome is in two windows. \texttt{scan.richness} holds the
+statistics for the whole data set, which are the same as in a run without
+windows. The rows at $g = 10$ are identical to the rows for $g = 10$ in the
+full run.
 
 \section{Performance and threading}
 
-The per-locus loops of all three statistics can be spread over threads with
-\flag{--threads} in an OpenMP build. Loci are processed independently and
-reduced in locus order, so the output does not depend on the thread count: the
-result files are bit-identical at any \flag{--threads} setting.
+The current version computes the statistics on a single thread.
+\flag{--threads} is accepted, but it has no effect. Measured on 2000 loci with
+\texttt{MAX\_G} of 150, the statistics took 0.43\,s with one thread and 0.38\,s
+with two, four or eight threads, with identical output.
 
-Compressed input is decompressed as it streams, so a \texttt{.vcf.gz} costs
-more processor time to read than the same data uncompressed, and usually less
-wall-clock time on a busy filesystem, since there is far less to transfer.
+Compressed input is decompressed as it is read, so a \texttt{.vcf.gz} file
+takes more processor time to read than the same data uncompressed. On a busy
+file system it usually takes less elapsed time, since much less data has to be
+read from disk.
 
-Table~\ref{tab:perf} gives the effect of the version 2.0 work on the phases
-that dominate large runs, measured against a version 1.0 build on the same
-inputs. The costs that grew fastest in version 1.0 were locus filtering
-(quadratic in the number of loci) and the sweep over $g$ (quadratic in
-\texttt{MAX\_G}); both are now linear.
+Table~\ref{tab:perf} gives the effect of the version 2.0 changes on the steps
+that take the most time in large runs, measured against a version 1.0 build on
+the same inputs. In version 1.0, the time for locus filtering grew with the
+square of the number of loci, and the time for the sweep over $g$ grew with
+the square of \texttt{MAX\_G}. In version 2.0, both grow linearly.
 
 \begin{table}[htbp]
 \centering
@@ -1019,30 +1123,30 @@ inputs. The costs that grew fastest in version 1.0 were locus filtering
 \toprule
 Phase & Condition & Version 1.0 & Version 2.0 \\
 \midrule
-Locus filtering & 8000 loci, 4623 dropped & 5.97 s & $<$0.01 s \\
-Richness + private & 1000 loci, \texttt{MAX\_G} 80 & 4.87 s & 0.24 s \\
-Tuples & 12 groupings, 495 tuples & 4.33 s & 0.67 s \\
-Reading & 64 MB input & 3.62 s & 0.70 s \\
-Peak memory & 64 MB input & 404 MiB & 21 MiB \\
-Statistics, 8 threads & 2000 loci, \texttt{MAX\_G} 150 & --- & $4.0\times$ \\
+Locus filtering & 8000 loci, 4623 dropped & 6.00 s & $<$0.01 s \\
+Richness and private & 1000 loci, \texttt{MAX\_G} 80 & 4.80 s & 0.09 s \\
+Combinations & 12 groupings, 495 combinations & 4.34 s & 0.37 s \\
+Reading & 64 MB input & 3.68 s & 0.78 s \\
+Peak memory & 64 MB input & 413 MiB & 27 MiB \\
 \bottomrule
 \end{tabular}
-\caption{Measured on an 8-core machine, best of two runs. Version 1.0 held
-every genotype in memory, so its footprint grew with sample size; version 2.0
-keeps allele counts only, and its footprint is flat in the number of gene
-copies.}
+\caption{Measured with \texttt{test/bench.py} on an 8-core machine, best of
+two runs. Version 1.0 held every genotype in memory, so its memory use grew
+with the sample size. Version 2.0 does not hold the genotypes in memory, so its
+memory use does not grow with the number of gene copies.}
 \label{tab:perf}
 \end{table}
 
 \subsection{Haplotype blocks}
 
-Collapsing SNPs into blocks changes what a run costs in two directions at
-once, and the balance depends on the block width. The counting pass keeps one
-count per block per grouping, so a wider block means fewer of them and less
-memory; the sweep's work at a block grows with the number of distinct
-haplotypes it carries, which rises with width until every callable copy is
-unique and then stops. Measured on 40\,000 phased biallelic SNPs, 300 gene
-copies in 6 groupings, 2\% of calls missing, \flag{--max-g}~10:
+Collapsing SNPs into blocks affects the cost of a run in two ways, and the
+balance depends on the block size. The counting pass keeps one count per block
+per grouping, so larger blocks mean fewer counts and less memory. However, the
+work at each block grows with the number of distinct haplotypes in the block,
+which increases with block size until every callable gene copy carries a
+different haplotype. The following table was measured on 40\,000 phased
+biallelic SNPs, with 300 gene copies in 6 groupings, 2\% of genotypes missing
+and \flag{--max-g}~10:
 
 \begin{center}
 \begin{tabular}{lrrrrrr}
@@ -1061,171 +1165,189 @@ off & 0.29\,s & 7.4\,MB & 40\,000 & 2.0 & 100\% & ---\\
 \end{tabular}
 \end{center}
 
-\noindent Three things in that table matter more than the timings. The
-callable-copy column follows $(1-m)^N$ almost exactly --- 98, 96, 90, 82, 67
-and 37\,\% against 98, 96, 90, 82, 67 and 36 predicted --- so the
-all-or-nothing rule of section~\ref{sec:haplotypes} behaves as the arithmetic
-says: only a third of the gene copies are still callable at 50 SNPs with 2\%
-missingness, so two thirds of them have been lost. The time
-is not monotone: it peaks in the middle, where haplotype diversity is rising
-but blocks are still numerous, and falls again once every copy is unique and
-there are few blocks left. And the last column is the one to read first: by 20
-SNPs almost every block has as many haplotypes as callable copies, where
-$\hat{\alpha}_{jg}$ is $g$ by construction. The cheapest runs in that table
-are the ones that measure the least.
+\noindent The fraction of callable gene copies follows $(1-m)^N$ closely
+(98, 96, 90, 82, 67 and 37\% measured, compared with 98, 96, 90, 82, 67 and
+36\% predicted), as expected from the rule in section~\ref{sec:haplotypes}
+that one uncalled genotype makes the whole block uncalled. With blocks of 50
+SNPs and 2\% missing data, only a third of the gene copies are still callable,
+so two thirds of them are lost. The run time is largest for blocks of 10 SNPs,
+where the number of distinct haplotypes is high and there are still many
+blocks, and it decreases for longer blocks because there are fewer blocks. In
+addition, with blocks of 20 SNPs, almost every block has as many haplotypes as
+callable gene copies, so that $\hat{\alpha}_g^{(j)}$ equals $g$ regardless of
+the data. Note that the fastest runs in the table are therefore the least
+informative.
 
 \section{Changes from version 1.0}
 \label{sec:changes}
 
 \subsection{Compatibility}
 
-Parameter files written for version 1.0 work unchanged, as do the short flags.
-Two defaults differ. \flag{--tolerance} is 0.1 rather than 1, so a run that
-names no tolerance now drops loci that version 1.0 kept; every 1.0 parameter
-file declares \texttt{TOLERANCE} and is therefore unaffected, and
-\flag{--tolerance 1} restores the old behaviour explicitly
-(section~\ref{sec:tolerance}). And the result files are tab-separated with a
-header rather than in 1.0's layout, which \flag{--legacy} restores
-(section~\ref{sec:legacy}). A script that parsed 1.0's output needs that one
-flag, and the differential test suite passes it for exactly that reason.
-Explicitly named output files keep version 1.0's literal suffixes, and the
-default result format is unchanged. \texttt{SKIP\_CHK} and \flag{--no-check}
-are still accepted but do nothing, because validation now costs nothing: it
-happens during the single read pass.
+Parameter files written for version 1.0 work without changes, as do the
+version 1.0 short flags. Two defaults differ. First, the default
+\flag{--tolerance} is 0.1 rather than 1, so a run that does not set a
+tolerance now drops loci that version 1.0 kept. Every version 1.0 parameter
+file sets \texttt{TOLERANCE}, so these files are not affected, and
+\flag{--tolerance 1} gives the version 1.0 behavior
+(section~\ref{sec:tolerance}). Second, the statistics files are tab-separated
+with a header rather than in the version 1.0 layout, and \flag{--legacy}
+writes the version 1.0 layout (section~\ref{sec:legacy}). A script that reads
+version 1.0 output therefore needs this flag, and the test that compares
+version 2.0 with version 1.0 uses it for this reason. Output files that are
+named explicitly keep the version 1.0 suffixes. \texttt{SKIP\_CHK} and
+\flag{--no-check} are still accepted but have no effect, since the data file is
+now always checked during the counting pass at no extra cost.
 
 \subsection{Interface}
 
 \begin{itemize}[leftmargin=1.2em]
 \item Options can be given without a parameter file, and \flag{--help} and
-  \flag{--version} work with no arguments at all. A bare invocation prints
-  usage; version 1.0 wrote a template parameter file into the working
-  directory.
-\item The parameter-file parser reads a keyword and the rest of the line.
-  Version 1.0 searched each line for any keyword as a substring, so a value
-  that contained a keyword --- \texttt{R\_OUT out\_LOCI\_richness} --- was
+  \flag{--version} work without any other arguments. Running \prog\ with no
+  arguments prints a usage message. Version 1.0 instead wrote a template
+  parameter file into the working directory.
+\item The parameter file is read as a keyword followed by the rest of the
+  line. Version 1.0 searched each line for any keyword, so a value that
+  contained a keyword (for example, \texttt{R\_OUT out\_LOCI\_richness}) was
   rejected, and values could not contain spaces.
-\item Dimensions are measured rather than declared
+\item The dimensions of the data file are measured from the file
   (section~\ref{sec:autodetect}).
-\item Diagnostics and progress go to standard error; exit status distinguishes
-  usage, I/O and data errors.
-\item VCF input, plain or \texttt{gzip}/\texttt{bgzip} compressed, via
-  \flag{--format} and \flag{--samples} (section~\ref{sec:vcf}). Version 1.0
-  read only the uncompressed \structureprog\ layout.
-\item Given phased VCF input, consecutive SNPs can be collapsed into
-  haplotype blocks and the statistics computed over haplotypes rather than
-  single-SNP alleles (section~\ref{sec:haplotypes}).
-\item The data is never held in memory. Two passes replace the old read: one
-  counts gene copies and decides the filter, the ceilings, \texttt{MAX\_G} and
-  the windows; the second computes every statistic from one $Q$ table per
-  locus (section~\ref{sec:how}). On a VCF of 1.28 million loci and 10
-  groupings, peak memory falls from 764\,MB to 145\,MB at equal run time; a
-  \structureprog\ file of the same size falls from 886\,MB to 260\,MB and
-  takes about twice as long, being converted to locus-major counts first.
-\item \flag{--dry-run} is answered from the counting pass and never reads the
-  data a second time: 54\,MB and 0.47\,s become 11\,MB and 0.19\,s on 80\,000
-  loci.
-\item The \texttt{\_deletedloci} list is in input order rather than descending
-  order of position, and is written even when every locus is dropped
-  (section~\ref{sec:deletedloci}).
-\item Each statistic is still announced, but they are computed together, so
-  the run reports one completion and the summary carries one
-  \texttt{Statistics completed at} line rather than one per statistic.
-\item The \texttt{\_fulldata} files are transposed: one row per locus and
-  locus with a column per $g$, where 1.0 wrote a row per $g$ with a column per
-  locus (section~\ref{sec:fulldata}). This is the one output format 2.0 does
-  not reproduce, in either mode.
-\item Result files are tab-separated with a header and \texttt{NA} for
-  undefined rows (section~\ref{sec:legacy}), and the \texttt{\_fulldata} files
-  mark an undefined locus \texttt{NA} rather than dropping the row
-  (section~\ref{sec:fulldata}). \flag{--legacy} writes version
-  1.0's layout, which is byte-identical to what 1.0 wrote apart from the
-  $g = 1$ row.
-\item The \flag{--tolerance} default is 0.1 rather than 1
-  (section~\ref{sec:tolerance}), and the groupings that a retained locus leaves
-  unusable are named, with their locus counts, instead of showing up as empty
-  result files.
+\item Messages and progress are written to standard error, and the exit status
+  distinguishes usage errors, input and output errors, and data errors.
+\item VCF input, uncompressed or compressed with \texttt{gzip} or
+  \texttt{bgzip}, is read with \flag{--format} and \flag{--samples}
+  (section~\ref{sec:vcf}). Version 1.0 only read uncompressed
+  \structureprog\ files.
+\item With phased VCF input, consecutive SNPs can be collapsed into
+  haplotype blocks, and the statistics are then computed over haplotypes
+  rather than single-SNP alleles (section~\ref{sec:haplotypes}).
+\item The genotypes are not held in memory. The data are read in two passes.
+  The first counts gene copies and determines the filter, the largest $g$ for
+  each grouping, \texttt{MAX\_G} and the windows. The second computes every
+  statistic from one table of $Q_{ijg}$ per locus (section~\ref{sec:how}). On a
+  VCF of 1.28 million loci and 10 groupings, peak memory decreased from
+  764\,MB to 145\,MB with the same run time. For a \structureprog\ file of the
+  same size, peak memory decreased from 886\,MB to 260\,MB, and the run took
+  about twice as long, because the file is first converted to counts by locus.
+\item \flag{--dry-run} uses only the counting pass and does not read the data
+  a second time. On 80\,000 loci, its memory use decreased from 54\,MB to
+  11\,MB and its run time from 0.47\,s to 0.19\,s.
+\item The \texttt{\_deletedloci} list is in the order of the input rather than
+  in descending order of position, and it is written even when every locus is
+  dropped (section~\ref{sec:deletedloci}).
+\item Each statistic is still announced, but the statistics are computed
+  together, so the run reports a single completion, and the summary has one
+  \texttt{Statistics completed at} line rather than one for each statistic.
+\item The \texttt{\_fulldata} files are transposed, with one row for each
+  locus and grouping and one column for each $g$. Version 1.0 wrote one row for
+  each grouping and $g$, with one column for each locus
+  (section~\ref{sec:fulldata}). Version 2.0 does not reproduce the version 1.0
+  layout of these files with either setting of \flag{--legacy}.
+\item The statistics files are tab-separated with a header, and undefined rows
+  are written as \texttt{NA} (section~\ref{sec:legacy}). In the
+  \texttt{\_fulldata} files, an undefined value is written as \texttt{NA}
+  rather than the row being left out (section~\ref{sec:fulldata}).
+  \flag{--legacy} writes the version 1.0 layout of the statistics files, which
+  is byte-identical to the version 1.0 output except for the $g = 1$ rows.
+\item The default \flag{--tolerance} is 0.1 rather than 1
+  (section~\ref{sec:tolerance}). A grouping that is made unusable by a locus
+  that is kept is reported by name, with the number of loci involved, rather
+  than appearing only as missing results.
 \item Every statistic is now also reported at $g = 1$
-  (section~\ref{sec:gone}); version 1.0's sweeps started at $g = 2$. The
-  default output therefore carries one extra row per grouping, which is the one
-  respect in which it is not what 1.0 wrote.
-\item \flag{--at-g} reports a single $g$ instead of the whole ladder
-  (section~\ref{sec:atg}), clamping an over-large request to the largest
-  reachable $g$ with a warning.
-\item Sliding-window statistics (section~\ref{sec:windows}): \flag{--window-bp}
-  or \flag{--window-loci} with a matching step, \flag{--min-window-loci}, and
-  \flag{--loci-map} to give \structureprog\ input the coordinates a window
-  needs. Version 1.0 reported each statistic once for the whole dataset.
-\item New: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
+  (section~\ref{sec:gone}), while version 1.0 started at $g = 2$. The default
+  output therefore has one extra row for each grouping, and this is the only
+  difference in the values reported.
+\item \flag{--at-g} reports a single $g$ instead of every $g$
+  (section~\ref{sec:atg}). A request that is too large is reduced to the
+  largest $g$ that can be computed, with a warning.
+\item Statistics can be reported in sliding windows (section~\ref{sec:windows})
+  with \flag{--window-bp} or \flag{--window-loci} and the matching step,
+  \flag{--min-window-loci}, and \flag{--loci-map}, which gives positions for
+  \structureprog\ input. Version 1.0 reported each statistic once for the
+  whole data set.
+\item New options: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
   \flag{--exclude-pops}, \flag{--tuples}, \flag{--legacy}, \flag{--dry-run},
-  \flag{--threads}, \flag{--quiet}.
+  \flag{--threads} and \flag{--quiet}. In the current version,
+  \flag{--threads} has no effect, because the statistics are computed on a
+  single thread.
 \end{itemize}
 
 \subsection{Behaviour}
 
-Estimates are unchanged. The following differ, in each case because version 1.0
-gave an answer that could not be used:
+The estimates do not change. The following behaviors differ, in each case
+because version 1.0 gave a result that could not be used:
 
 \begin{enumerate}[leftmargin=1.5em]
-\item A locus with no observed allele in any grouping is reported as undefined,
-  with a warning. Version 1.0 stopped with a segmentation fault.
-\item Filtering that removes every locus is an error. Version 1.0 continued and
-  printed \texttt{nan} rows over zero loci.
-\item A data row whose column count is wrong is always an error. With checking
-  disabled, version 1.0 would misread it silently.
-\item The variance of a single locus is reported as \texttt{nan} rather than
+\item A locus with no observed allele in any grouping is reported as
+  undefined, with a warning. Version 1.0 stopped with a segmentation fault.
+\item If filtering removes every locus, \prog\ stops with an error. Version 1.0
+  continued and printed \texttt{nan} rows over zero loci.
+\item A data row with the wrong number of columns is always an error. With
+  checking turned off, version 1.0 read such a row incorrectly without a
+  warning.
+\item The variance at a single locus is reported as \texttt{nan} rather than as
   the result of dividing by zero.
-\item Reported times are elapsed wall-clock times with two decimals. Version
-  1.0 reported processor time truncated to whole seconds, which is why the
-  example run in the version 1.0 manual reports \texttt{0:0:0:0} throughout.
+\item Reported times are elapsed (wall-clock) times with two decimal places.
+  Version 1.0 reported processor time rounded down to whole seconds, which is
+  why the example run in the version 1.0 manual reports \texttt{0:0:0:0}
+  throughout.
 \end{enumerate}
 
 \subsection{Verification}
 
-Every change was checked with a differential test that runs version 2.0 and a
-version 1.0 build over the same inputs and compares their output: nine
-synthetic data sets --- spanning allele-count range, missingness, a single
-locus, a single grouping, unequal sample sizes, haploid data, and a locus with
-no observed alleles --- crossed with nine parameter settings, plus the
-distributed example. All 69 comparable cases agree; the remaining cases are
-those in which version 1.0 crashes or reports statistics over zero loci, and so
-has no output to compare. The test is in \texttt{test/regress.py} and needs a
-version 1.0 binary to compare against.
+Every change was checked with a test that runs version 2.0 and a version 1.0
+build on the same inputs and compares their output. The inputs are nine
+simulated data sets, which vary in the number of alleles, the amount of
+missing data, and the number of loci and groupings, and which include unequal
+sample sizes, haploid data and a locus with no observed alleles. Each data set
+is run with several parameter settings, and the distributed example is also
+included. All 69 cases that can be compared agree. In the remaining 14 cases,
+version 1.0 crashes or reports statistics over zero loci, so there is no output
+to compare. The test is in \texttt{test/regress.py}, and it needs a version 1.0
+binary to compare against.
 
-What ``agree'' means has been stated more precisely twice, and both
-qualifications are deliberate.
+There are two qualifications on what it means for the outputs to agree.
 
 \begin{itemize}
-\item Version 1.0 cannot produce a $g = 1$ row, so whole files do not match.
-  Every row at $g \geq 2$ is compared, and the $g = 1$ rows are accounted for
-  separately: each results file must carry exactly one per grouping or tuple,
-  so a build that quietly stopped writing them fails.
-\item The per-locus values, the labels and the locus counts are compared
-  exactly --- for \texttt{\_fulldata}, cell by cell, the two layouts being
-  transposes of each other (section~\ref{sec:fulldata}). The three summary
-  columns are compared to a tolerance of $10^{-9}$ relative, with values below
-  $10^{-12}$ treated as zero. Version 2.0 forms the mean and variance in one
-  pass as it sweeps, rather than summing twice over stored per-locus values,
-  so the last bits of a variance can differ: on the distributed example,
-  version 1.0 reports a variance of $2.96 \times 10^{-31}$ where every
-  deviation is zero and 2.0 reports $0$. The tolerance is four orders of
-  magnitude tighter than the six significant digits that are printed, so a
-  disagreement in any printed digit still fails the test.
+\item Version 1.0 does not report $g = 1$, so the files as a whole do not
+  match. Every row at $g \geq 2$ is compared, and the $g = 1$ rows are checked
+  separately. Each results file must have exactly one $g = 1$ row for each
+  grouping or combination, so a build that stopped writing them would fail.
+\item The per-locus values, the labels and the numbers of loci are compared
+  exactly. For the \texttt{\_fulldata} files, the comparison is cell by cell,
+  since the two layouts are transposes of each other
+  (section~\ref{sec:fulldata}). The mean, variance and standard error are
+  compared with a relative tolerance of $10^{-9}$, and values below $10^{-12}$
+  are treated as zero. Version 2.0 computes the mean and variance in a single
+  pass as it reads the loci, rather than summing twice over stored per-locus
+  values, so the last digits of a variance can differ. For example, on the
+  distributed example version 1.0 reports a variance of $2.96 \times 10^{-31}$
+  where every deviation is zero, and version 2.0 reports 0. The tolerance is
+  four orders of magnitude smaller than the six significant digits that are
+  printed, so a difference in any printed digit still fails the test.
 \end{itemize}
 
-The windowed statistics have no version 1.0 counterpart either, so
-\texttt{test/windows.py} checks them against the layout they claim to cover:
-one window over a single-chromosome dataset must reproduce the whole-dataset
-output exactly, every window's mean and variance must match a recomputation
-from the per-locus columns, the windows must tile as asked and stay inside a
-chromosome, basepair and locus windows must agree on evenly spaced loci, and
-the inputs a window cannot be defined over must be refused.
+Version 1.0 does not compute windowed statistics, so
+\texttt{test/windows.py} checks them in other ways. One window covering a data
+set on a single chromosome must give exactly the same output as the whole data
+set. The mean and variance of every window must match a recomputation from
+the per-locus values. The windows must be laid out as requested and must not
+span two chromosomes. Windows measured in basepairs and in loci must agree when
+the loci are evenly spaced. Finally, inputs over which a window cannot be
+defined must be refused.
 
-VCF input has no version 1.0 counterpart, so it is checked differently:
-\texttt{test/formats.py} writes one set of genotypes as \structureprog, as
-VCF, and as compressed VCF, and requires the three runs to agree
-byte-for-byte. Because both readers order allele slots by the same rule, the
-comparison is exact rather than approximate --- any difference at all is a
-real one, not a change in the order of a floating-point sum.
+Version 1.0 does not read VCF, so VCF input is checked by
+\texttt{test/formats.py}, which writes one set of genotypes as a
+\structureprog\ file, as a VCF and as a compressed VCF, and requires the three
+runs to give byte-identical output. Because both readers order the alleles in
+the same way, this comparison is exact. Any difference is therefore a real
+difference, and not a change in the order of a floating-point sum.
+
+Haplotype blocks are checked by \texttt{test/haplotypes.py} against haplotypes
+assembled directly from the simulated data, without using \prog. In addition,
+each block is rewritten as a single VCF record whose alleles are its
+haplotypes, and an ordinary run on this file must give the same output as the
+haplotype run on the original file. \flag{--hap-snps 1} must give exactly the
+same output as an ordinary run.
 
 \section*{References}
 \addcontentsline{toc}{section}{References}
