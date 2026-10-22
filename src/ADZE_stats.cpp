@@ -100,7 +100,7 @@ void Stats::putData(double* d,int l)
  * "not run"; when tabbed, the row is written with NA in the value columns and the
  * fields are tab-separated under a header.
  */
-void Stats::printStats(ostream& out,string name,int g,bool tabbed)
+void Stats::printStats(ostream& out,const string& name,int g,bool tabbed)
 {
   const bool undefined = (avg == -9 || var == -9 || std_err == -9);
 
@@ -110,8 +110,10 @@ void Stats::printStats(ostream& out,string name,int g,bool tabbed)
 
   out << name << sep << g << sep << numLoci << sep;
 
-  if(undefined) out << "NA" << sep << "NA" << sep << "NA" << endl;
-  else out << avg << sep << var << sep << std_err << endl;
+  //'\n' rather than endl: endl flushes the stream, and a window file is
+  //millions of these rows.
+  if(undefined) out << "NA" << sep << "NA" << sep << "NA" << '\n';
+  else out << avg << sep << var << sep << std_err << '\n';
 
   return;
 }

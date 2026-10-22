@@ -2818,22 +2818,27 @@ void writeWindowRunning(ostream& out,const Running& acc,int gStride,
 			const vector<Window>& windows,const LocusMap& lmap,
 			const string& label,int gFrom,int gTo)
 {
+  //A window's leading columns do not depend on g, so they are built once.
+  vector<string> head(windows.size());
+  for(size_t w = 0; w < windows.size(); w++)
+    {
+      const Window& win = windows[w];
+      ostringstream h;
+      h << lmap.chromName[win.chrom] << '\t' << win.start << '\t'
+	<< win.end << '\t' << label;
+      head[w] = h.str();
+    }
+
+  Stats st;
   for(int g = gFrom; g <= gTo; g++)
     {
       for(size_t w = 0; w < windows.size(); w++)
 	{
-	  const Window& win = windows[w];
-
-	  Stats st;
-	  acc.into(st,w*size_t(gStride) + size_t(g),win.numLoci());
-
-	  ostringstream head;
-	  head << lmap.chromName[win.chrom] << '\t' << win.start << '\t'
-	       << win.end << '\t' << label;
+	  acc.into(st,w*size_t(gStride) + size_t(g),windows[w].numLoci());
 
 	  //Tabbed: a window undefined at this g is reported as NA rather
 	  //than dropped, so a scan keeps one row per window per g.
-	  st.printStats(out,head.str(),g,1);
+	  st.printStats(out,head[w],g,1);
 	}
     }
 
