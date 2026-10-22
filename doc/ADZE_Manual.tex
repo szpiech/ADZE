@@ -239,9 +239,9 @@ populations in the combination.
 Source code is available at \url{https://github.com/szpiech/ADZE}. Version
 2.0 requires only a C++17 compiler. If zlib is available, it is used to read
 compressed input. Without zlib, the program builds and runs, and a \texttt{.gz}
-file is refused with an error message instead of being misread. The build also
-detects OpenMP. Note, however, that the current version computes the statistics
-on a single thread, so \flag{--threads} is accepted but has no effect.
+file is refused with an error message instead of being misread.
+\flag{--threads} uses the threads of the C++ standard library, so it needs no
+other library.
 
 Use the following citation for \prog: Szpiech, Z. A., M. Jakobsson, and
 N. A. Rosenberg. 2008. \prog: a rarefaction approach for counting alleles
@@ -259,14 +259,12 @@ cmake --install build --prefix ~/.local      # optional
 
 \noindent Or with plain \texttt{make}:
 \begin{Verbatim}[xleftmargin=1em]
-make -C src                  # serial, no compressed input
-make -C src OPENMP=1 ZLIB=1  # GCC, or clang on Linux
-make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
-                             # Apple clang, with libomp installed
+make -C src                  # no compressed input
+make -C src ZLIB=1           # with compressed input
 \end{Verbatim}
 
-\noindent CMake reports which of the two libraries it found when it
-configures the build. The \texttt{make} build takes each as a flag.
+\noindent CMake reports whether it found zlib when it configures the build.
+The \texttt{make} build takes it as a flag.
 
 \subsection{Running}
 \label{sec:running}
@@ -1101,10 +1099,45 @@ full run.
 
 \section{Performance and threading}
 
-The current version computes the statistics on a single thread.
-\flag{--threads} is accepted, but it has no effect. Measured on 2000 loci with
-\texttt{MAX\_G} of 150, the statistics took 0.43\,s with one thread and 0.38\,s
-with two, four or eight threads, with identical output.
+\flag{--threads} $N$ divides the work on the loci among $N$ threads. The loci
+are read in order, a batch at a time, and each locus in a batch is parsed and
+its statistics computed on whichever thread is free. The values are then added
+to the averages, and the output for each locus is written, in the order of the
+loci in the file. A run therefore writes exactly the same files with any number
+of threads, and \texttt{test/threads.py} checks this at 1, 2, 3, 4, 8 and 64
+threads. The first pass over a VCF and the conversion of a \structureprog\ file
+also use the threads. The default is one thread.
+
+Table~\ref{tab:threads} gives the time taken with different numbers of threads.
+The gain is largest when most of the time is spent computing the statistics,
+as for combinations of populations or for the \texttt{\_fulldata} files. It is
+smallest when most of the time is spent in the steps that are still done on one
+thread, which are reading the data, adding the values to the averages, and
+writing the window files after the last locus. Memory use grows by a few
+megabytes with the number of threads.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Run & 1 thread & 2 threads & 4 threads & 8 threads \\
+\midrule
+SNPs & 2.68 s & 1.58 s & 1.01 s & 0.93 s \\
+SNPs, 45 pairs of groupings & 7.06 s & 4.02 s & 2.51 s & 2.11 s \\
+SNPs, \texttt{\_fulldata} files & 15.08 s & 8.15 s & 4.72 s & 3.91 s \\
+SNPs, 100\,kb windows & 7.19 s & 6.13 s & 5.52 s & 5.50 s \\
+Microsatellites & 2.18 s & 1.23 s & 0.77 s & 0.69 s \\
+Microsatellites, 120 triples & 17.18 s & 9.04 s & 4.92 s & 3.46 s \\
+\bottomrule
+\end{tabular}
+\caption{Elapsed time with \flag{--threads}, measured on an 8-core machine,
+best of two runs. The SNP data are 200\,000 biallelic SNPs in a VCF, with 10
+groupings of 20 diploid individuals and \texttt{MAX\_G} of 40. The
+microsatellite data are 20\,000 loci with 20 alleles each in the
+\structureprog\ format, with 10 groupings of 25 diploid individuals and
+\texttt{MAX\_G} of 40. The windows are 100\,kb wide with a step of 25\,kb.}
+\label{tab:threads}
+\end{table}
 
 Compressed input is decompressed as it is read, so a \texttt{.vcf.gz} file
 takes more processor time to read than the same data uncompressed. On a busy
@@ -1266,9 +1299,7 @@ now always checked during the counting pass at no extra cost.
   whole data set.
 \item New options: \flag{--out-prefix}, \flag{--stat}, \flag{--pops},
   \flag{--exclude-pops}, \flag{--tuples}, \flag{--legacy}, \flag{--dry-run},
-  \flag{--threads} and \flag{--quiet}. In the current version,
-  \flag{--threads} has no effect, because the statistics are computed on a
-  single thread.
+  \flag{--threads} and \flag{--quiet}.
 \end{itemize}
 
 \subsection{Behaviour}

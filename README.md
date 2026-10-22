@@ -31,9 +31,8 @@ format suite is run against the same binary.
 ## Building
 
 Only a C++17 compiler is required. If zlib is available, it is used to read
-compressed input, and the program builds and runs without it. The build also
-detects OpenMP, but the current version computes the statistics on a single
-thread, so `--threads` has no effect.
+compressed input, and the program builds and runs without it. `--threads` uses
+threads from the C++ standard library, so it needs no other library.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -44,10 +43,8 @@ cmake --install build --prefix ~/.local     # optional
 Or with `make`:
 
 ```sh
-make -C src                        # serial, no compressed input
-make -C src OPENMP=1 ZLIB=1        # GCC or Linux clang
-make -C src OPENMP=1 ZLIB=1 OMPFLAGS="-Xpreprocessor -fopenmp" OMPLIBS=-lomp
-                                   # Apple clang, with libomp installed
+make -C src                        # no compressed input
+make -C src ZLIB=1                 # with compressed input
 ```
 
 `EXTRA_CXXFLAGS` and `EXTRA_LDFLAGS` add flags for a particular build, such as
@@ -55,14 +52,13 @@ a static link or several architectures, and they are used to build the release
 archives:
 
 ```sh
-make -C src ZLIB=1 OPENMP=1 EXTRA_LDFLAGS=-static
+make -C src ZLIB=1 EXTRA_LDFLAGS=-static
 make -C src ZLIB=1 EXTRA_CXXFLAGS="-arch x86_64 -arch arm64" \
                    EXTRA_LDFLAGS="-arch x86_64 -arch arm64"
 ```
 
 Note that setting `CXXFLAGS` on the command line replaces the value in the
-Makefile, and `make` then ignores the `+=` lines that `ZLIB=1` and `OPENMP=1`
-depend on. For example, `ZLIB=1 CXXFLAGS=...` builds without support for
+Makefile, and `make` then ignores the `+=` lines that `ZLIB=1` depends on. For example, `ZLIB=1 CXXFLAGS=...` builds without support for
 compressed input, and no warning is given. The `EXTRA_` variables avoid this
 problem.
 
@@ -232,7 +228,7 @@ the same values, since both are read from the table of options in
 | `--min-window-loci N` | skip windows holding fewer than N loci | `1` |
 | `--full-richness`, `--full-private`, `--full-tuples` | also write the per-locus values | off |
 | `--legacy` | write version 1.0's output layout | off |
-| `--threads N` | accepted, but currently has no effect (the statistics are computed on one thread) | `1` |
+| `--threads N` | number of threads; the output does not depend on it | `1` |
 | `--progress` | progress bars | on when stderr is a terminal |
 | `--quiet` | suppress progress and informational messages | off |
 | `--dry-run` | report the detected layout, groupings and feasible `MAX_G`, then stop | off |
@@ -247,10 +243,11 @@ proposed rather than on every push:
 | job | what it checks |
 |---|---|
 | `suites` | the test suites under `ctest`, on Linux and macOS, against a version 1.0 binary built from `master` in the same run |
-| `plain make` | the three Makefile configurations (bare, `ZLIB=1`, `ZLIB=1 OPENMP=1`) build and pass the suites |
+| `plain make` | the two Makefile configurations (bare and `ZLIB=1`) build and pass the suites |
 | `MSYS2 MINGW64` | the program builds and runs on Windows through MSYS2, and reproduces the committed output of the distributed example |
 | `distributed example` | `adze small_paramfile.txt` in `example/` reproduces the tracked result files |
 | `manual` | the manual builds from source, and its generated option reference agrees with the option table |
+| `races` | the thread pool and the program, built with ThreadSanitizer, show no data race on the determinism suite |
 
 The version 1.0 reference is built from `master` in every run rather than kept
 as a binary, so the comparison with version 1.0 is repeated on every run. This

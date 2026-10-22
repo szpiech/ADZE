@@ -83,7 +83,7 @@ const OptSpec OPTIONS[] = {
   {TUPLE_FILE, 0, "--tuples", 0, OPT_STRING, "FILE", "every k-subset",
    "Analysis", "compute only the combinations listed in FILE, one per line"},
   {THREADS, 0, "--threads", 0, OPT_INT, "N", "1",
-   "Analysis", "number of threads (currently has no effect)"},
+   "Analysis", "number of threads; output does not depend on it"},
 
   {OUT_PREFIX, 0, "--out-prefix", 0, OPT_STRING, "PREFIX", "adze",
    "Output", "start every output file name with PREFIX"},
