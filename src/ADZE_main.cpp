@@ -268,6 +268,7 @@ int main(int argc, char* argv[])
    */
   ScanResult scan;
   string countPath;
+  string convertTmp;     //a conversion into a named file, until it is complete
 
   try
     {
@@ -592,7 +593,9 @@ int main(int argc, char* argv[])
 	  countPath = countFilePath(p);
 	  string why;
 
-	  if(countFileUsable(countPath,p,scan,why))
+	  //Only a named file can be reused: an unnamed one was just created,
+	  //empty, for this run alone.
+	  if(p.count_file.set && countFileUsable(countPath,p,scan,why))
 	    {
 	      adzelog() << "Reusing the counts in " << countPath << ".\n";
 	    }
@@ -607,8 +610,17 @@ int main(int argc, char* argv[])
 	      adzelog() << "Converting " << p.dfile.val
 			<< " to locus-major counts in " << countPath << "...\n";
 
+	      //A named file is written under a temporary name and moved into
+	      //place when complete; see publishFile.
+	      if(p.count_file.set) convertTmp = reserveTempFile(countPath);
 	      const long long passes =
-		transposeStructure(p,scan,countPath,convertChunk(p,scan));
+		transposeStructure(p,scan,p.count_file.set ? convertTmp : countPath,
+				   convertChunk(p,scan));
+	      if(p.count_file.set)
+		{
+		  publishFile(convertTmp,countPath);
+		  convertTmp.clear();
+		}
 
 	      adzelog() << "  converted in " << passes
 			<< (passes == 1 ? " pass" : " passes") << ".\n";
@@ -642,11 +654,13 @@ int main(int argc, char* argv[])
   catch(BAD_FILE x)
     {
       if(!countPath.empty() && !p.count_file.set) remove(countPath.c_str());
+      if(!convertTmp.empty()) remove(convertTmp.c_str());
       return EXIT_IO;
     }
   catch(BAD_PARAM x)
     {
       if(!countPath.empty() && !p.count_file.set) remove(countPath.c_str());
+      if(!convertTmp.empty()) remove(convertTmp.c_str());
       return EXIT_DATA;
     }
 

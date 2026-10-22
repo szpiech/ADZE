@@ -8,6 +8,8 @@
 #include <cstring>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <cerrno>
 
 /*
  * Progress and informational messages go to stderr, so that redirecting
@@ -1710,18 +1712,74 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
 
 
 /*
+ * A new, empty file named <stem>.<process id>.<n>.tmp, which no other file
+ * had. The name is claimed by creating the file exclusively, so two runs,
+ * even two started at once in the same directory, can never be given the
+ * same one. A fixed name was shared by two runs with the same --out-prefix:
+ * the second rewrote the first's counts while the first was reading them, and
+ * the first to finish removed the other's.
+ */
+string reserveTempFile(const string& stem)
+{
+  const long pid = long(getpid());
+  for(int n = 0; n < 100000; n++)
+    {
+      ostringstream name;
+      name << stem << "." << pid << "." << n << ".tmp";
+      const string path = name.str();
+      const int fd = open(path.c_str(),O_CREAT | O_EXCL | O_WRONLY,0600);
+      if(fd >= 0)
+	{
+	  close(fd);
+	  return path;
+	}
+      if(errno != EEXIST)
+	{
+	  cerr << "ERROR: could not create a temporary file " << path << ": "
+	       << strerror(errno) << "\n";
+	  throw BAD_FILE();
+	}
+    }
+  cerr << "ERROR: could not find an unused temporary file name beginning "
+       << stem << "\n";
+  throw BAD_FILE();
+}
+
+/*
+ * Puts a finished conversion at the name the user gave with --count-file.
+ * It is written under a temporary name first and renamed when complete, so a
+ * run that is reading the file, or one that checks it for reuse, never sees
+ * it half written. On POSIX systems the rename replaces the old file in one
+ * step, and a run that already has it open keeps reading the old one.
+ * Windows cannot rename over an existing file, so the old one is removed
+ * first there.
+ */
+void publishFile(const string& tmp,const string& path)
+{
+#ifdef _WIN32
+  remove(path.c_str());
+#endif
+  if(rename(tmp.c_str(),path.c_str()) != 0)
+    {
+      cerr << "ERROR: could not move the converted counts from " << tmp
+	   << " to " << path << ": " << strerror(errno) << "\n";
+      remove(tmp.c_str());
+      throw BAD_FILE();
+    }
+}
+
+/*
  * Where a conversion goes when the user has not named one: beside the
  * output, not in a system temporary directory, because it can be the size of
  * the counts and the output directory is the one the user chose for large
- * files. It is removed when the run ends, successfully or not; only a file
- * named with --counts is kept.
+ * files. The name is unique to the run (reserveTempFile), and the file is
+ * removed when the run ends, successfully or not. Only a file named with
+ * --count-file is kept.
  */
 string countFilePath(const ParamSet& p)
 {
-  //A named file is the user's to keep and reuse; an unnamed one is the run's
-  //own temporary, written beside the output and removed when it ends.
   if(p.count_file.set) return p.count_file.val;
-  return p.out_prefix.val + ".counts.tmp";
+  return reserveTempFile(p.out_prefix.val + ".counts");
 }
 
 //How much disk a conversion of this dataset needs, near enough to warn with.

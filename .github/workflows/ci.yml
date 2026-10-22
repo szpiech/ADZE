@@ -138,6 +138,7 @@ jobs:
             build/formats
             build/windows
             build/threads
+            build/countfile
           if-no-files-found: ignore
 
   makefile:

@@ -167,6 +167,19 @@ fold in item order) must give the same bits at every pool size, and an
 exception thrown by one item must reach the caller. CMake builds it as
 `pool_test` and runs it under ctest as `pool`.
 
+## countfile.py
+
+Checks the file that a STRUCTURE file is converted into before the sweep.
+Two runs started together in one directory with the same `--out-prefix`, on
+different data, must each give the result they give alone, and no temporary
+file may be left after a run, whether it succeeds or fails. A file named with
+`--count-file` must be kept, reused for the same data, converted again for
+different data, and correct when two runs convert into it at the same time.
+The runs that are started together are repeated at several delays, since the
+outcome depends on timing.
+
+    ./test/countfile.py --candidate src/adze
+
 ## threads.py
 
 Checks that the number of threads does not change the output. Each case is

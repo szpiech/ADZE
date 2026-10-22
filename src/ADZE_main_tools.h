@@ -208,6 +208,8 @@ LocusSource* openCountFileSource(const string& path,const ScanResult& scan);
  * doc/streaming.md, decision 3.
  */
 string countFilePath(const ParamSet& p);
+string reserveTempFile(const string& stem);
+void publishFile(const string& tmp,const string& path);
 long long countFileBytes(const ScanResult& scan);
 long long convertChunk(const ParamSet& p,const ScanResult& scan);
 bool countFileUsable(const string& path,const ParamSet& p,

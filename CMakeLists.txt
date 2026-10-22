@@ -133,5 +133,9 @@ if(BUILD_TESTING)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/threads.py
                      --candidate $<TARGET_FILE:adze>
                      --workdir ${CMAKE_CURRENT_BINARY_DIR}/threads)
+    add_test(NAME countfile
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/countfile.py
+                     --candidate $<TARGET_FILE:adze>
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/countfile)
   endif()
 endif()
