@@ -212,17 +212,22 @@ a deliberately wrong README.
 
 ## In CI
 
-`.github/workflows/ci.yml` runs all four on pushes to `master` and `devel` and
-on pull requests into either, and
-builds the 1.0 reference from `master` in the same run rather than carrying a
-binary around, so `regress.py` always has something to compare against. The
-suites job runs them through `ctest` on Linux and macOS; the Makefile job runs
-them directly, so it needs nothing but `make` and `python3`. On Windows
-`regress.py` does not run: 1.0 built with mingw-w64 reports no statistics at
-all — its `putNj` stores its value and then falls off the end of a `bool`
-function, and in that build the store does not survive — so there is no usable
-reference there. The Windows job runs the other three and re-runs the
-distributed example against its committed output instead. OpenMP is present
-on the Linux runner and absent on the macOS one, which is how the
-thread-invariance case gets exercised in one place and reports itself skipped
-in the other.
+`.github/workflows/ci.yml` runs the suites on pushes to `master` and `devel`
+and on pull requests into either. It builds the 1.0 reference from `master` in
+the same run rather than keeping a binary, so `regress.py` always has a
+reference to compare against. The suites job runs them through `ctest` on
+Linux and macOS, and the Makefile job runs them directly, so it needs only
+`make` and `python3`.
+
+On Windows, `regress.py` does not run. Version 1.0 built with mingw-w64
+reports no statistics at all, because its `putNj` stores its value and then
+reaches the end of a `bool` function without returning, and in that build the
+store is lost. There is therefore no usable reference on Windows. The Windows
+job runs the other suites, and it also re-runs the distributed example and
+compares the output with the committed output.
+
+`threads.py` runs on every platform, since `--threads` needs only the C++
+standard library. The races job builds the pool test and the program with
+ThreadSanitizer on Linux and runs both. It first checks that ThreadSanitizer
+reports a deliberate race, so that the job cannot pass because the sanitizer
+is not working.

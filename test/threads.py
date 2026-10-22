@@ -127,6 +127,15 @@ CASES = [
 ]
 
 
+def place(src, dst):
+    """Make an input visible in a run's directory: a link where the system
+    allows one, a copy where it does not (Windows, without the privilege)."""
+    try:
+        os.symlink(src, dst)
+    except (OSError, NotImplementedError):
+        shutil.copyfile(src, dst)
+
+
 def run(binary, workdir, args, env):
     return subprocess.run([os.path.abspath(binary)] + args, cwd=workdir,
                           capture_output=True, text=True,
@@ -163,7 +172,7 @@ def one_case(s, adze, w, inputs, name, args, env):
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
         for f in inputs:
-            os.symlink(os.path.join(w, f), os.path.join(d, f))
+            place(os.path.join(w, f), os.path.join(d, f))
         r = run(adze, d, args + ["--quiet", "--out-prefix", "out",
                                  "--threads", str(t)], env)
         got = results(d, inputs)
@@ -196,7 +205,7 @@ def control(s, adze, w, inputs):
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
         for f in inputs:
-            os.symlink(os.path.join(w, f), os.path.join(d, f))
+            place(os.path.join(w, f), os.path.join(d, f))
         run(adze, d, inputs_args["vcf"] + ["--quiet", "--out-prefix", "out",
                                            "--max-g", g], {})
         runs[g] = results(d, inputs)

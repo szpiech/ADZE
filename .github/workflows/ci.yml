@@ -2,7 +2,7 @@ name: CI
 
 # What this checks, and why each job exists:
 #
-#   suites    the four test suites under ctest, on Linux and macOS. The
+#   suites    the test suites under ctest, on Linux and macOS. The
 #             differential suite needs a version 1.0 binary to compare
 #             against, which is built here from the master branch -- so the
 #             "byte identical to 1.0" claim is re-established on every push
@@ -21,6 +21,10 @@ name: CI
 #             the job.
 #   manual    the manual builds from source, and its generated option
 #             reference agrees with the option table.
+#   races     the thread pool and the threaded program under ThreadSanitizer
+#             on Linux. The determinism suite shows that the output does not
+#             depend on the thread count; this job looks for the data races
+#             that could make it do so on some other run or machine.
 
 # Pushes to the two long-lived branches, and any pull request proposing to
 # merge into one of them. Work on a topic branch therefore runs CI when it is
@@ -107,9 +111,9 @@ jobs:
                exit 1 ;;
           esac
 
-      # OpenMP is optional. The Linux runner has it through GCC, so the
-      # thread-invariance case runs there; macOS AppleClang carries no libomp
-      # by default, and that case reports itself skipped rather than failing.
+      # --threads needs nothing but the C++ standard library, so the
+      # determinism suite (ctest 'threads') runs at 1 to 64 threads on both
+      # runners.
       - name: Configure and build
         run: |
           set -euxo pipefail
@@ -133,6 +137,7 @@ jobs:
             build/regress
             build/formats
             build/windows
+            build/threads
           if-no-files-found: ignore
 
   makefile:
@@ -147,9 +152,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgsl-dev zlib1g-dev
 
-      # Three configurations, because the optional features are compiled in
-      # rather than detected at runtime: a bare build, one with zlib, and one
-      # with both zlib and OpenMP.
+      # Two configurations, because zlib is compiled in rather than detected
+      # at runtime: a bare build and one with zlib. The last one is left in
+      # place for the steps below.
       - name: Build every configuration
         run: |
           set -euxo pipefail
@@ -157,8 +162,6 @@ jobs:
           ./src/adze --version
           make -C src clean
           make -C src ZLIB=1
-          make -C src clean
-          make -C src ZLIB=1 OPENMP=1
           ./src/adze --version
 
       - name: Build the version 1.0 reference binary
@@ -347,3 +350,59 @@ jobs:
           name: ADZE_Manual
           path: doc/ADZE_Manual.pdf
           if-no-files-found: error
+
+  races:
+    name: races (ThreadSanitizer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev
+          # ThreadSanitizer cannot map its shadow memory with the address
+          # randomization recent Ubuntu kernels use, and stops before main.
+          sudo sysctl vm.mmap_rnd_bits=28
+
+      # A control first, so that the job cannot pass because the sanitizer is
+      # not working: a deliberate race must be reported.
+      - name: ThreadSanitizer reports a known race
+        run: |
+          set -euxo pipefail
+          printf '%s\n' '#include "ADZE_threads.h"' \
+            'int main(){ WorkerPool p(4); long s = 0;' \
+            '  p.run(100000,[&](size_t i,int){ s += long(i); }); return s == 0; }' \
+            > /tmp/race.cpp
+          g++ -std=c++17 -O1 -g -fsanitize=thread -Isrc /tmp/race.cpp -o /tmp/race
+          if TSAN_OPTIONS=halt_on_error=1 /tmp/race 2> /tmp/race.err; then
+            echo "ThreadSanitizer did not report the deliberate race"; exit 1
+          fi
+          grep -q "data race" /tmp/race.err
+
+      - name: Build with ThreadSanitizer
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build -j
+
+      # halt_on_error makes a race end the run with a nonzero status. The
+      # determinism suite compares each run's status with the one-thread run,
+      # so a race at any thread count fails it.
+      - name: Run the pool test and the determinism suite
+        env:
+          TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
+        run: |
+          set -euxo pipefail
+          ./build/pool_test
+          python3 test/threads.py --candidate build/adze
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: scratch-races
+          path: test/work-threads
+          if-no-files-found: ignore
