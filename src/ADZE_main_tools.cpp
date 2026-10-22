@@ -3556,7 +3556,15 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
   vector<ValueFormatter> fmtOf(threads);   //see ValueFormatter
 
   //Everything one locus needs, computed from its counts alone.
-  auto compute = [&](SweepSlot& sl, vector<double>& q, ValueFormatter& fmt)
+  /*
+   * The loop bounds and switches are captured by value. Read through a
+   * reference, the compiler has to assume a store into the rows might change
+   * them, and reloads them in the innermost loops; that cost a single-thread
+   * run about a tenth of its time with 45 pairs.
+   */
+  auto compute = [&, J, T, F, gStride, gCeil, gFrom, gToRich, gToPair,
+		  do_rich, do_priv, do_tuple, full_rich, full_priv, full_comb]
+    (SweepSlot& sl, vector<double>& q, ValueFormatter& fmt)
   {
     const LocusCounts& locus = sl.locus;
     const int slots = locus.slots;
@@ -3639,10 +3647,15 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 
     if(do_tuple && T > 0)
       {
+	//Raw pointers, so that the store into vComb cannot be taken to alias
+	//anything the inner loops read. The arithmetic is unchanged.
+	const double* qv = q.data();
+	double* out = sl.vComb.data();
 	for(int m = 0; m < T; m++)
 	  {
-	    const vector<int>& tuple = tuples[m];
-	    const int k = int(tuple.size());
+	    const int* tuple = tuples[m].data();
+	    const int k = int(tuples[m].size());
+	    const char* in = inTuple[m].data();
 
 	    for(int g = gFrom; g <= gToPair; g++)
 	      {
@@ -3652,15 +3665,15 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 		    double P = 1, Q = 1;
 		    for(int x = 0; x < k; x++)
 		      {
-			P *= (1 - q[(size_t(tuple[x])*slots + i)*gStride + g]);
+			P *= (1 - qv[(size_t(tuple[x])*slots + i)*gStride + g]);
 		      }
 		    for(int pj = 0; pj < J; pj++)
 		      {
-			if(!inTuple[m][pj]) Q *= q[(size_t(pj)*slots + i)*gStride + g];
+			if(!in[pj]) Q *= qv[(size_t(pj)*slots + i)*gStride + g];
 		      }
 		    pg += (P*Q);
 		  }
-		sl.vComb[size_t(m)*gStride + g] = pg;
+		out[size_t(m)*gStride + g] = pg;
 	      }
 	  }
       }
