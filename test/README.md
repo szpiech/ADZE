@@ -158,6 +158,25 @@ strength:
 
     ./test/haplotypes.py --candidate src/adze
 
+## threads.py
+
+Checks that the number of threads does not change the output. Each case is
+run with 1, 2, 3, 4, 8 and 64 threads, and every file the run writes must be
+byte-identical to the file written with one thread. The only exception is the
+run summary, from which the elapsed times and the thread count are removed
+before the comparison. The cases cover VCF, compressed VCF, STRUCTURE and
+phased VCF input, and every kind of output, including the window files, the
+`_fulldata` files, the combinations and the `_blocks` file. Some runs set
+`ADZE_SWEEP_BATCH` or `ADZE_TUPLE_BUDGET` to split the work into small
+batches, so that batch boundaries fall inside windows and between passes over
+the combinations. No reference binary is needed.
+
+Two controls check that the comparison can fail. Every case must write at
+least one non-empty result file, and runs with `MAX_G` of 5 and 6 must be
+reported as different.
+
+    ./test/threads.py --candidate src/adze
+
 ## includes.py
 
 Reads the sources and requires each compiled file to include a header for

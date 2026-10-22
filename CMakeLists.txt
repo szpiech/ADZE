@@ -128,5 +128,9 @@ if(BUILD_TESTING)
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/windows.py
                      --candidate $<TARGET_FILE:adze>
                      --workdir ${CMAKE_CURRENT_BINARY_DIR}/windows)
+    add_test(NAME threads
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/threads.py
+                     --candidate $<TARGET_FILE:adze>
+                     --workdir ${CMAKE_CURRENT_BINARY_DIR}/threads)
   endif()
 endif()
