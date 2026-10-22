@@ -2209,6 +2209,193 @@ static void closeHapBlock(ScanResult& out,const ParamSet& p,
   return;
 }
 
+/*
+ * The counting pass over a VCF's records at the SNP level: for each record,
+ * the gene copies called in each grouping, and for each sample the largest
+ * number of copies any of its GT fields carries.
+ *
+ * Records are read in batches, counted on the thread pool, and folded into
+ * the scan in file order. A record's counts depend on its line alone, and a
+ * sample's ploidy is a maximum, which does not depend on the order the
+ * records are seen in, so the result is the same at any thread count. A bad
+ * record is only noted by the thread that counts it; its message is written
+ * in the fold, so it names the same record a serial pass would have stopped
+ * at. ADZE_SCAN_BATCH sets the batch size, for the tests.
+ */
+static long long scanSnpRecords(ParamSet& p,ScanResult& out,LineSource& in,
+				const vector<int>& sampleGroup,
+				vector<int>& samplePloidy)
+{
+  struct Rec
+  {
+    string line;
+    bool skip;
+    int problem;               //0 none, 1 column count, 2 no GT
+    size_t columns;
+    Field chrom, pos;
+    vector<int> obs;
+  };
+
+  const int J = int(out.observed.size());
+  const size_t nS = sampleGroup.size();
+  const int threads = (p.threads.val > 1) ? p.threads.val : 1;
+
+  size_t batch = (threads > 1) ? size_t(256)*threads : 1;
+  if(const char* forced = getenv("ADZE_SCAN_BATCH"))
+    {
+      const long long n = atoll(forced);
+      if(n > 0) batch = size_t(n);
+    }
+
+  WorkerPool pool(threads);
+  vector<Rec> rec(batch);
+  vector< vector<Field> > fieldsOf(threads);
+  vector< vector<int> > ploidyOf(threads,vector<int>(nS,0));
+
+  auto count = [&](Rec& r, int w)
+  {
+    vector<Field>& fields = fieldsOf[w];
+    vector<int>& ploidy = ploidyOf[w];
+
+    r.problem = 0;
+    tokenize(r.line,fields);
+    r.skip = fields.empty();
+    if(r.skip) return;
+
+    if(fields.size() != nS + 9)
+      {
+	r.problem = 1;
+	r.columns = fields.size();
+	return;
+      }
+
+    r.chrom = fields[0];
+    r.pos = fields[1];
+
+    int gtField = -1;
+    {
+      const char* f = fields[8].first;
+      const size_t n = fields[8].second;
+      int index = 0;
+      size_t i = 0;
+      while(i <= n)
+	{
+	  size_t j = i;
+	  while(j < n && f[j] != ':') j++;
+	  if(j - i == 2 && f[i] == 'G' && f[i+1] == 'T') { gtField = index; break; }
+	  if(j >= n) break;
+	  i = j + 1;
+	  index++;
+	}
+    }
+    if(gtField < 0)
+      {
+	r.problem = 2;
+	return;
+      }
+
+    r.obs.assign(J,0);
+
+    for(size_t c = 0; c < nS; c++)
+      {
+	const int g = sampleGroup[c];
+	if(g < 0) continue;
+
+	const char* f = fields[c+9].first;
+	const size_t n = fields[c+9].second;
+
+	size_t i = 0;
+	for(int skip = 0; skip < gtField && i < n; skip++)
+	  {
+	    while(i < n && f[i] != ':') i++;
+	    if(i < n) i++;
+	  }
+	size_t stop = i;
+	while(stop < n && f[stop] != ':') stop++;
+
+	if(i >= stop) continue;
+	if(stop - i == 1 && f[i] == '.')
+	  {
+	    if(ploidy[c] == 0) ploidy[c] = 1;
+	    continue;
+	  }
+
+	int copies = 0;
+	size_t a = i;
+	while(a < stop)
+	  {
+	    size_t b = a;
+	    while(b < stop && f[b] != '/' && f[b] != '|') b++;
+	    copies++;
+	    if(!(b - a == 1 && f[a] == '.')) r.obs[g]++;
+	    a = (b < stop) ? b + 1 : stop;
+	  }
+
+	if(ploidy[c] < copies) ploidy[c] = copies;
+      }
+  };
+
+  long long records = 0;
+  string line;
+
+  for(;;)
+    {
+      size_t n = 0;
+      while(n < batch && in.next(line))
+	{
+	  if(line.empty()) continue;
+	  if(line.compare(0,2,"##") == 0) continue;
+	  rec[n].line.swap(line);
+	  n++;
+	}
+      if(n == 0) break;
+
+      pool.run(n,[&](size_t i,int w) { count(rec[i],w); });
+
+      for(size_t i = 0; i < n; i++)
+	{
+	  Rec& r = rec[i];
+	  if(r.skip) continue;
+
+	  if(r.problem == 1)
+	    {
+	      ostringstream m;
+	      m << "record " << (records+1) << " of " << p.dfile.val << " has "
+		<< r.columns << " columns but the header declares "
+		<< (nS + 9) << ".";
+	      badData(m.str());
+	    }
+
+	  const string chrom(r.chrom.first,r.chrom.second);
+	  const string posText(r.pos.first,r.pos.second);
+	  out.lmap.chrom.push_back(out.lmap.chromIndex(chrom));
+	  out.lmap.pos.push_back(atoll(posText.c_str()));
+
+	  if(r.problem == 2)
+	    {
+	      ostringstream m;
+	      m << "record " << (records+1) << " of " << p.dfile.val
+		<< " has no GT in its FORMAT column.";
+	      badData(m.str());
+	    }
+
+	  for(int g = 0; g < J; g++) out.observed[g].push_back(r.obs[g]);
+	  records++;
+	}
+    }
+
+  //A maximum, so the order the threads saw the records in does not matter.
+  for(int w = 0; w < threads; w++)
+    {
+      for(size_t c = 0; c < nS; c++)
+	{
+	  if(samplePloidy[c] < ploidyOf[w][c]) samplePloidy[c] = ploidyOf[w][c];
+	}
+    }
+
+  return records;
+}
+
 static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 		    const vector<string>& keepList,
 		    const vector<string>& dropList,
@@ -2306,6 +2493,7 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	    }
 
 	  haveHeader = true;
+	  if(!haploMode) break;        //records are counted by scanSnpRecords
 	  continue;
 	}
 
@@ -2328,12 +2516,6 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 	const string posText(fields[1].first,fields[1].second);
 	recChrom = out.lmap.chromIndex(chrom);
 	recPos = atoll(posText.c_str());
-
-	if(!haploMode)
-	  {
-	    out.lmap.chrom.push_back(recChrom);
-	    out.lmap.pos.push_back(recPos);
-	  }
       }
 
       int gtField = -1;
@@ -2420,17 +2602,11 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 
       blockLast = recPos;
 
-      const size_t l = haploMode ? 0 : size_t(records);
       records++;
-      if(!haploMode)
-	{
-	  for(size_t g = 0; g < out.observed.size(); g++) out.observed[g].push_back(0);
-	}
 
       for(size_t c = 0; c < sampleGroup.size(); c++)
 	{
-	  const int g = sampleGroup[c];
-	  if(g < 0) continue;
+	  if(sampleGroup[c] < 0) continue;
 
 	  const char* f = fields[c+9].first;
 	  const size_t n = fields[c+9].second;
@@ -2502,7 +2678,6 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
 		    }
 		  if(!called) callable[c][copies-1] = 0;
 		}
-	      else if(called) out.observed[g][l]++;
 
 	      a = (b < stop) ? b + 1 : stop;
 	    }
@@ -2526,6 +2701,10 @@ static void scanVCF(ParamSet& p,ScanResult& out,LineSource& in,
   if(haploMode)
     {
       closeHapBlock(out,p,callable,sampleGroup,blocker,blockStart,blockLast);
+    }
+  else if(haveHeader)
+    {
+      records = scanSnpRecords(p,out,in,sampleGroup,samplePloidy);
     }
 
   if(!haveHeader) badData("no #CHROM header line in " + p.dfile.val + ".");

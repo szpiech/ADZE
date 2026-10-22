@@ -14,7 +14,8 @@ the deleted-loci list and the _blocks file). Some runs also force the work
 into small batches, so that a batch boundary falls inside a window, inside a
 haplotype block run and between combination batches:
 
-  ADZE_SWEEP_BATCH   loci per batch in the sweep (ignored by a serial build)
+  ADZE_SWEEP_BATCH   loci per batch in the sweep
+  ADZE_SCAN_BATCH    records per batch in the counting pass over a VCF
   ADZE_TUPLE_BUDGET  bytes for the combination accumulators, which forces
                      the combinations into several passes
 
@@ -100,6 +101,9 @@ CASES = [
                                "--max-g", "8"], {"ADZE_SWEEP_BATCH": "7"}),
     ("vcf.windows_loci", "vcf", ["--window-loci", "25", "--step-loci", "10",
                                  "--min-window-loci", "3"], {}),
+    ("vcf.scan_batch", "vcf", ["--tolerance", "0.04", "--window-bp", "15000",
+                               "--step-bp", "5000"],
+     {"ADZE_SCAN_BATCH": "3", "ADZE_SWEEP_BATCH": "4"}),
     ("vcf.at_g_max", "vcf", ["--at-g", "max", "--full-richness"], {}),
     ("vcf.legacy", "vcf", ["--legacy", "--max-g", "5"], {}),
     ("vcfgz.pops", "vcfgz", ["--pops", "POP0,POP2,POP4", "--max-g", "6"], {}),

@@ -176,9 +176,9 @@ run summary, from which the elapsed times and the thread count are removed
 before the comparison. The cases cover VCF, compressed VCF, STRUCTURE and
 phased VCF input, and every kind of output, including the window files, the
 `_fulldata` files, the combinations and the `_blocks` file. Some runs set
-`ADZE_SWEEP_BATCH` or `ADZE_TUPLE_BUDGET` to split the work into small
-batches, so that batch boundaries fall inside windows and between passes over
-the combinations. No reference binary is needed.
+`ADZE_SWEEP_BATCH`, `ADZE_SCAN_BATCH` or `ADZE_TUPLE_BUDGET` to split the
+work into small batches, so that batch boundaries fall inside windows and
+between passes over the combinations. No reference binary is needed.
 
 Two controls check that the comparison can fail. Every case must write at
 least one non-empty result file, and runs with `MAX_G` of 5 and 6 must be
