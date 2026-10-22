@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <unordered_map>
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include "ADZE_threads.h"
 #include <chrono>
 #include <iomanip>
 #include "ADZE_binom.h"

@@ -5,11 +5,10 @@
 #   ctest --test-dir build            # differential test vs. a 1.0 reference
 #   cmake --install build --prefix ~/.local
 #
-# Two optional libraries are used when present, and the program builds and runs
-# fine without either: OpenMP for --threads (on Apple clang that means libomp,
-# e.g. `brew install libomp`), and zlib for gzip/bgzip-compressed input.
-# Nothing else is required: ADZE 1.0 needed GSL for a single combination
-# iterator, which adze now generates itself.
+# zlib is used for gzip/bgzip-compressed input when it is present, and the
+# program builds and runs without it. --threads uses std::thread from the C++
+# standard library, so it needs nothing extra. ADZE 1.0 needed GSL for a single
+# combination iterator, which adze now generates itself.
 
 cmake_minimum_required(VERSION 3.16)
 project(adze VERSION 2.0.0 LANGUAGES CXX)
@@ -53,23 +52,25 @@ if(ADZE_USE_ZLIB)
   endif()
 endif()
 
-option(ADZE_USE_OPENMP "Use OpenMP if available" ON)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(adze PRIVATE Threads::Threads)
 
-if(ADZE_USE_OPENMP)
-  find_package(OpenMP)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(adze PRIVATE OpenMP::OpenMP_CXX)
-    message(STATUS "adze: OpenMP enabled (--threads N)")
-  else()
-    message(STATUS "adze: no OpenMP found; building serial (--threads ignored)")
-  endif()
-endif()
 
 install(TARGETS adze RUNTIME DESTINATION bin)
 
 # The regression suite is differential: it needs a binary built from the 1.0
 # sources to compare against. Point ADZE_REFERENCE at one to enable the test.
 include(CTest)
+
+# The thread pool on its own, outside the program: every item run exactly
+# once, the worker index in range, and an exception carried back to the caller.
+if(BUILD_TESTING)
+  add_executable(pool_test test/pool_test.cpp)
+  target_include_directories(pool_test PRIVATE src)
+  target_link_libraries(pool_test PRIVATE Threads::Threads)
+  add_test(NAME pool COMMAND pool_test)
+endif()
 set(ADZE_REFERENCE "" CACHE FILEPATH "Path to an ADZE 1.0 binary for regression tests")
 
 if(BUILD_TESTING AND ADZE_REFERENCE)

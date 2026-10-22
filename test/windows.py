@@ -341,10 +341,7 @@ def case_threads(s, adze, w):
             "--window-loci", "5"]
     outs = []
     for n in ("1", "4"):
-        r = run(adze, w, base + ["--threads", n, "--out-prefix", "th_" + n])
-        if "no OpenMP support" in r.stderr and n != "1":
-            print("SKIP  threads (build has no OpenMP)")
-            return
+        run(adze, w, base + ["--threads", n, "--out-prefix", "th_" + n])
         outs.append(open(os.path.join(w, "th_%s.richness_windows" % n)).read())
     s.check("threads.identical", outs[0] == outs[1],
             "1 and 4 threads differ")

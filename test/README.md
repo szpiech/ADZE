@@ -158,6 +158,15 @@ strength:
 
     ./test/haplotypes.py --candidate src/adze
 
+## pool_test.cpp
+
+Tests the thread pool in `src/ADZE_threads.h` on its own, with 1, 2, 3, 8 and
+64 threads. Every item must be run exactly once, the worker index must be in
+range, a sum computed by the pattern the sweep uses (per-item values, then a
+fold in item order) must give the same bits at every pool size, and an
+exception thrown by one item must reach the caller. CMake builds it as
+`pool_test` and runs it under ctest as `pool`.
+
 ## threads.py
 
 Checks that the number of threads does not change the output. Each case is
