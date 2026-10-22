@@ -1540,6 +1540,11 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
   string line, token;
   long long passes = 0;
 
+  const int threads = (p.threads.val > 1) ? p.threads.val : 1;
+  WorkerPool pool(threads);
+  vector< vector<Field> > fieldsOf(threads);
+  vector<string> tokenOf(threads);
+
   for(long long base = 0; base < numLoci; base += lociPerPass)
     {
       const long long stop = (base + lociPerPass < numLoci) ? base + lociPerPass : numLoci;
@@ -1572,34 +1577,107 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
       const int groupCol = p.sort_by.val - 1;
       vector<int> rowInGroup(J,0);
 
-      while(in.next(line))
+      /*
+       * Rows are read and assigned to their grouping in file order, a batch
+       * at a time. The batch is then tokenized on the pool, one row per item,
+       * keeping only this pass's columns, and the pass's loci are split into
+       * ranges, each range interned across every row of the batch in row
+       * order. A locus is only ever touched by one thread, and it sees the
+       * rows in file order, so its alleles come out in the same order as a
+       * serial conversion's. A STRUCTURE row can carry a million genotypes,
+       * so a batch is bounded by bytes rather than by rows.
+       */
+      struct Row
+      {
+	string line;
+	int g;
+	long long firstKey;
+	vector<Field> cols;
+	bool shortRow;
+      };
+      const long long budget = 64LL*1024*1024;
+      const long long perRow = (long long)(width)*(long long)(sizeof(Field));
+      vector<Field> lead(size_t(groupCol) + 1);
+      vector<Row> rows;
+      const int ranges = (threads > 1) ? threads*4 : 1;
+
+      bool more = true;
+      while(more)
 	{
-	  tokenize(line,fields);
-	  if(fields.empty()) continue;
-
-	  token.assign(fields[groupCol].first,fields[groupCol].second);
-	  if(!keepList.empty() &&
-	     find(keepList.begin(),keepList.end(),token) == keepList.end()) continue;
-	  if(!dropList.empty() &&
-	     find(dropList.begin(),dropList.end(),token) != dropList.end()) continue;
-
-	  unordered_map<string,int>::const_iterator gi = indexOf.find(token);
-	  if(gi == indexOf.end()) continue;
-
-	  const int g = gi->second;
-	  const long long firstKey = (long long)(g) * 4294967296LL + rowInGroup[g];
-	  rowInGroup[g]++;
-
-	  for(int i = 0; i < width; i++)
+	  rows.clear();
+	  long long bytes = 0;
+	  while(bytes < budget || rows.empty())
 	    {
-	      const Field& f = fields[ndCols + size_t(base) + i];
-	      token.assign(f.first,f.second);
-	      if(token.compare(p.miss.val) == 0) continue;
+	      if(!in.next(line)) { more = false; break; }
 
-	      LocusTally& t = chunk[size_t(i)];
-	      const int sl = t.slot(token,firstKey,J);
-	      t.count[size_t(sl)*J + g]++;
+	      //Only as far as the grouping column; the genotypes are split on the pool.
+	      const int n = leadingFields(line,&lead[0],groupCol + 1);
+	      if(n == 0) continue;
+	      if(n <= groupCol) continue;
+
+	      token.assign(lead[groupCol].first,lead[groupCol].second);
+	      if(!keepList.empty() &&
+		 find(keepList.begin(),keepList.end(),token) == keepList.end()) continue;
+	      if(!dropList.empty() &&
+		 find(dropList.begin(),dropList.end(),token) != dropList.end()) continue;
+
+	      unordered_map<string,int>::const_iterator gi = indexOf.find(token);
+	      if(gi == indexOf.end()) continue;
+
+	      rows.push_back(Row());
+	      Row& r = rows.back();
+	      r.g = gi->second;
+	      r.firstKey = (long long)(r.g) * 4294967296LL + rowInGroup[r.g];
+	      rowInGroup[r.g]++;
+	      r.line.swap(line);
+	      bytes += (long long)(r.line.size()) + perRow;
 	    }
+	  if(rows.empty()) break;
+
+	  //Each row's columns for this pass, on any thread.
+	  pool.run(rows.size(),[&](size_t k,int w)
+		   {
+		     Row& r = rows[k];
+		     vector<Field>& all = fieldsOf[w];
+		     tokenize(r.line,all);
+		     r.shortRow = all.size() < size_t(ndCols) + size_t(stop);
+		     if(r.shortRow) return;
+		     r.cols.assign(all.begin() + ndCols + size_t(base),
+				   all.begin() + ndCols + size_t(stop));
+		   });
+
+	  //The scan has already refused a row with too few columns; a file
+	  //changed since then is not converted from a partial row.
+	  for(size_t k = 0; k < rows.size(); k++)
+	    {
+	      if(rows[k].shortRow)
+		{
+		  badData(p.dfile.val + " changed while it was being read: a row "
+			  "now has fewer columns than when it was counted.");
+		}
+	    }
+
+	  //Each range of loci, across every row of the batch, in row order.
+	  pool.run(size_t(ranges),[&](size_t rg,int w)
+		   {
+		     const int lo = int((long long)(width)*(long long)(rg)/ranges);
+		     const int hi = int((long long)(width)*(long long)(rg+1)/ranges);
+		     string& tok = tokenOf[w];
+		     for(size_t k = 0; k < rows.size(); k++)
+		       {
+			 const Row& r = rows[k];
+			 for(int i = lo; i < hi; i++)
+			   {
+			     const Field& f = r.cols[size_t(i)];
+			     tok.assign(f.first,f.second);
+			     if(tok.compare(p.miss.val) == 0) continue;
+
+			     LocusTally& t = chunk[size_t(i)];
+			     const int sl = t.slot(tok,r.firstKey,J);
+			     t.count[size_t(sl)*J + r.g]++;
+			   }
+		       }
+		   });
 	}
 
       for(int i = 0; i < width; i++)
