@@ -3432,234 +3432,327 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
   ProgressBar bar(&adzelog(),double(numLoci),BARLEN[0]);
   if(param.pp.val) bar.init();
 
-  vector<double> q;
-  vector<double> vRich(size_t(J)*gStride), vPriv(size_t(J)*gStride),
-    vComb(size_t(T > 0 ? T : 1)*gStride);
-  vector<double> rowRich(size_t(J)*gStride), rowPriv(size_t(J)*gStride);
+  /*
+   * The sweep runs in batches. A batch of raw loci is read in file order;
+   * each locus is then parsed, its Q table built and its values computed on
+   * whichever thread is free, and its per-locus rows formatted into its own
+   * buffer; finally the batch is folded into the accumulators and written
+   * out, again in file order. A locus's arithmetic does not depend on which
+   * thread did it, and the fold sees the loci in the same order as a serial
+   * run, so every output is byte-identical at any --threads.
+   *
+   * A batch costs memory per locus (its counts, its rows and, with
+   * _fulldata, its formatted text), so its size is chosen against a budget
+   * rather than fixed. ADZE_SWEEP_BATCH sets it directly, for the tests.
+   */
+  struct SweepSlot
+  {
+    RawLocus raw;
+    LocusCounts locus;
+    bool keep;
+    bool ok;
+    string err;
+    vector<double> rowRich, rowPriv, vComb;
+    string fullRich, fullPriv;
+    vector<string> fullComb;            //per tuple output file
+  };
 
-  LocusCounts locus;
+  const int threads = (param.threads.val > 1) ? param.threads.val : 1;
+
+  size_t batch = 1;
+  if(threads > 1)
+    {
+      const long long perSlot =
+	8LL*gStride*(2LL*J + T) * ((full_rich || full_priv || full_comb) ? 3 : 1)
+	+ 4096;
+      const long long budget = 64LL*1024*1024;
+      long long n = budget/perSlot;
+      if(n > 64LL*threads) n = 64LL*threads;
+      if(n < threads) n = threads;
+      batch = size_t(n);
+    }
+  if(const char* forced = getenv("ADZE_SWEEP_BATCH"))
+    {
+      const long long n = atoll(forced);
+      if(n > 0) batch = size_t(n);
+    }
+
+  WorkerPool pool(threads);
+  vector<SweepSlot> slot(batch);
+  vector<ParseScratch> scratch(threads);
+  vector< vector<double> > qOf(threads);
+
+  //Everything one locus needs, computed from its counts alone.
+  auto compute = [&](SweepSlot& sl, vector<double>& q)
+  {
+    const LocusCounts& locus = sl.locus;
+    const int slots = locus.slots;
+
+    sl.rowRich.assign(size_t(J)*gStride,0.0);
+    sl.rowPriv.assign(size_t(J)*gStride,0.0);
+    sl.vComb.assign(size_t(T > 0 ? T : 1)*gStride,0.0);
+
+    //Q for every grouping at this locus, once.
+    q.assign(size_t(J)*slots*gStride,0.0);
+    int minNj = 0;
+    for(int j = 0; j < J; j++)
+      {
+	const int Nj = locus.nj[j];
+	if(j == 0 || Nj < minNj) minNj = Nj;
+
+	const int gTop = (gCeil < Nj) ? gCeil : Nj;
+	for(int i = 0; i < slots; i++)
+	  {
+	    const int Nji = locus.count[size_t(i)*J + j];
+	    double* qpi = &q[(size_t(j)*slots + i)*gStride];
+	    double Q = 1;
+	    for(int g = 1; g <= gTop; g++)
+	      {
+		Q *= double(Nj - Nji - (g-1))/double(Nj - (g-1));
+		qpi[g] = Q;
+	      }
+	  }
+      }
+
+    if(do_rich)
+      {
+	for(int j = 0; j < J; j++)
+	  {
+	    const int Nj = locus.nj[j];
+	    for(int g = gFrom; g <= gToRich; g++)
+	      {
+		double v = -9;
+		if(g <= Nj)
+		  {
+		    double total = 0;
+		    for(int i = 0; i < slots; i++)
+		      {
+			total += 1 - q[(size_t(j)*slots + i)*gStride + g];
+		      }
+		    v = total;
+		  }
+		sl.rowRich[size_t(j)*gStride + g] = v;
+	      }
+	  }
+      }
+
+    if(do_priv)
+      {
+	for(int j = 0; j < J; j++)
+	  {
+	    for(int g = gFrom; g <= gToPair; g++)
+	      {
+		double v = -9;
+		if(minNj >= g)
+		  {
+		    double total = 0;
+		    for(int i = 0; i < slots; i++)
+		      {
+			double Q = 1;
+			for(int pj = 0; pj < J; pj++)
+			  {
+			    if(pj != j) Q *= q[(size_t(pj)*slots + i)*gStride + g];
+			  }
+			const double P = 1 - q[(size_t(j)*slots + i)*gStride + g];
+			total += P*Q;
+		      }
+		    v = total;
+		  }
+		sl.rowPriv[size_t(j)*gStride + g] = v;
+	      }
+	  }
+      }
+
+    if(do_tuple && T > 0)
+      {
+	for(int m = 0; m < T; m++)
+	  {
+	    const vector<int>& tuple = tuples[m];
+	    const int k = int(tuple.size());
+
+	    for(int g = gFrom; g <= gToPair; g++)
+	      {
+		double pg = 0;
+		for(int i = 0; i < slots; i++)
+		  {
+		    double P = 1, Q = 1;
+		    for(int x = 0; x < k; x++)
+		      {
+			P *= (1 - q[(size_t(tuple[x])*slots + i)*gStride + g]);
+		      }
+		    for(int pj = 0; pj < J; pj++)
+		      {
+			if(!inTuple[m][pj]) Q *= q[(size_t(pj)*slots + i)*gStride + g];
+		      }
+		    pg += (P*Q);
+		  }
+		sl.vComb[size_t(m)*gStride + g] = pg;
+	      }
+	  }
+      }
+
+    //Per-locus rows, formatted here so that the serial step only copies them.
+    sl.fullRich.clear();
+    sl.fullPriv.clear();
+    if(do_rich && full_rich)
+      {
+	ostringstream o;
+	writeFullDataRow(o,locus.name,scan.groupName,sl.rowRich,gFrom,gToRich,gStride);
+	sl.fullRich = o.str();
+      }
+    if(do_priv && full_priv)
+      {
+	ostringstream o;
+	writeFullDataRow(o,locus.name,scan.groupName,sl.rowPriv,gFrom,gToPair,gStride);
+	sl.fullPriv = o.str();
+      }
+    if(do_tuple && full_comb && T > 0)
+      {
+	sl.fullComb.assign(F,string());
+	for(int f = 0; f < F; f++)
+	  {
+	    ostringstream o;
+	    for(int m = 0; m < T; m++)
+	      {
+		if(tupleFile[m] != f) continue;
+		o << locus.name << '\t' << tupleLabelComma[m];
+		for(int g = gFrom; g <= gToPair; g++)
+		  {
+		    const double v = sl.vComb[size_t(m)*gStride + g];
+		    o << '\t';
+		    if(v == -9) o << "NA";
+		    else o << v;
+		  }
+		o << '\n';
+	      }
+	    sl.fullComb[f] = o.str();
+	  }
+      }
+  };
+
   long long index = 0;        //position among the surviving loci
   long long seen = 0;         //position in the file, dropped loci included
 
-  while(src.next(locus))
+  for(;;)
     {
-      const bool keep = (size_t(seen) >= scan.dropped.size()) || !scan.dropped[size_t(seen)];
-
-      if(blk_out.is_open())
+      //Read, in file order.
+      size_t n = 0;
+      while(n < batch && src.nextRaw(slot[n].raw))
 	{
-	  long long copies = 0;
-	  for(int j = 0; j < J; j++) copies += locus.nj[j];
-
-	  blk_out << locus.name << "\t"
-		  << (locus.chrom >= 0 ? scan.lmap.chromName[locus.chrom] : string("."))
-		  << "\t" << locus.pos << "\t"
-		  << (size_t(seen) < scan.blockEnd.size() ? scan.blockEnd[size_t(seen)] : locus.pos)
-		  << "\t"
-		  << (size_t(seen) < scan.blockSnps.size() ? scan.blockSnps[size_t(seen)] : 1)
-		  << "\t" << locus.slots
-		  << "\t" << (keep ? "yes" : "no");
-	  for(int j = 0; j < J; j++) blk_out << "\t" << locus.nj[j];
-	  blk_out << "\n";
-
-	  blocksWritten++;
-	  if(keep && copies > 0 && (long long)(locus.slots) == copies) saturated++;
+	  const long long at = seen + (long long)(n);
+	  slot[n].keep = (size_t(at) >= scan.dropped.size()) || !scan.dropped[size_t(at)];
+	  n++;
 	}
+      if(n == 0) break;
 
-      seen++;
-      if(!keep)
+      //Parse and compute, on any thread.
+      pool.run(n,[&](size_t i,int w)
+	       {
+		 SweepSlot& sl = slot[i];
+		 sl.err.clear();
+		 sl.ok = src.parse(sl.raw,sl.locus,scratch[w],sl.err);
+		 if(sl.ok && sl.keep) compute(sl,qOf[w]);
+	       });
+
+      //Fold and write, in file order.
+      for(size_t i = 0; i < n; i++)
 	{
-	  if(del_out.is_open()) del_out << locus.name << "\n";
-	  continue;
-	}
+	  SweepSlot& sl = slot[i];
+	  if(!sl.ok) badData(sl.err);
 
-      const int slots = locus.slots;
-      const int here = int(index);
-      index++;
+	  const LocusCounts& locus = sl.locus;
+	  const bool keep = sl.keep;
 
-      //Q for every grouping at this locus, once.
-      q.assign(size_t(J)*slots*gStride,0.0);
-      int minNj = 0;
-      for(int j = 0; j < J; j++)
-	{
-	  const int Nj = locus.nj[j];
-	  if(j == 0 || Nj < minNj) minNj = Nj;
-
-	  const int gTop = (gCeil < Nj) ? gCeil : Nj;
-	  for(int i = 0; i < slots; i++)
+	  if(blk_out.is_open())
 	    {
-	      const int Nji = locus.count[size_t(i)*J + j];
-	      double* qpi = &q[(size_t(j)*slots + i)*gStride];
-	      double Q = 1;
-	      for(int g = 1; g <= gTop; g++)
-		{
-		  Q *= double(Nj - Nji - (g-1))/double(Nj - (g-1));
-		  qpi[g] = Q;
-		}
-	    }
-	}
+	      long long copies = 0;
+	      for(int j = 0; j < J; j++) copies += locus.nj[j];
 
-      if(do_rich)
-	{
-	  for(int j = 0; j < J; j++)
+	      blk_out << locus.name << "\t"
+		      << (locus.chrom >= 0 ? scan.lmap.chromName[locus.chrom] : string("."))
+		      << "\t" << locus.pos << "\t"
+		      << (size_t(seen) < scan.blockEnd.size() ? scan.blockEnd[size_t(seen)] : locus.pos)
+		      << "\t"
+		      << (size_t(seen) < scan.blockSnps.size() ? scan.blockSnps[size_t(seen)] : 1)
+		      << "\t" << locus.slots
+		      << "\t" << (keep ? "yes" : "no");
+	      for(int j = 0; j < J; j++) blk_out << "\t" << locus.nj[j];
+	      blk_out << "\n";
+
+	      blocksWritten++;
+	      if(keep && copies > 0 && (long long)(locus.slots) == copies) saturated++;
+	    }
+
+	  seen++;
+	  if(!keep)
 	    {
-	      const int Nj = locus.nj[j];
-	      for(int g = gFrom; g <= gToRich; g++)
-		{
-		  double v = -9;
-		  if(g <= Nj)
-		    {
-		      double total = 0;
-		      for(int i = 0; i < slots; i++)
-			{
-			  total += 1 - q[(size_t(j)*slots + i)*gStride + g];
-			}
-		      v = total;
-		    }
-		  rowRich[size_t(j)*gStride + g] = v;
-		  rich[j].add(size_t(g),v);
-		}
+	      if(del_out.is_open()) del_out << locus.name << "\n";
+	      continue;
 	    }
-	}
 
-      if(do_priv)
-	{
-	  for(int j = 0; j < J; j++)
-	    {
-	      for(int g = gFrom; g <= gToPair; g++)
-		{
-		  double v = -9;
-		  if(minNj >= g)
-		    {
-		      double total = 0;
-		      for(int i = 0; i < slots; i++)
-			{
-			  double Q = 1;
-			  for(int pj = 0; pj < J; pj++)
-			    {
-			      if(pj != j) Q *= q[(size_t(pj)*slots + i)*gStride + g];
-			    }
-			  const double P = 1 - q[(size_t(j)*slots + i)*gStride + g];
-			  total += P*Q;
-			}
-		      v = total;
-		    }
-		  rowPriv[size_t(j)*gStride + g] = v;
-		  priv[j].add(size_t(g),v);
-		}
-	    }
-	}
+	  const int here = int(index);
+	  index++;
 
-      if(do_tuple && T > 0)
-	{
-	  for(int m = 0; m < T; m++)
-	    {
-	      const vector<int>& tuple = tuples[m];
-	      const int k = int(tuple.size());
-
-	      for(int g = gFrom; g <= gToPair; g++)
-		{
-		  double pg = 0;
-		  for(int i = 0; i < slots; i++)
-		    {
-		      double P = 1, Q = 1;
-		      for(int x = 0; x < k; x++)
-			{
-			  P *= (1 - q[(size_t(tuple[x])*slots + i)*gStride + g]);
-			}
-		      for(int pj = 0; pj < J; pj++)
-			{
-			  if(!inTuple[m][pj]) Q *= q[(size_t(pj)*slots + i)*gStride + g];
-			}
-		      pg += (P*Q);
-		    }
-		  vComb[size_t(m)*gStride + g] = pg;
-		  comb[m].add(size_t(g),pg);
-		}
-	    }
-	}
-
-      //Windows: the same value, into whichever windows cover this locus.
-      if(!windows.empty())
-	{
 	  if(do_rich)
 	    {
-	      const vector<size_t>& open = richCursor.at(here);
-	      for(size_t w = 0; w < open.size(); w++)
-		{
-		  for(int j = 0; j < J; j++)
-		    {
-		      for(int g = gFrom; g <= gToRich; g++)
-			{
-			  richWin[j].add(open[w]*size_t(gStride) + size_t(g),
-					 rowRich[size_t(j)*gStride + g]);
-			}
-		    }
-		}
+	      for(int j = 0; j < J; j++)
+		for(int g = gFrom; g <= gToRich; g++)
+		  rich[j].add(size_t(g),sl.rowRich[size_t(j)*gStride + g]);
 	    }
 	  if(do_priv)
 	    {
-	      const vector<size_t>& open = privCursor.at(here);
-	      for(size_t w = 0; w < open.size(); w++)
-		{
-		  for(int j = 0; j < J; j++)
-		    {
-		      for(int g = gFrom; g <= gToPair; g++)
-			{
-			  privWin[j].add(open[w]*size_t(gStride) + size_t(g),
-					 rowPriv[size_t(j)*gStride + g]);
-			}
-		    }
-		}
+	      for(int j = 0; j < J; j++)
+		for(int g = gFrom; g <= gToPair; g++)
+		  priv[j].add(size_t(g),sl.rowPriv[size_t(j)*gStride + g]);
 	    }
 	  if(do_tuple && T > 0)
 	    {
-	      const vector<size_t>& open = combCursor.at(here);
-	      for(size_t w = 0; w < open.size(); w++)
-		{
-		  for(int m = 0; m < T; m++)
-		    {
-		      for(int g = gFrom; g <= gToPair; g++)
-			{
-			  combWin[m].add(open[w]*size_t(gStride) + size_t(g),
-					 vComb[size_t(m)*gStride + g]);
-			}
-		    }
-		}
-	    }
-	}
-
-      //Per-locus rows, as the loci go by.
-      if(do_rich && full_rich)
-	{
-	  writeFullDataRow(ag_full_out,locus.name,scan.groupName,rowRich,
-			   gFrom,gToRich,gStride);
-	}
-      if(do_priv && full_priv)
-	{
-	  writeFullDataRow(pg_full_out,locus.name,scan.groupName,rowPriv,
-			   gFrom,gToPair,gStride);
-	}
-      if(do_tuple && full_comb && T > 0)
-	{
-	  for(int f = 0; f < F; f++)
-	    {
 	      for(int m = 0; m < T; m++)
+		for(int g = gFrom; g <= gToPair; g++)
+		  comb[m].add(size_t(g),sl.vComb[size_t(m)*gStride + g]);
+	    }
+
+	  //Windows: the same value, into whichever windows cover this locus.
+	  if(!windows.empty())
+	    {
+	      if(do_rich)
 		{
-		  if(tupleFile[m] != f) continue;
-		  *cbFull[f] << locus.name << '\t' << tupleLabelComma[m];
-		  for(int g = gFrom; g <= gToPair; g++)
-		    {
-		      const double v = vComb[size_t(m)*gStride + g];
-		      *cbFull[f] << '\t';
-		      if(v == -9) *cbFull[f] << "NA";
-		      else *cbFull[f] << v;
-		    }
-		  *cbFull[f] << '\n';
+		  const vector<size_t>& open = richCursor.at(here);
+		  for(size_t w = 0; w < open.size(); w++)
+		    for(int j = 0; j < J; j++)
+		      for(int g = gFrom; g <= gToRich; g++)
+			richWin[j].add(open[w]*size_t(gStride) + size_t(g),
+				       sl.rowRich[size_t(j)*gStride + g]);
+		}
+	      if(do_priv)
+		{
+		  const vector<size_t>& open = privCursor.at(here);
+		  for(size_t w = 0; w < open.size(); w++)
+		    for(int j = 0; j < J; j++)
+		      for(int g = gFrom; g <= gToPair; g++)
+			privWin[j].add(open[w]*size_t(gStride) + size_t(g),
+				       sl.rowPriv[size_t(j)*gStride + g]);
+		}
+	      if(do_tuple && T > 0)
+		{
+		  const vector<size_t>& open = combCursor.at(here);
+		  for(size_t w = 0; w < open.size(); w++)
+		    for(int m = 0; m < T; m++)
+		      for(int g = gFrom; g <= gToPair; g++)
+			combWin[m].add(open[w]*size_t(gStride) + size_t(g),
+				       sl.vComb[size_t(m)*gStride + g]);
 		}
 	    }
-	}
 
-      if(param.pp.val) bar.adv(1);
+	  if(do_rich && full_rich) ag_full_out << sl.fullRich;
+	  if(do_priv && full_priv) pg_full_out << sl.fullPriv;
+	  if(do_tuple && full_comb && T > 0)
+	    {
+	      for(int f = 0; f < F; f++) *cbFull[f] << sl.fullComb[f];
+	    }
+
+	  if(param.pp.val) bar.adv(1);
+	}
     }
 
   if(param.pp.val) bar.done();
