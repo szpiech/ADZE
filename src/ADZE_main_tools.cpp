@@ -1606,7 +1606,10 @@ long long transposeStructure(ParamSet& p,const ScanResult& scan,
 	{
 	  rows.clear();
 	  long long bytes = 0;
-	  while(bytes < budget || rows.empty())
+	  //One thread gains nothing from holding rows, so it reads them one at
+	  //a time, as the serial conversion did.
+	  const long long limit = (threads > 1) ? budget : 1;
+	  while(bytes < limit || rows.empty())
 	    {
 	      if(!in.next(line)) { more = false; break; }
 
