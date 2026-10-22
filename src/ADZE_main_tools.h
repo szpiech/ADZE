@@ -169,11 +169,27 @@ struct LocusCounts
  * than the engine learning to read columns -- see doc/streaming.md,
  * decision 3.
  */
+struct RawLocus;
+struct ParseScratch;
+
 class LocusSource
 {
  public:
   virtual ~LocusSource() {}
   virtual bool next(LocusCounts& out) = 0;      //false when the input ends
+
+  /*
+   * next() in two halves. nextRaw() is the part that must run in file order:
+   * reading lines, placing them, and deciding where a haplotype block ends.
+   * parse() turns one raw locus into counts and touches nothing but its
+   * arguments, so different loci can be parsed at the same time, each with
+   * its own scratch. parse() reports a bad record in err and returns false
+   * rather than printing, so that a message is only printed in file order.
+   */
+  virtual bool nextRaw(RawLocus& raw) = 0;
+  virtual bool parse(RawLocus& raw,LocusCounts& out,ParseScratch& scratch,
+		     string& err) const = 0;
+
   virtual const vector<string>& groupNames() const = 0;
   virtual long long geneCopies(int grouping) const = 0;
 };

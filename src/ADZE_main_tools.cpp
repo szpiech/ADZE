@@ -199,6 +199,39 @@ namespace {
 } //anonymous namespace
 
 /*
+ * One locus as read, before it is parsed: its record lines (one, or a
+ * haplotype block's), its name and position, and the 1-based number of its
+ * first record, for messages. The count-file source decodes as it reads, so
+ * its raw locus carries the finished counts instead.
+ */
+struct RawLocus
+{
+  vector<string> lines;
+  string name;
+  int chrom;
+  long long pos;
+  long long firstRecord;
+  bool decoded;
+  LocusCounts counts;
+
+  RawLocus() : chrom(-1), pos(-1), firstRecord(0), decoded(false) {}
+};
+
+//Working storage for parse(), one per thread doing the parsing.
+struct ParseScratch
+{
+  LocusTally tally;
+  vector<Field> fields;
+  string token;
+  vector<string> hapText;            //[sample*copyCap + copy], within a block
+  vector<char> broken;               //uncalled somewhere in this block
+  int copyCap;
+
+  ParseScratch() : copyCap(0) {}
+};
+
+
+/*
  * ------------------------------------------------------------------------
  * Locus coordinates
  * ------------------------------------------------------------------------
@@ -724,11 +757,63 @@ static void readLocusMap(const string& file, const vector<string>& locusName,
  */
 namespace {
 
+  /*
+   * The non-whitespace fields at the start of a line, up to max of them.
+   * Enough of a record to place it (chromosome, position, ID) without
+   * splitting the genotypes, which is the expensive part and belongs to
+   * parse().
+   */
+  int leadingFields(const string& line, Field* out, int max)
+  {
+    const char* p = line.c_str();
+    const char* end = p + line.size();
+    int n = 0;
+
+    while(p < end && n < max)
+      {
+	while(p < end && isspace((unsigned char)*p)) p++;
+	if(p >= end) break;
+	const char* start = p;
+	while(p < end && !isspace((unsigned char)*p)) p++;
+	out[n++] = Field(start,size_t(p-start));
+      }
+
+    return n;
+  }
+
+  /*
+   * Slots into output order, and Nj from the counts. Slots are sorted by
+   * where each allele was first seen, so the order does not depend on which
+   * grouping's genotypes happened to be parsed first.
+   */
+  void finishCounts(const LocusTally& tally,LocusCounts& out,int J)
+  {
+    const int slots = int(tally.label.size());
+    out.slots = slots;
+    out.count.assign(size_t(slots)*J,0);
+    out.nj.assign(J,0);
+
+    vector<int> order(slots);
+    for(int sl = 0; sl < slots; sl++) order[sl] = sl;
+    sort(order.begin(),order.end(),FirstSeenLess(tally.firstSeen));
+
+    for(int i = 0; i < slots; i++)
+      {
+	for(int g = 0; g < J; g++)
+	  {
+	    const int c = tally.count[size_t(order[i])*J + g];
+	    out.count[size_t(i)*J + g] = c;
+	    out.nj[g] += c;
+	  }
+      }
+    return;
+  }
+
   class VCFSource : public LocusSource
   {
   public:
     VCFSource(ParamSet& p,const ScanResult& scan)
-      : param(p), hapMode(p.haplotypes()), blocker(p), copyCap(0),
+      : param(p), hapMode(p.haplotypes()), blocker(p),
 	rows(scan.groupRows), name(scan.groupName), records(0)
     {
       if(!in.open(p.dfile.val))
@@ -744,113 +829,81 @@ namespace {
 
     bool next(LocusCounts& out)
     {
-      return hapMode ? nextBlock(out) : nextRecord(out);
+      if(!nextRaw(raw1)) return false;
+      string err;
+      if(!parse(raw1,out,scratch1,err)) badData(err);
+      return true;
     }
 
-    bool nextRecord(LocusCounts& out)
+    bool nextRaw(RawLocus& raw)
     {
-      const int J = int(name.size());
+      return hapMode ? nextRawBlock(raw) : nextRawRecord(raw);
+    }
+
+    /*
+     * Everything that turns a raw record (or a block of them) into counts.
+     * It reads only what the header fixed -- which samples belong to which
+     * grouping -- and the scratch it is given, so any number of raw loci can
+     * be parsed at once.
+     */
+    bool parse(RawLocus& raw,LocusCounts& out,ParseScratch& s,string& err) const
+    {
+      out.name = raw.name;
+      out.chrom = raw.chrom;
+      out.pos = raw.pos;
+
+      return hapMode ? parseBlock(raw,out,s,err) : parseRecord(raw,out,s,err);
+    }
+
+  private:
+    //One record per locus. Only the leading fields are split here.
+    bool nextRawRecord(RawLocus& raw)
+    {
       string line;
+      Field lead[3];
 
       while(in.next(line))
 	{
 	  if(line.empty()) continue;
 	  if(line[0] == '#') continue;
 
-	  tokenize(line,fields);
-	  if(fields.empty()) continue;
+	  const int n = leadingFields(line,lead,3);
+	  if(n == 0) continue;
 
-	  out.name.assign(fields[2].first,fields[2].second);
-	  if(out.name == ".")
+	  //lead[] points into line, so it is read before the line is moved.
+	  const string chrom(lead[0].first,lead[0].second);
+	  const string posText(lead[1].first,lead[1].second);
+	  raw.name.assign(lead[2].first,lead[2].second);
+	  if(raw.name == ".")
 	    {
-	      out.name.assign(fields[0].first,fields[0].second);
-	      out.name += ":";
-	      out.name.append(fields[1].first,fields[1].second);
+	      raw.name = chrom;
+	      raw.name += ":";
+	      raw.name += posText;
 	    }
+	  raw.chrom = chromIndex(chrom);
+	  raw.pos = atoll(posText.c_str());
 
-	  {
-	    const string chrom(fields[0].first,fields[0].second);
-	    const string posText(fields[1].first,fields[1].second);
-	    out.chrom = chromIndex(chrom);
-	    out.pos = atoll(posText.c_str());
-	  }
-
-	  //One tally, reused: a locus's alleles are interned and forgotten.
-	  tally.label.clear();
-	  tally.firstSeen.clear();
-	  tally.count.clear();
-
-	  const int gtField = gtPosition(fields[8]);
-
-	  for(size_t c = 0; c < sampleGroup.size(); c++)
-	    {
-	      const int g = sampleGroup[c];
-	      if(g < 0) continue;
-
-	      const char* f = fields[c+9].first;
-	      const size_t n = fields[c+9].second;
-
-	      size_t i = 0;
-	      for(int skip = 0; skip < gtField && i < n; skip++)
-		{
-		  while(i < n && f[i] != ':') i++;
-		  if(i < n) i++;
-		}
-	      size_t stop = i;
-	      while(stop < n && f[stop] != ':') stop++;
-
-	      if(i >= stop) continue;
-	      if(stop - i == 1 && f[i] == '.') continue;
-
-	      int copies = 0;
-	      size_t a = i;
-	      const long long sampleKey =
-		(long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
-
-	      while(a < stop)
-		{
-		  size_t b = a;
-		  while(b < stop && f[b] != '/' && f[b] != '|') b++;
-
-		  copies++;
-		  if(!(b - a == 1 && f[a] == '.'))
-		    {
-		      token.assign(f + a, b - a);
-		      const int sl = tally.slot(token,sampleKey + (copies - 1),J);
-		      tally.count[size_t(sl)*J + g]++;
-		    }
-
-		  a = (b < stop) ? b + 1 : stop;
-		}
-	    }
-
+	  raw.lines.resize(1);
+	  raw.lines[0].swap(line);
+	  raw.firstRecord = records + 1;
 	  records++;
-	  finish(out,J);
 	  return true;
 	}
 
       return false;
     }
 
-
     /*
-     * One haplotype block.
-     *
-     * A gene copy's haplotype is its allele indices across the block's
-     * records, joined with '|' -- the phase separator, and unambiguous where
-     * an index runs to more than one digit. A copy uncalled at any record in
-     * the block carries no haplotype at all, so it is dropped rather than
-     * given a partial one: a partial haplotype would be a new allele that no
-     * copy actually carries, and would inflate every count that reads it.
+     * One haplotype block: its records, in order.
      *
      * Detecting the end of a block means reading the record that starts the
      * next one, so that line is held back and read first next time. Phase is
      * not re-checked here: the counting pass refuses an unphased file before
      * the sweep ever opens the data.
      */
-    bool nextBlock(LocusCounts& out)
+    bool nextRawBlock(RawLocus& raw)
     {
-      const int J = int(name.size());
+      Field lead[3];
 
       for(;;)
 	{
@@ -858,6 +911,7 @@ namespace {
 	  long long snps = 0, startPos = -1, lastPos = -1;
 	  int blockChrom = -1;
 	  string startName;
+	  raw.lines.clear();
 
 	  for(;;)
 	    {
@@ -868,11 +922,10 @@ namespace {
 	      if(line.empty()) continue;
 	      if(line[0] == '#') continue;
 
-	      tokenize(line,fields);
-	      if(fields.empty()) continue;
+	      if(leadingFields(line,lead,3) == 0) continue;
 
-	      const string chrom(fields[0].first,fields[0].second);
-	      const string posText(fields[1].first,fields[1].second);
+	      const string chrom(lead[0].first,lead[0].second);
+	      const string posText(lead[1].first,lead[1].second);
 	      const int c = chromIndex(chrom);
 	      const long long pos = atoll(posText.c_str());
 
@@ -888,23 +941,17 @@ namespace {
 		  open = true;
 		  blockChrom = c;
 		  startPos = pos;
-		  startName.assign(fields[2].first,fields[2].second);
-		  if(startName == ".")
-		    {
-		      startName = chrom + ":" + posText;
-		    }
-		  for(size_t k = 0; k < hapText.size(); k++)
-		    {
-		      hapText[k].clear();
-		      broken[k] = 0;
-		    }
+		  startName.assign(lead[2].first,lead[2].second);
+		  if(startName == ".") startName = chrom + ":" + posText;
+		  raw.firstRecord = records + 1;
 		}
 	      else blocker.add();
 
 	      lastPos = pos;
 	      snps++;
-	      addRecord();
 	      records++;
+	      raw.lines.push_back(string());
+	      raw.lines.back().swap(line);
 	    }
 
 	  if(!open) return false;
@@ -912,59 +959,147 @@ namespace {
 	  //Too short to report: the counting pass skipped it, so this does too.
 	  if(snps < (long long)(param.min_hap_snps.val)) continue;
 
-	  out.chrom = blockChrom;
-	  out.pos = startPos;
-	  if(snps == 1) out.name = startName;
+	  raw.chrom = blockChrom;
+	  raw.pos = startPos;
+	  if(snps == 1) raw.name = startName;
 	  else
 	    {
 	      ostringstream nm;
 	      nm << chromName[blockChrom] << ":" << startPos << "-" << lastPos;
-	      out.name = nm.str();
+	      raw.name = nm.str();
 	    }
-
-	  tally.label.clear();
-	  tally.firstSeen.clear();
-	  tally.count.clear();
-
-	  for(size_t c = 0; c < sampleGroup.size(); c++)
-	    {
-	      const int g = sampleGroup[c];
-	      if(g < 0) continue;
-
-	      const long long sampleKey =
-		(long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
-
-	      for(int k = 0; k < copyCap; k++)
-		{
-		  const size_t slot = c*size_t(copyCap) + size_t(k);
-		  if(slot >= hapText.size()) break;
-		  if(broken[slot] || hapText[slot].empty()) continue;
-
-		  const int sl = tally.slot(hapText[slot],sampleKey + k,J);
-		  tally.count[size_t(sl)*J + g]++;
-		}
-	    }
-
-	  finish(out,J);
 	  return true;
 	}
     }
 
+    bool parseRecord(RawLocus& raw,LocusCounts& out,ParseScratch& s,string& err) const
+    {
+      const int J = int(name.size());
+      LocusTally& tally = s.tally;
+
+      tokenize(raw.lines[0],s.fields);
+
+      //One tally, reused: a locus's alleles are interned and forgotten.
+      tally.label.clear();
+      tally.firstSeen.clear();
+      tally.count.clear();
+
+      const int gtField = gtPosition(s.fields[8],raw.firstRecord,err);
+      if(gtField < 0) return false;
+
+      for(size_t c = 0; c < sampleGroup.size(); c++)
+	{
+	  const int g = sampleGroup[c];
+	  if(g < 0) continue;
+
+	  const char* f = s.fields[c+9].first;
+	  const size_t n = s.fields[c+9].second;
+
+	  size_t i = 0;
+	  for(int skip = 0; skip < gtField && i < n; skip++)
+	    {
+	      while(i < n && f[i] != ':') i++;
+	      if(i < n) i++;
+	    }
+	  size_t stop = i;
+	  while(stop < n && f[stop] != ':') stop++;
+
+	  if(i >= stop) continue;
+	  if(stop - i == 1 && f[i] == '.') continue;
+
+	  int copies = 0;
+	  size_t a = i;
+	  const long long sampleKey =
+	    (long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
+
+	  while(a < stop)
+	    {
+	      size_t b = a;
+	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
+
+	      copies++;
+	      if(!(b - a == 1 && f[a] == '.'))
+		{
+		  s.token.assign(f + a, b - a);
+		  const int sl = tally.slot(s.token,sampleKey + (copies - 1),J);
+		  tally.count[size_t(sl)*J + g]++;
+		}
+
+	      a = (b < stop) ? b + 1 : stop;
+	    }
+	}
+
+      finishCounts(tally,out,J);
+      return true;
+    }
+
     /*
-     * Fold the record currently in `fields` into each gene copy's haplotype.
-     * A copy first seen part-way through a block was absent from the records
+     * A gene copy's haplotype is its allele indices across the block's
+     * records, joined with '|' -- the phase separator, and unambiguous where
+     * an index runs to more than one digit. A copy uncalled at any record in
+     * the block carries no haplotype at all, so it is dropped rather than
+     * given a partial one: a partial haplotype would be a new allele that no
+     * copy actually carries, and would inflate every count that reads it.
+     */
+    bool parseBlock(RawLocus& raw,LocusCounts& out,ParseScratch& s,string& err) const
+    {
+      const int J = int(name.size());
+
+      s.copyCap = 0;
+      s.hapText.clear();
+      s.broken.clear();
+
+      for(size_t r = 0; r < raw.lines.size(); r++)
+	{
+	  tokenize(raw.lines[r],s.fields);
+	  if(!addRecord(s,r == 0,raw.firstRecord + (long long)(r),err)) return false;
+	}
+
+      LocusTally& tally = s.tally;
+      tally.label.clear();
+      tally.firstSeen.clear();
+      tally.count.clear();
+
+      for(size_t c = 0; c < sampleGroup.size(); c++)
+	{
+	  const int g = sampleGroup[c];
+	  if(g < 0) continue;
+
+	  const long long sampleKey =
+	    (long long)(g) * 4294967296LL + (long long)(sampleRank[c]) * 64LL;
+
+	  for(int k = 0; k < s.copyCap; k++)
+	    {
+	      const size_t slot = c*size_t(s.copyCap) + size_t(k);
+	      if(slot >= s.hapText.size()) break;
+	      if(s.broken[slot] || s.hapText[slot].empty()) continue;
+
+	      const int sl = tally.slot(s.hapText[slot],sampleKey + k,J);
+	      tally.count[size_t(sl)*J + g]++;
+	    }
+	}
+
+      finishCounts(tally,out,J);
+      return true;
+    }
+
+    /*
+     * Fold the record in s.fields into each gene copy's haplotype. A copy
+     * first seen part-way through a block was absent from the records
      * before it, which is the same as uncalled there, so it opens broken.
      */
-    void addRecord()
+    bool addRecord(ParseScratch& s,bool firstOfBlock,long long record,
+		   string& err) const
     {
-      const int gtField = gtPosition(fields[8]);
+      const int gtField = gtPosition(s.fields[8],record,err);
+      if(gtField < 0) return false;
 
       for(size_t c = 0; c < sampleGroup.size(); c++)
 	{
 	  if(sampleGroup[c] < 0) continue;
 
-	  const char* f = fields[c+9].first;
-	  const size_t n = fields[c+9].second;
+	  const char* f = s.fields[c+9].first;
+	  const size_t n = s.fields[c+9].second;
 
 	  size_t i = 0;
 	  for(int skip = 0; skip < gtField && i < n; skip++)
@@ -977,7 +1112,7 @@ namespace {
 
 	  if(i >= stop || (stop - i == 1 && f[i] == '.'))
 	    {
-	      breakAll(c);
+	      breakAll(s,c);
 	      continue;
 	    }
 
@@ -988,35 +1123,35 @@ namespace {
 	      size_t b = a;
 	      while(b < stop && f[b] != '/' && f[b] != '|') b++;
 
-	      const size_t slot = reserve(c,copies);
+	      const size_t slot = reserve(s,c,copies,firstOfBlock);
 	      copies++;
 
-	      if(b - a == 1 && f[a] == '.') broken[slot] = 1;
-	      else if(!broken[slot])
+	      if(b - a == 1 && f[a] == '.') s.broken[slot] = 1;
+	      else if(!s.broken[slot])
 		{
-		  if(!hapText[slot].empty()) hapText[slot] += '|';
-		  hapText[slot].append(f + a, b - a);
+		  if(!s.hapText[slot].empty()) s.hapText[slot] += '|';
+		  s.hapText[slot].append(f + a, b - a);
 		}
 
 	      a = (b < stop) ? b + 1 : stop;
 	    }
 
 	  //Copies this record does not carry are uncalled here.
-	  for(int k = copies; k < copyCap; k++)
+	  for(int k = copies; k < s.copyCap; k++)
 	    {
-	      const size_t slot = c*size_t(copyCap) + size_t(k);
-	      if(slot < broken.size()) broken[slot] = 1;
+	      const size_t slot = c*size_t(s.copyCap) + size_t(k);
+	      if(slot < s.broken.size()) s.broken[slot] = 1;
 	    }
 	}
 
-      return;
+      return true;
     }
 
     //The slot for one gene copy, widening the table when a sample turns out to
-    //carry more copies than any seen so far.
-    size_t reserve(size_t c, int k)
+    //carry more copies than any seen so far in this block.
+    size_t reserve(ParseScratch& s,size_t c,int k,bool firstOfBlock) const
     {
-      if(k >= copyCap)
+      if(k >= s.copyCap)
 	{
 	  const int want = k + 1;
 	  vector<string> wider(sampleGroup.size() * size_t(want));
@@ -1026,64 +1161,35 @@ namespace {
 	   * the same as uncalled there. Same rule as the counting pass.
 	   */
 	  vector<char> widerBroken(sampleGroup.size() * size_t(want),
-				   blocker.held == 1 ? 0 : 1);
-	  for(size_t s = 0; s < sampleGroup.size(); s++)
+				   firstOfBlock ? 0 : 1);
+	  for(size_t smp = 0; smp < sampleGroup.size(); smp++)
 	    {
-	      for(int j = 0; j < copyCap; j++)
+	      for(int j = 0; j < s.copyCap; j++)
 		{
-		  wider[s*size_t(want) + size_t(j)].swap(
-		    hapText[s*size_t(copyCap) + size_t(j)]);
-		  widerBroken[s*size_t(want) + size_t(j)] =
-		    broken[s*size_t(copyCap) + size_t(j)];
+		  wider[smp*size_t(want) + size_t(j)].swap(
+		    s.hapText[smp*size_t(s.copyCap) + size_t(j)]);
+		  widerBroken[smp*size_t(want) + size_t(j)] =
+		    s.broken[smp*size_t(s.copyCap) + size_t(j)];
 		}
 	    }
-	  hapText.swap(wider);
-	  broken.swap(widerBroken);
-	  copyCap = want;
+	  s.hapText.swap(wider);
+	  s.broken.swap(widerBroken);
+	  s.copyCap = want;
 	}
-      return c*size_t(copyCap) + size_t(k);
+      return c*size_t(s.copyCap) + size_t(k);
     }
 
-    void breakAll(size_t c)
+    void breakAll(ParseScratch& s,size_t c) const
     {
-      for(int k = 0; k < copyCap; k++)
+      for(int k = 0; k < s.copyCap; k++)
 	{
-	  const size_t slot = c*size_t(copyCap) + size_t(k);
-	  if(slot < broken.size()) broken[slot] = 1;
+	  const size_t slot = c*size_t(s.copyCap) + size_t(k);
+	  if(slot < s.broken.size()) s.broken[slot] = 1;
 	}
       return;
     }
 
-  private:
-    ParamSet& param;
-    const bool hapMode;
-    HapBlocker blocker;
-    vector<string> hapText;            //[sample*copyCap + copy], within a block
-    vector<char> broken;               //uncalled somewhere in this block
-    int copyCap;
-    string pending;                    //the record that started the next block
-    const vector<long long>& rows;
-    const vector<string>& name;
-    LineSource in;
-    LocusTally tally;
-    vector<Field> fields;
-    vector<int> sampleGroup, sampleRank;
-    vector<string> chromName;
-    unordered_map<string,int> chromOf;
-    string token;
-    long long records;
-
-    int chromIndex(const string& c)
-    {
-      unordered_map<string,int>::iterator it = chromOf.find(c);
-      if(it != chromOf.end()) return it->second;
-      const int i = int(chromName.size());
-      chromName.push_back(c);
-      chromOf.insert(make_pair(c,i));
-      return i;
-    }
-
-    int gtPosition(const Field& format)
+    int gtPosition(const Field& format,long long record,string& err) const
     {
       const char* f = format.first;
       const size_t n = format.second;
@@ -1100,34 +1206,36 @@ namespace {
 	}
 
       ostringstream m;
-      m << "record " << (records+1) << " of " << param.dfile.val
+      m << "record " << record << " of " << param.dfile.val
 	<< " has no GT in its FORMAT column.";
-      badData(m.str());
+      err = m.str();
       return -1;
     }
 
-    //Slots into output order, and Nj from the counts.
-    void finish(LocusCounts& out,int J)
+    ParamSet& param;
+    const bool hapMode;
+    HapBlocker blocker;
+    string pending;                    //the record that started the next block
+    const vector<long long>& rows;
+    const vector<string>& name;
+    LineSource in;
+    vector<Field> fields;              //header only
+    vector<int> sampleGroup, sampleRank;
+    vector<string> chromName;
+    unordered_map<string,int> chromOf;
+    string token;
+    long long records;
+    RawLocus raw1;                     //for next(), one locus at a time
+    ParseScratch scratch1;
+
+    int chromIndex(const string& c)
     {
-      const int slots = int(tally.label.size());
-      out.slots = slots;
-      out.count.assign(size_t(slots)*J,0);
-      out.nj.assign(J,0);
-
-      vector<int> order(slots);
-      for(int sl = 0; sl < slots; sl++) order[sl] = sl;
-      sort(order.begin(),order.end(),FirstSeenLess(tally.firstSeen));
-
-      for(int i = 0; i < slots; i++)
-	{
-	  for(int g = 0; g < J; g++)
-	    {
-	      const int c = tally.count[size_t(order[i])*J + g];
-	      out.count[size_t(i)*J + g] = c;
-	      out.nj[g] += c;
-	    }
-	}
-      return;
+      unordered_map<string,int>::iterator it = chromOf.find(c);
+      if(it != chromOf.end()) return it->second;
+      const int i = int(chromName.size());
+      chromName.push_back(c);
+      chromOf.insert(make_pair(c,i));
+      return i;
     }
 
     void readHeader()
@@ -1300,6 +1408,30 @@ namespace {
 
     const vector<string>& groupNames() const { return name; }
     long long geneCopies(int grouping) const { return rows[grouping]; }
+
+    //Decoding a count record is a copy, so it happens in nextRaw() and
+    //parse() only hands the counts over.
+    bool nextRaw(RawLocus& raw)
+    {
+      raw.decoded = next(raw.counts);
+      if(!raw.decoded) return false;
+      raw.name = raw.counts.name;
+      raw.chrom = raw.counts.chrom;
+      raw.pos = raw.counts.pos;
+      raw.lines.clear();
+      return true;
+    }
+
+    bool parse(RawLocus& raw,LocusCounts& out,ParseScratch&,string&) const
+    {
+      out.name.swap(raw.counts.name);
+      out.chrom = raw.counts.chrom;
+      out.pos = raw.counts.pos;
+      out.slots = raw.counts.slots;
+      out.count.swap(raw.counts.count);
+      out.nj.swap(raw.counts.nj);
+      return true;
+    }
 
     bool next(LocusCounts& out)
     {
