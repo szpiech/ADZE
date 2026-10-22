@@ -1,4 +1,9 @@
 #include "ADZE_main_tools.h"
+#include <cstdio>
+#include <clocale>
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
 #include <limits>
 #include <cstring>
 #include <unistd.h>
@@ -3159,6 +3164,72 @@ void writeDeletedLoci(ParamSet& p,const ScanResult& scan,const string& out)
  * nothing afterwards, so this is where the file's row order comes from --
  * doc/streaming.md, decision 1.
  */
+/*
+ * Formats a value exactly as an ostream with default flags would ("%.6g" in
+ * the C locale), for the per-locus rows that worker threads format.
+ *
+ * On macOS an ostream formats through the C library with the one global
+ * locale object, whose reference count every thread then updates. On eight
+ * threads that made formatting slower than on one. snprintf_l with a locale
+ * object owned by the thread gives the same bytes (checked on 22 million
+ * values, including NaN and infinities) without the shared count. Elsewhere
+ * an ostringstream owned by the thread is used, which is identical to the
+ * files' own ostreams by construction.
+ */
+class ValueFormatter
+{
+ public:
+#ifdef __APPLE__
+  ValueFormatter() : c(newlocale(LC_ALL_MASK,"C",(locale_t)0)) {}
+  ~ValueFormatter() { if(c) freelocale(c); }
+  void append(string& out,double v)
+  {
+    char b[64];
+    const int n = snprintf_l(b,sizeof b,c,"%.*g",6,v);
+    out.append(b,size_t(n));
+  }
+#else
+  void append(string& out,double v)
+  {
+    o.str(string());
+    o.clear();
+    o << v;
+    out += o.str();
+  }
+#endif
+
+ private:
+  ValueFormatter(const ValueFormatter&);
+  ValueFormatter& operator=(const ValueFormatter&);
+#ifdef __APPLE__
+  locale_t c;
+#else
+  ostringstream o;
+#endif
+};
+
+//writeFullDataRow, into a string.
+static void appendFullDataRow(string& out,const string& locus,
+			      const vector<string>& label,const vector<double>& vals,
+			      int gFrom,int gTo,int gStride,ValueFormatter& fmt)
+{
+  for(size_t x = 0; x < label.size(); x++)
+    {
+      out += locus;
+      out += '\t';
+      out += label[x];
+      for(int g = gFrom; g <= gTo; g++)
+	{
+	  const double v = vals[x*size_t(gStride) + size_t(g)];
+	  out += '\t';
+	  if(v == -9) out += "NA";
+	  else fmt.append(out,v);
+	}
+      out += '\n';
+    }
+  return;
+}
+
 void writeFullDataRow(ostream& out,const string& locus,
 		      const vector<string>& label,const vector<double>& vals,
 		      int gFrom,int gTo,int gStride)
@@ -3482,15 +3553,18 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
   vector<ParseScratch> scratch(threads);
   vector< vector<double> > qOf(threads);
 
+  vector<ValueFormatter> fmtOf(threads);   //see ValueFormatter
+
   //Everything one locus needs, computed from its counts alone.
-  auto compute = [&](SweepSlot& sl, vector<double>& q)
+  auto compute = [&](SweepSlot& sl, vector<double>& q, ValueFormatter& fmt)
   {
     const LocusCounts& locus = sl.locus;
     const int slots = locus.slots;
 
-    sl.rowRich.assign(size_t(J)*gStride,0.0);
-    sl.rowPriv.assign(size_t(J)*gStride,0.0);
-    sl.vComb.assign(size_t(T > 0 ? T : 1)*gStride,0.0);
+    //Sized, not cleared: every entry the fold reads is written below.
+    sl.rowRich.resize(size_t(J)*gStride);
+    sl.rowPriv.resize(size_t(J)*gStride);
+    sl.vComb.resize(size_t(T > 0 ? T : 1)*gStride);
 
     //Q for every grouping at this locus, once.
     q.assign(size_t(J)*slots*gStride,0.0);
@@ -3596,36 +3670,35 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
     sl.fullPriv.clear();
     if(do_rich && full_rich)
       {
-	ostringstream o;
-	writeFullDataRow(o,locus.name,scan.groupName,sl.rowRich,gFrom,gToRich,gStride);
-	sl.fullRich = o.str();
+	appendFullDataRow(sl.fullRich,locus.name,scan.groupName,sl.rowRich,
+			  gFrom,gToRich,gStride,fmt);
       }
     if(do_priv && full_priv)
       {
-	ostringstream o;
-	writeFullDataRow(o,locus.name,scan.groupName,sl.rowPriv,gFrom,gToPair,gStride);
-	sl.fullPriv = o.str();
+	appendFullDataRow(sl.fullPriv,locus.name,scan.groupName,sl.rowPriv,
+			  gFrom,gToPair,gStride,fmt);
       }
     if(do_tuple && full_comb && T > 0)
       {
 	sl.fullComb.assign(F,string());
 	for(int f = 0; f < F; f++)
 	  {
-	    ostringstream o;
+	    string& out = sl.fullComb[f];
 	    for(int m = 0; m < T; m++)
 	      {
 		if(tupleFile[m] != f) continue;
-		o << locus.name << '\t' << tupleLabelComma[m];
+		out += locus.name;
+		out += '\t';
+		out += tupleLabelComma[m];
 		for(int g = gFrom; g <= gToPair; g++)
 		  {
 		    const double v = sl.vComb[size_t(m)*gStride + g];
-		    o << '\t';
-		    if(v == -9) o << "NA";
-		    else o << v;
+		    out += '\t';
+		    if(v == -9) out += "NA";
+		    else fmt.append(out,v);
 		  }
-		o << '\n';
+		out += '\n';
 	      }
-	    sl.fullComb[f] = o.str();
 	  }
       }
   };
@@ -3651,7 +3724,7 @@ void sweepLoci(LocusSource& src,const ScanResult& scan,const ParamSet& param,
 		 SweepSlot& sl = slot[i];
 		 sl.err.clear();
 		 sl.ok = src.parse(sl.raw,sl.locus,scratch[w],sl.err);
-		 if(sl.ok && sl.keep) compute(sl,qOf[w]);
+		 if(sl.ok && sl.keep) compute(sl,qOf[w],fmtOf[w]);
 	       });
 
       //Fold and write, in file order.
