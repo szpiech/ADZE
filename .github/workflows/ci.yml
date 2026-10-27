@@ -88,7 +88,12 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p ref10
-          git archive origin/master src | tar -x -C ref10
+          # Through a file, not a pipe: on the macOS runner, tar sometimes
+          # exits before git archive has finished writing, and git archive is
+          # then killed by SIGPIPE, which pipefail turns into a failed step
+          # (exit 141).
+          git archive -o "$RUNNER_TEMP/ref10.tar" origin/master src
+          tar -x -C ref10 -f "$RUNNER_TEMP/ref10.tar"
           python3 test/patch_ref10.py ref10/src
           if [ "$RUNNER_OS" = "Linux" ]; then
             GSL_INC=/usr/include
@@ -180,7 +185,8 @@ jobs:
           set -euxo pipefail
           git fetch --no-tags --depth=1 origin master
           mkdir -p ref10
-          git archive FETCH_HEAD src | tar -x -C ref10
+          git archive -o "$RUNNER_TEMP/ref10.tar" FETCH_HEAD src   # not a pipe; see the suites job
+          tar -x -C ref10 -f "$RUNNER_TEMP/ref10.tar"
           python3 test/patch_ref10.py ref10/src
           make -C ref10/src \
             G++FLAG="-O2 -ffp-contract=off -std=c++03 -w -include cstring -include cstdlib -include climits" \
