@@ -232,12 +232,16 @@ reference to compare against. The suites job runs them through `ctest` on
 Linux and macOS, and the Makefile job runs them directly, so it needs only
 `make` and `python3`.
 
-On Windows, `regress.py` does not run. Version 1.0 built with mingw-w64
-reports no statistics at all, because its `putNj` stores its value and then
-reaches the end of a `bool` function without returning, and in that build the
-store is lost. There is therefore no usable reference on Windows. The Windows
-job runs the other suites, and it also re-runs the distributed example and
-compares the output with the committed output.
+Version 1.0's `putNj` stores its value and then reaches the end of a `bool`
+function without returning. Built with mingw-w64, or with GCC 15 or later,
+the store is lost, and version 1.0 then reports no statistics at all. CI
+therefore builds the reference after running `patch_ref10.py`, which adds the
+missing `return` and changes nothing else. The patched reference gives
+byte-identical output to an unpatched build in which the store is kept (gcc
+11 at `-O0`), so `regress.py` still compares the program with what version
+1.0 computes. On Windows, `regress.py` does not run yet. The Windows job runs
+the other suites, and it also re-runs the distributed example and compares
+the output with the committed output.
 
 `threads.py` runs on every platform, since `--threads` needs only the C++
 standard library. The races job builds the pool test and the program with

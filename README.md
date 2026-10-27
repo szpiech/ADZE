@@ -256,11 +256,14 @@ is the only step in CI that needs GSL.
 The comparison with version 1.0 is only run on Linux and macOS. In version
 1.0, `Population::putNj` stores its value and then reaches the end of a `bool`
 function without returning, and the version 1.0 build hides the compiler
-warning with `-w`. In a mingw-w64 build the stored value is lost, so every
-sample size is 0, every statistic is undefined, and version 1.0 writes headers
-without numbers while reporting success. Because there is nothing to compare
-against, the Windows job instead re-runs the distributed example and compares
-it with output committed from another platform.
+warning with `-w`. With mingw-w64, and with GCC 15 or later, the stored value
+is lost, so every sample size is 0, every statistic is undefined, and version
+1.0 writes headers without numbers while reporting success. Before building
+the reference, CI therefore runs `test/patch_ref10.py`, which adds the missing
+`return` to `putNj` and changes nothing else. The patched reference gives
+byte-identical output to an unpatched build in which the store is kept. The
+Windows job does not yet use it, and instead re-runs the distributed example
+and compares it with output committed from another platform.
 
 ## Memory
 

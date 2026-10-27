@@ -74,12 +74,16 @@ jobs:
       # 1.0 predates the include-what-you-use tightening in current standard
       # libraries, so the headers it relied on transitively are forced in and
       # its warnings silenced. The shim adds nothing where they are already
-      # included, and it does not patch master.
+      # included. test/patch_ref10.py then adds the one missing return in
+      # 1.0 (Population::putNj), without which GCC 15 drops the store before
+      # it and the reference reports no statistics; see that script. Neither
+      # changes master.
       - name: Build the version 1.0 reference binary
         run: |
           set -euxo pipefail
           mkdir -p ref10
           git archive origin/master src | tar -x -C ref10
+          python3 test/patch_ref10.py ref10/src
           if [ "$RUNNER_OS" = "Linux" ]; then
             GSL_INC=/usr/include
             GSL_LIB=/usr/lib/x86_64-linux-gnu
@@ -171,6 +175,7 @@ jobs:
           git fetch --no-tags --depth=1 origin master
           mkdir -p ref10
           git archive FETCH_HEAD src | tar -x -C ref10
+          python3 test/patch_ref10.py ref10/src
           make -C ref10/src \
             G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
             I_PATH=/usr/include \
@@ -268,11 +273,11 @@ jobs:
       # undefined rows: 1.0 there writes headers and no numbers, reports no
       # error, and the run summary still matches. Removing that store from a
       # local 1.0 build reproduces the Windows output exactly, console line
-      # included. There is nothing to compare against, so 2.0's agreement with
-      # 1.0 is established on Linux and macOS, where 1.0's arithmetic is
-      # well defined. (A Windows differential run is possible against a 1.0
-      # patched to return -- but that is a patched reference, and the claim
-      # would have to say so.)
+      # included. GCC 15 on Linux now does the same, so the Linux and macOS
+      # jobs build the reference with test/patch_ref10.py, which adds the
+      # missing return and nothing else. The same patch would let this job
+      # run the differential suite too; it does not yet, because the patched
+      # reference has only been checked on Linux.
       - name: Configure and build
         run: |
           set -euxo pipefail
