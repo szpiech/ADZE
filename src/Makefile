@@ -55,10 +55,10 @@ endif
 #   make TARGET=adze.exe
 TARGET  = adze
 SOURCES = ADZE_main.cpp ADZE_main_tools.cpp ADZE_pfile.cpp \
-          ADZE_stats.cpp ADZE_pbar.cpp ADZE_binom.cpp
+          ADZE_stats.cpp ADZE_pbar.cpp ADZE_binom.cpp ADZE_fileops.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 HEADERS = ADZE_main_tools.h ADZE_pfile.h ADZE_stats.h \
-          ADZE_pbar.h ADZE_binom.h ADZE_threads.h
+          ADZE_pbar.h ADZE_binom.h ADZE_threads.h ADZE_fileops.h
 
 all: $(TARGET)
 

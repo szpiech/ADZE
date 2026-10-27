@@ -1745,28 +1745,6 @@ string reserveTempFile(const string& stem)
   throw BAD_FILE();
 }
 
-/*
- * Puts a finished conversion at the name the user gave with --count-file.
- * It is written under a temporary name first and renamed when complete, so a
- * run that is reading the file, or one that checks it for reuse, never sees
- * it half written. On POSIX systems the rename replaces the old file in one
- * step, and a run that already has it open keeps reading the old one.
- * Windows cannot rename over an existing file, so the old one is removed
- * first there.
- */
-void publishFile(const string& tmp,const string& path)
-{
-#ifdef _WIN32
-  remove(path.c_str());
-#endif
-  if(rename(tmp.c_str(),path.c_str()) != 0)
-    {
-      cerr << "ERROR: could not move the converted counts from " << tmp
-	   << " to " << path << ": " << strerror(errno) << "\n";
-      remove(tmp.c_str());
-      throw BAD_FILE();
-    }
-}
 
 /*
  * Where a conversion goes when the user has not named one: beside the

@@ -31,7 +31,8 @@ add_executable(adze
   src/ADZE_pfile.cpp
   src/ADZE_stats.cpp
   src/ADZE_pbar.cpp
-  src/ADZE_binom.cpp)
+  src/ADZE_binom.cpp
+  src/ADZE_fileops.cpp)
 
 target_include_directories(adze PRIVATE src)
 

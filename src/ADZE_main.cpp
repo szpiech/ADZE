@@ -618,8 +618,26 @@ int main(int argc, char* argv[])
 				   convertChunk(p,scan));
 	      if(p.count_file.set)
 		{
-		  publishFile(convertTmp,countPath);
+		  string moveErr, whyNot;
+		  const bool moved = publishFile(convertTmp,countPath,moveErr);
 		  convertTmp.clear();
+
+		  //Another run published a conversion first. If it is a
+		  //conversion of this same data, it is what this run would have
+		  //written, so the run uses it.
+		  if(!moved && !countFileUsable(countPath,p,scan,whyNot))
+		    {
+		      cerr << "ERROR: could not move the converted counts to "
+			   << countPath << " (" << moveErr << "), and the file"
+			   << " there cannot be used"
+			   << (whyNot.size() ? ", " + whyNot : string()) << ".\n";
+		      throw BAD_FILE();
+		    }
+		  if(!moved)
+		    {
+		      adzelog() << "Another run wrote " << countPath
+				<< " first; using its counts.\n";
+		    }
 		}
 
 	      adzelog() << "  converted in " << passes

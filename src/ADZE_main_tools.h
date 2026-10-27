@@ -4,6 +4,7 @@
 #include <map>
 #include <unordered_map>
 #include "ADZE_threads.h"
+#include "ADZE_fileops.h"
 #include <chrono>
 #include <iomanip>
 #include "ADZE_binom.h"
@@ -209,7 +210,6 @@ LocusSource* openCountFileSource(const string& path,const ScanResult& scan);
  */
 string countFilePath(const ParamSet& p);
 string reserveTempFile(const string& stem);
-void publishFile(const string& tmp,const string& path);
 long long countFileBytes(const ScanResult& scan);
 long long convertChunk(const ParamSet& p,const ScanResult& scan);
 bool countFileUsable(const string& path,const ParamSet& p,
