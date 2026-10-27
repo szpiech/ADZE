@@ -82,8 +82,9 @@ jobs:
       # one. The Ubuntu 26.04 runner's compiler does this, and it moves some
       # of 1.0's values by one unit in the last place, which is enough to
       # change a printed digit when the exact value is a tie at six digits
-      # (12979/16000 in the basic fixture). 2.0 prints the same digits with
-      # or without FMA, so only the reference needs the flag.
+      # (12979/16000 in the basic fixture). 2.0 is built with the same flag
+      # (src/Makefile, CMakeLists.txt), so both print the same digits on
+      # every platform.
       - name: Build the version 1.0 reference binary
         run: |
           set -euxo pipefail

@@ -37,7 +37,9 @@ add_executable(adze
 target_include_directories(adze PRIVATE src)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(adze PRIVATE -Wall)
+  # -ffp-contract=off: no fused multiply-add, so that output does not depend
+  # on whether the processor has FMA. See the note in src/Makefile.
+  target_compile_options(adze PRIVATE -Wall -ffp-contract=off)
 endif()
 
 option(ADZE_USE_ZLIB "Read gzip/bgzip-compressed input if zlib is available" ON)

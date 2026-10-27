@@ -20,6 +20,14 @@ PREFIX   ?= /usr/local
 CXXFLAGS += -pthread
 LDLIBS   += -pthread
 
+# Do not fuse a multiply and an add into one FMA instruction. Clang does this
+# by default where the processor has FMA (every Apple-silicon Mac), and the
+# single rounding can move a value by one unit in the last place. That is
+# enough to change a printed digit when the exact value is a tie at six
+# digits, so the same data would print differently on different machines.
+# It costs no measurable time.
+CXXFLAGS += -ffp-contract=off
+
 # zlib gives .vcf.gz and .stru.gz input; without it those files are refused
 # with a message rather than misparsed.
 ifdef ZLIB
