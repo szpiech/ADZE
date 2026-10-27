@@ -236,7 +236,11 @@ Version 1.0's `putNj` stores its value and then reaches the end of a `bool`
 function without returning. Built with mingw-w64, or with GCC 15 or later,
 the store is lost, and version 1.0 then reports no statistics at all. CI
 therefore builds the reference after running `patch_ref10.py`, which adds the
-missing `return` and changes nothing else. The patched reference gives
+missing `return` and changes nothing else. The reference is also built with
+`-ffp-contract=off`, so that the compiler does not fuse a multiply and an add
+into one instruction. On a processor with fused multiply-add this changes
+some of version 1.0's values in the last bit, and so a printed digit where
+the exact value is a tie. The patched reference gives
 byte-identical output to an unpatched build in which the store is kept (gcc
 11 at `-O0`), so `regress.py` still compares the program with what version
 1.0 computes. On Windows, `regress.py` does not run yet. The Windows job runs

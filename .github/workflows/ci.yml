@@ -77,7 +77,13 @@ jobs:
       # included. test/patch_ref10.py then adds the one missing return in
       # 1.0 (Population::putNj), without which GCC 15 drops the store before
       # it and the reference reports no statistics; see that script. Neither
-      # changes master.
+      # changes master. -ffp-contract=off stops the compiler from fusing a
+      # multiply and an add into one FMA instruction where the target has
+      # one. The Ubuntu 26.04 runner's compiler does this, and it moves some
+      # of 1.0's values by one unit in the last place, which is enough to
+      # change a printed digit when the exact value is a tie at six digits
+      # (12979/16000 in the basic fixture). 2.0 prints the same digits with
+      # or without FMA, so only the reference needs the flag.
       - name: Build the version 1.0 reference binary
         run: |
           set -euxo pipefail
@@ -96,7 +102,7 @@ jobs:
           # a libgsl whose install name is rpath-relative (Homebrew, conda)
           # then fails at load time. Running the binary below is the check.
           make -C ref10/src \
-            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            G++FLAG="-O2 -ffp-contract=off -std=c++03 -w -include cstring -include cstdlib -include climits" \
             I_PATH="$GSL_INC" \
             L_PATH="$GSL_LIB" \
             LINK_OPTS="-L$GSL_LIB -Wl,-rpath,$GSL_LIB -lgsl -lgslcblas"
@@ -177,7 +183,7 @@ jobs:
           git archive FETCH_HEAD src | tar -x -C ref10
           python3 test/patch_ref10.py ref10/src
           make -C ref10/src \
-            G++FLAG="-O2 -std=c++03 -w -include cstring -include cstdlib -include climits" \
+            G++FLAG="-O2 -ffp-contract=off -std=c++03 -w -include cstring -include cstdlib -include climits" \
             I_PATH=/usr/include \
             L_PATH=/usr/lib/x86_64-linux-gnu \
             LINK_OPTS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu -lgsl -lgslcblas"
