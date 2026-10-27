@@ -3507,6 +3507,10 @@ class ValueFormatter
     out.append(b,size_t(n));
   }
 #else
+  //Declared because the private copy constructor below would otherwise
+  //suppress the implicit one, and the sweep holds one formatter per thread
+  //in a vector.
+  ValueFormatter() {}
   void append(string& out,double v)
   {
     o.str(string());
