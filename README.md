@@ -338,6 +338,12 @@ many do. Blocks always fall inside windows when `--hap-bp` divides both
 suite checks this. `--dry-run` reports the blocks that a given block size
 produces before any statistic is computed.
 
+## License
+
+ADZE is free software, distributed under the GNU General Public License,
+version 3 or any later version. See `LICENSE` for the full text. Copyright
+(C) 2008-2026 Zachary A Szpiech.
+
 ## Documentation
 
 `ADZE_Manual.pdf` describes the estimators, the input formats, every option,

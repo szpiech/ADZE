@@ -1,3 +1,20 @@
+/*
+ * ADZE: Allelic Diversity Analyzer
+ * Copyright (C) 2008-2026 Zachary A Szpiech
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 #include "ADZE_pfile.h"
 #include <sstream>
 #include <cstring>
@@ -781,7 +798,13 @@ void ParamSet::version(ostream& out)
       << "Allelic Diversity Analyzer -- rarefaction estimators of allelic\n"
       << "richness and private allelic richness.\n"
       << "Method: Szpiech ZA, Jakobsson M, Rosenberg NA (2008) Bioinformatics\n"
-      << "24:2498-2504. doi:10.1093/bioinformatics/btn478\n";
+      << "24:2498-2504. doi:10.1093/bioinformatics/btn478\n"
+      << "\n"
+      << "Copyright (C) 2008-2026 Zachary A Szpiech\n"
+      << "License GPLv3+: GNU GPL version 3 or later "
+      << "<https://gnu.org/licenses/gpl.html>.\n"
+      << "This is free software: you are free to change and redistribute it.\n"
+      << "There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 void ParamSet::usage(ostream& out)

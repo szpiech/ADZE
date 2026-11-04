@@ -162,7 +162,7 @@ jobs:
           mkdir -p "dist/$DIR"
           if [ -f src/adze.exe ]; then cp src/adze.exe "dist/$DIR/";
           else cp src/adze "dist/$DIR/"; fi
-          cp README.md ADZE_Manual.pdf "dist/$DIR/"
+          cp README.md LICENSE ADZE_Manual.pdf "dist/$DIR/"   # the GPL must travel with the binary
           cp -R example "dist/$DIR/example"
           cd dist
           if [ "${{ matrix.name }}" = "windows-x86_64" ]; then
