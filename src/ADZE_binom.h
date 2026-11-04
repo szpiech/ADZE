@@ -1,5 +1,7 @@
-#include <cmath>
+#ifndef __ADZE_BINOM_H__
+#define __ADZE_BINOM_H__
 
-double nCk(int n, int k);
-double gammln(double xx);
-double factln(int n);
+//The number of ways to choose k of n items, exact up to 2^53. See ADZE_binom.cpp.
+double choose(int n,int k);
+
+#endif

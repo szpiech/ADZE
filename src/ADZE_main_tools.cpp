@@ -2036,7 +2036,7 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
       	      nTuples = 0;
       	      for(list<int>::iterator i = k.begin(); i != k.end(); i++)
       		{
-      		  nTuples += nCk(numDivs,*i);
+      		  nTuples += choose(numDivs,*i);
       		}
       	    }
       	  cout << "  tuple rows:      " << long(double(rows)*nTuples)
@@ -2054,7 +2054,7 @@ void printDryRun(const ParamSet& p,const ScanResult& scan,
             double total = 0;
             for(list<int>::iterator i = k.begin(); i != k.end(); i++)
       	{
-      	  total += nCk(numDivs,*i);
+      	  total += choose(numDivs,*i);
       	}
             cout << "Tuples to evaluate:     " << long(total) << "\n";
           }
