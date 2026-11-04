@@ -59,8 +59,17 @@ NEEDS = [
     (r"\bstat\s*\(\s*\w+|\bstruct stat\b", ("<sys/stat.h>",)),
 ]
 
-COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
-STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+# Comments, string literals and character literals, matched in one pass from
+# left to right, as the compiler reads them. Taking comments out first would
+# read the "//" in a string such as "https://..." as the start of a comment,
+# cut the string short and pair the remaining quotes wrongly, so code after it
+# would be hidden inside a "string" and go unchecked.
+TOKEN = re.compile(
+    r'//[^\n]*'                    # line comment
+    r'|/\*.*?\*/'                  # block comment
+    r'|"(?:[^"\\\n]|\\.)*"'        # string literal
+    r"|'(?:[^'\\\n]|\\.)*'",       # character literal
+    re.S)
 INCLUDE = re.compile(r'^\s*#\s*include\s+([<"][^>"]+[>"])', re.M)
 
 
@@ -85,8 +94,10 @@ def visible(name, src, seen=None):
 
 def body(path):
     """File contents with comments and string literals removed."""
-    text = COMMENT.sub(" ", open(path).read())
-    return STRING.sub('""', text)
+    def blank(m):
+        t = m.group(0)
+        return t[0] * 2 if t[0] in "\"'" else " "
+    return TOKEN.sub(blank, open(path).read())
 
 
 def main():
