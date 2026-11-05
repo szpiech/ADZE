@@ -18,7 +18,7 @@ averaging across loci and the output are the same as described in the rest of
 this manual. However, because an allele is now a haplotype, there are some
 additional requirements and caveats, which are described below.
 
-\subsection{What a haplotype allele is here}
+\subsection{Constucting haplotypes}
 
 For each gene copy, \prog\ reads its allele at every SNP in the block, in order
 along the chromosome, and treats this sequence as one allele. Two gene copies
@@ -37,14 +37,10 @@ chromosomes, a region that contains no SNP gives no block, and
 
 \subsection{Phase is required}
 
-A haplotype is a run of alleles along one chromosome, so the input must say
-which chromosome copy each allele is on. \prog\ therefore requires phased
-genotypes. Every \texttt{GT} with more than one allele must use \texttt{|}, and
+\prog\ requires phased genotypes in VCF format only. Every \texttt{GT} with more than one allele must use \texttt{|}, and
 a record that uses \texttt{/} stops the run with an error that gives the record
 and the sample. Haploid gene copies are phased by definition. Note that \prog\
-does not phase the data or check the quality of the phasing. A haplotype
-assembled from an unphased genotype would be an arbitrary pairing of alleles,
-which is why an unphased genotype is an error rather than a warning.
+does not phase the data or check the quality of the phasing. 
 
 For the same reason, the \structureprog\ format is not supported in this mode,
 since it does not say which chromosome copy an allele is on. Giving
@@ -61,18 +57,11 @@ fixes either problem).
 
 \subsection{One uncalled genotype makes the block uncalled}
 
-A gene copy only carries a haplotype allele in a block if it is called at every
+A haplotype allele is constructed in a block if it is called at every
 SNP in the block. If it is uncalled at any SNP in the block, it does not
-contribute to that block. It is not given a partial haplotype, since this
-would be an allele that no gene copy carries, and it would increase every
-count that included it. A gene copy whose \texttt{GT} at some record has fewer
+contribute to that block. A gene copy whose \texttt{GT} at some record has fewer
 alleles than the sample's ploidy is also counted as uncalled there.
 
-As a result, missing data accumulate along a block. If each SNP is called
-independently with probability $1-m$, a gene copy is callable across a block of
-$N$ SNPs with probability about $(1-m)^N$. For example, with 2\% missing data,
-a block of 50 SNPs keeps about a third of its gene copies. Because $N_j$ enters
-the rarefaction directly, this reduces the largest $g$ the data can support.
 \flag{--tolerance} applies to blocks in the same way as to loci, so a block
 where some grouping has lost more than the allowed fraction of its gene copies
 is dropped. The \texttt{\_blocks} file (section~\ref{sec:blocksfile}) gives
@@ -83,22 +72,16 @@ the number of callable gene copies in each grouping for every block.
 When a block is long enough, every gene copy carries a different haplotype.
 If a block has as many distinct haplotypes as callable gene copies, no
 haplotype is repeated, every subsample of $g$ gene copies contains $g$ distinct
-haplotypes, and $\hat{\alpha}_g^{(j)} = g$ regardless of the data. In this case
-the statistic no longer measures anything about the populations. \prog\ counts
+haplotypes, and $\hat{\alpha}_g^{(j)} = g$ regardless of the data. \prog\ counts
 these blocks and reports the number at the end of the run, and the
 \texttt{HAPLOTYPES} column of the \texttt{\_blocks} file shows how close each
 block is to this limit.
 
 Private allelic richness has the same limit, because a haplotype carried by
-only one gene copy is private to that gene copy's grouping. For example, in
-simulated biallelic data in which both alleles at every SNP have a frequency
-between 0.2 and 0.8 in every grouping, so that almost no single-SNP allele is
-private, the mean private allelic richness at $g = 2$ was 0.0025 for blocks of 1 SNP, 0.11 for 2 SNPs, 1.42 for 5 SNPs, 1.98
-for 10 SNPs and 2.0 for 20 or 50 SNPs. We therefore recommend using the
-shortest blocks that answer the question, and comparing results across several
-block lengths.
+only one gene copy is private to that gene copy's grouping. 
 
 \subsection{Naming and output}
+
 \label{sec:blocksfile}
 
 A block with more than one SNP is named \texttt{chromosome:start-end}. A block

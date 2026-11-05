@@ -26,11 +26,7 @@
 
 \title{\prog: Allelic Diversity Analyzer\\Version 2.0}
 \author{
-  Zachary A. Szpiech\\
-  \and
-  Mattias Jakobsson\\
-  \and
-  Noah A. Rosenberg
+  Zachary A. Szpiech
 }
 \date{}
 
@@ -44,10 +40,9 @@ private allelic richness, and private allelic richness for combinations of
 populations, correcting for differences in sample size between populations.
 Version 2.0 computes the same estimators as version 1.0, and at every sample
 size that version 1.0 reports it gives the same values. In addition, version
-2.0 reads the variant files produced by current sequencing studies, can report
+2.0 reads VCF files, can report
 each statistic in windows along the genome and for haplotypes of consecutive
-SNPs, and is run from the command line rather than from a parameter file. It
-also uses much less memory and time than version 1.0.
+SNPs. It also uses much less memory and time than version 1.0.
 Section~\ref{sec:changes} lists everything that changed.
 \end{abstract}
 
@@ -205,7 +200,7 @@ defined, \prog\ reports \texttt{NA} (section~\ref{sec:legacy}). With a single
 locus ($L = 1$), the variance and standard error are undefined and are reported
 as \texttt{nan}.
 
-\subsection{One gene copy}
+\subsection{$g=1$}
 \label{sec:gone}
 
 \prog\ reports each statistic starting at $g = 1$. At this sample size the
@@ -215,11 +210,7 @@ at every locus.
 At $g = 1$, $Q_{ij1} = (N_j - N_{ij})/N_j$, so $P_{ij1} = N_{ij}/N_j = p_{ij}$,
 the frequency of allele type $i$ in population $j$. Allelic richness is then
 $\sum_i p_{ij} = 1$ at every locus, because a single gene copy always carries
-exactly one allele. This value says nothing about the data, but it is a useful
-check, since a locus where it is not 1 indicates a problem with how the alleles
-were counted. The variance across loci is reported as a number near
-$10^{-33}$. This is rounding error in a sum of ones, and it is zero for
-practical purposes.
+exactly one allele.
 
 Private allelic richness at $g = 1$ is
 $\hat{\pi}_1^{(j)} = \sum_i p_{ij} \prod_{j' \neq j} (1 - p_{ij'})$, the
@@ -309,7 +300,7 @@ as VCF.
 Both formats are reduced to the same quantities at each locus, the allele
 counts and the missing-data counts for each grouping, and these are all that
 the estimators use. The results therefore do not depend on the input format.
-The same genotypes written in both formats give byte-identical output, and
+The same genotypes written in both formats give identical output, and
 \texttt{test/formats.py} checks that they do.
 
 \subsection{\structureprog\ format}
@@ -351,6 +342,23 @@ names, and each subsequent row is one gene copy, with five label columns
 followed by five allele codes.}
 \label{fig:datafile}
 \end{figure}
+
+A \structureprog\ file has one row per gene copy and one column per locus, so
+no locus can be computed until every row has been read. Such a file is
+therefore first converted into allele counts arranged by locus. The conversion
+reads a block of locus columns at a time, with the block size chosen to fit in
+a fixed amount of memory, and the second pass then reads the counts. Because
+the converted file holds counts rather than genotypes, it is much smaller than
+the data file. For example, an 80\,000-locus file of 122\,MB converts to
+7.2\,MB.
+
+The converted file is written in the same directory as the output and removed
+when the run ends. If \flag{--count-file} is given, the file is kept instead,
+and the next run over the same data reuses it. A kept file records the data
+file's path, size and modification time, the grouping filters, the missing-data
+code and the column layout. If any of these has changed, the file is not used,
+and \prog\ reports the reason and converts the data again.
+\flag{--convert-chunk} sets the number of loci converted in each pass.
 
 \subsection{Dimensions of the data file}
 \label{sec:autodetect}
@@ -485,63 +493,6 @@ statistics. With \flag{--legacy}, such a grouping does not appear in the result
 file at all, and the warning explains why. If filtering removes every locus,
 \prog\ stops with an error rather than reporting statistics over no data.
 
-\subsection{How a run proceeds}
-\label{sec:how}
-
-Version 2.0 reads the data twice and does not hold the genotypes in memory.
-
-The first pass counts gene copies. For each grouping and each locus, it
-records how many gene copies were scored, which is one integer per locus per
-grouping and nothing about which alleles were seen. This is enough to decide
-everything that depends on the data set as a whole: which loci fail the
-missing-data filter, how large $g$ can be for each grouping and overall, where
-the windows fall, and what \flag{--dry-run} should report. Note that the
-filter cannot be applied during the first pass, because it is measured against
-a grouping's total number of gene copies, which is only known at the end of the
-file.
-
-The second pass computes the statistics. The loci are read one at a time, and
-for each locus the probabilities $Q_{ijg}$ are computed once and used by every
-requested statistic (allelic richness, private allelic richness, and private
-allelic richness for each combination of populations). Each statistic keeps a
-running mean and sum of squared deviations for each $g$, and for each window
-at each $g$, so no per-locus values are stored. Once a locus has been written
-to the output, it is no longer held in memory.
-
-As a result, peak memory does not grow with the number of genotypes. For
-example, on a VCF of 320\,000 loci and 10 groupings, the version 2.0 build from
-before this change, which held the data in memory, used 195\,MB, and the
-current version uses 32\,MB. The difference grows with the number of loci.
-
-\flag{--dry-run} uses only the first pass and does not read the data a second
-time, so it is much cheaper than a full run.
-
-\subsubsection*{\structureprog\ input is converted first}
-
-A \structureprog\ file has one row per gene copy and one column per locus, so
-no locus can be computed until every row has been read. Such a file is
-therefore first converted into allele counts arranged by locus. The conversion
-reads a block of locus columns at a time, with the block size chosen to fit in
-a fixed amount of memory, and the second pass then reads the counts. Because
-the converted file holds counts rather than genotypes, it is much smaller than
-the data file. For example, an 80\,000-locus file of 122\,MB converts to
-7.2\,MB.
-
-The converted file is written in the same directory as the output and removed
-when the run ends. If \flag{--count-file} is given, the file is kept instead,
-and the next run over the same data reuses it. A kept file records the data
-file's path, size and modification time, the grouping filters, the missing-data
-code and the column layout. If any of these has changed, the file is not used,
-and \prog\ reports the reason and converts the data again.
-\flag{--convert-chunk} sets the number of loci converted in each pass.
-
-The conversion has a cost. A \structureprog\ run reads its input twice and
-also writes and reads the converted file, so it is slower than before. On
-320\,000 loci it took 5.7\,s, compared with 4.1\,s for the build that held the
-data in memory, while using 133\,MB rather than 216\,MB. The memory saving
-grows with the number of loci (260\,MB rather than 886\,MB at 1.28 million
-loci). A VCF run only pays for the extra pass.
-
 \section{Parameters and options}
 
 \subsection{Parameter file syntax}
@@ -576,25 +527,6 @@ reports a single $g$ instead:
 per-locus files and their window files all report the single $g$, with the
 same columns as a full run (including the column for $g$), so they can be read
 in the same way.
-
-The requested $g$ is limited by two values: \texttt{MAX\_G}, and the smallest
-number of gene copies scored at any locus, which is the largest $g$ at which the
-statistics are defined. If the request is larger than the smaller of these two
-values, \prog\ uses that value instead and prints a warning giving the value
-requested, the value used and which limit applied. Note that this is different
-from what happens when \texttt{MAX\_G} is too large. In that case \prog\ still
-reports every $g$ up to \texttt{MAX\_G} and gives \texttt{NA} for the values
-that cannot be computed, which still gives a useful result for the smaller
-values of $g$. A report at a single $g$ that contained only \texttt{NA} would not
-be useful. A value below 1 is refused, because $g$ is a sample size.
-
-Reporting a single $g$ is also faster. The probabilities $Q_{ijg}$ are
-computed by a recurrence in $g$, so they must still be computed for every $g$
-up to the one being reported. However, most of the cost of a full run is in
-accumulating and writing the statistics at every $g$, and this is only done
-for the requested $g$. For example, on 20\,000 loci in 12 groupings with all
-66 pairs of groupings and \texttt{MAX\_G} of 33, the full run took 3.42\,s,
-\flag{--at-g 2} took 0.60\,s and \flag{--at-g 33} took 0.65\,s.
 
 \subsection{Option reference}
 \label{sec:options}
@@ -718,10 +650,6 @@ files are written in the same way in both layouts.
 When \flag{--tolerance} is below 1, a \texttt{\_deletedloci} file gives the
 number of loci that were dropped, the threshold that was applied, and the name
 of each dropped locus, in the order in which the loci appear in the input.
-Version 1.0 listed them in descending order of position. The order changed
-because each dropped locus is now written as it is read, instead of the names
-being collected first. The file is written even when every locus is dropped,
-since that is the case in which the list is most needed.
 
 \subsection{Run summary}
 
@@ -775,18 +703,7 @@ these files.
 \label{sec:windows}
 
 Every statistic in section~\ref{sec:intro} can be reported in windows along
-the genome, in addition to being reported once for the whole data set.
-
-\subsection{What a windowed statistic is here}
-
-For each window, \prog\ reports the same mean, variance and standard error
-over the loci in the window that it reports over all loci. The estimators do
-not change. $\hat{\alpha}_g^{(j)}$ and $\hat{\pi}_g^{(j)}$ are expectations at
-a single locus, and a window only changes the set of loci that they are
-averaged over.
-
-This has two consequences. First, the windowed statistics do not use any
-information about linkage between the loci in a window. A windowed statistic
+the genome, in addition to being reported once for the whole data set. A windowed statistic
 is an average over nearby loci, and it does not measure haplotype structure in
 the window. For alleles that are haplotypes, see
 section~\ref{sec:haplotypes}. The two can be combined, in which case each
@@ -840,7 +757,7 @@ The size of a window is given either in basepairs or in loci:
 not overlap. A step smaller than the window size gives overlapping (sliding)
 windows. No window spans two chromosomes. Windows are laid out over the loci
 that remain after missing-data filtering (section~\ref{sec:filter}), so a
-locus that is dropped there is not in any window, and a window of $N$ loci
+locus that is dropped is not in any window, and a window of $N$ loci
 contains $N$ loci that remain after filtering.
 
 \flag{--min-window-loci} \textit{N} leaves out windows that contain fewer than
@@ -1144,11 +1061,6 @@ microsatellite data are 20\,000 loci with 20 alleles each in the
 \label{tab:threads}
 \end{table}
 
-Compressed input is decompressed as it is read, so a \texttt{.vcf.gz} file
-takes more processor time to read than the same data uncompressed. On a busy
-file system it usually takes less elapsed time, since much less data has to be
-read from disk.
-
 Table~\ref{tab:perf} gives the effect of the version 2.0 changes on the steps
 that take the most time in large runs, measured against a version 1.0 build on
 the same inputs. In version 1.0, the time for locus filtering grew with the
@@ -1174,47 +1086,6 @@ with the sample size. Version 2.0 does not hold the genotypes in memory, so its
 memory use does not grow with the number of gene copies.}
 \label{tab:perf}
 \end{table}
-
-\subsection{Haplotype blocks}
-
-Collapsing SNPs into blocks affects the cost of a run in two ways, and the
-balance depends on the block size. The counting pass keeps one count per block
-per grouping, so larger blocks mean fewer counts and less memory. However, the
-work at each block grows with the number of distinct haplotypes in the block,
-which increases with block size until every callable gene copy carries a
-different haplotype. The following table was measured on 40\,000 phased
-biallelic SNPs, with 300 gene copies in 6 groupings, 2\% of genotypes missing
-and \flag{--max-g}~10:
-
-\begin{center}
-\begin{tabular}{lrrrrrr}
-\toprule
-\flag{--hap-snps} & time & peak & blocks & haplotypes & callable & saturated\\
- &  &  &  & per block & copies & blocks\\
-\midrule
-off & 0.29\,s & 7.4\,MB & 40\,000 & 2.0 & 100\% & ---\\
-1   & 0.45\,s & 8.1\,MB & 40\,000 & 2.0 & 98\% & 0\%\\
-2   & 0.37\,s & 6.7\,MB & 20\,000 & 4.0 & 96\% & 0\%\\
-5   & 0.45\,s & 5.6\,MB & 8\,000 & 31.9 & 90\% & 0\%\\
-10  & 0.92\,s & 5.7\,MB & 4\,000 & 210.7 & 82\% & 0\%\\
-20  & 0.45\,s & 5.5\,MB & 2\,000 & 200.2 & 67\% & 96\%\\
-50  & 0.26\,s & 5.4\,MB & 800 & 109.4 & 37\% & 100\%\\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\noindent The fraction of callable gene copies follows $(1-m)^N$ closely
-(98, 96, 90, 82, 67 and 37\% measured, compared with 98, 96, 90, 82, 67 and
-36\% predicted), as expected from the rule in section~\ref{sec:haplotypes}
-that one uncalled genotype makes the whole block uncalled. With blocks of 50
-SNPs and 2\% missing data, only a third of the gene copies are still callable,
-so two thirds of them are lost. The run time is largest for blocks of 10 SNPs,
-where the number of distinct haplotypes is high and there are still many
-blocks, and it decreases for longer blocks because there are fewer blocks. In
-addition, with blocks of 20 SNPs, almost every block has as many haplotypes as
-callable gene copies, so that $\hat{\alpha}_g^{(j)}$ equals $g$ regardless of
-the data. Note that the fastest runs in the table are therefore the least
-informative.
 
 \section{Changes from version 1.0}
 \label{sec:changes}
