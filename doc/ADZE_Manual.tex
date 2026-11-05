@@ -234,10 +234,16 @@ file is refused with an error message instead of being misread.
 \flag{--threads} uses the threads of the C++ standard library, so it needs no
 other library.
 
-Use the following citation for \prog: Szpiech, Z. A., M. Jakobsson, and
-N. A. Rosenberg. 2008. \prog: a rarefaction approach for counting alleles
-private to combinations of populations. \textit{Bioinformatics} 24:
-2498--2504.
+If you use \prog, please cite both of the following. The first describes the
+method and version 1.0, and the second describes version 2.0.
+\begin{itemize}[label={},leftmargin=1.5em,itemindent=-1.5em]
+\item Szpiech, Z. A., M. Jakobsson, and N. A. Rosenberg. 2008. \prog: a
+  rarefaction approach for counting alleles private to combinations of
+  populations. \textit{Bioinformatics} 24: 2498--2504.
+\item Szpiech, Z. A. 2026. \prog\ 2.0: rarefaction estimates of allelic
+  richness and private allelic richness for whole-genome data.
+  \textit{bioRxiv} doi: 10.64898/2026.11.05.764651.
+\end{itemize}
 
 \prog\ is free software, distributed under the GNU General Public License,
 version 3 or any later version. The full license is in the file
@@ -606,8 +612,7 @@ L2      POP1            1       1       NA
 
 \noindent The locus is in the first column because the loci are read one at a
 time, and the values for every grouping at a locus are computed before the
-next locus is read (section~\ref{sec:how}). The rows for a locus are therefore
-written together.
+next locus is read. The rows for a locus are therefore written together.
 
 This layout is the transpose of the version 1.0 layout, and it is the main
 change to the output format in version 2.0. Version 1.0 wrote one row for each
@@ -1132,9 +1137,9 @@ now always checked during the counting pass at no extra cost.
 \item The genotypes are not held in memory. The data are read in two passes.
   The first counts gene copies and determines the filter, the largest $g$ for
   each grouping, \texttt{MAX\_G} and the windows. The second computes every
-  statistic from one table of $Q_{ijg}$ per locus (section~\ref{sec:how}). On a
-  VCF of 1.28 million loci and 10 groupings, peak memory decreased from
-  764\,MB to 145\,MB with the same run time. For a \structureprog\ file of the
+  statistic from one table of $Q_{ijg}$ per locus. On a VCF of 1.28 million
+  loci and 10 groupings, peak memory decreased from 764\,MB to 145\,MB with
+  the same run time. For a \structureprog\ file of the
   same size, peak memory decreased from 886\,MB to 260\,MB, and the run took
   about twice as long, because the file is first converted to counts by locus.
 \item \flag{--dry-run} uses only the counting pass and does not read the data
@@ -1276,6 +1281,9 @@ same output as an ordinary run.
 \item Szpiech, Z. A., M. Jakobsson, and N. A. Rosenberg. 2008. \prog: a
   rarefaction approach for counting alleles private to combinations of
   populations. \textit{Bioinformatics} 24: 2498--2504.
+\item Szpiech, Z. A. 2026. \prog\ 2.0: rarefaction estimates of allelic
+  richness and private allelic richness for whole-genome data.
+  \textit{bioRxiv} doi: 10.64898/2026.11.05.764651.
 \end{itemize}
 
 \end{document}
