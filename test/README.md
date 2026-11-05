@@ -226,11 +226,11 @@ a deliberately wrong README.
 ## In CI
 
 `.github/workflows/ci.yml` runs the suites on pushes to `master` and `devel`
-and on pull requests into either. It builds the 1.0 reference from `master` in
-the same run rather than keeping a binary, so `regress.py` always has a
-reference to compare against. The suites job runs them through `ctest` on
-Linux and macOS, and the Makefile job runs them directly, so it needs only
-`make` and `python3`.
+and on pull requests into either. It builds the 1.0 reference from the last
+1.0 commit (`a70f765`) in the same run rather than keeping a binary, so
+`regress.py` always has a reference to compare against. The suites job runs
+them through `ctest` on Linux and macOS, and the Makefile job runs them
+directly, so it needs only `make` and `python3`.
 
 Version 1.0's `putNj` stores its value and then reaches the end of a `bool`
 function without returning. Built with mingw-w64, or with GCC 15 or later,

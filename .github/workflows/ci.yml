@@ -4,7 +4,7 @@ name: CI
 #
 #   suites    the test suites under ctest, on Linux and macOS. The
 #             differential suite needs a version 1.0 binary to compare
-#             against, which is built here from the master branch -- so the
+#             against, which is built here from the last 1.0 commit -- so the
 #             "byte identical to 1.0" claim is re-established on every push
 #             rather than resting on a binary someone built once.
 #   makefile  the plain Makefile paths. CMake is what the suites job uses, so
@@ -45,6 +45,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The last commit of ADZE 1.0 ("example files"), from which the reference for
+# the differential suite is built. It is pinned by hash, not taken from a
+# branch: master held 1.0 until 2.0 was merged into it, and a branch name
+# would then silently build 2.0 against itself.
+env:
+  ADZE_1_0_COMMIT: a70f76540a6c7e06532b997dd496c0dbab0f2369
+
 jobs:
   suites:
     name: suites (${{ matrix.os }})
@@ -54,8 +61,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      # Full history: the 1.0 reference is built from the master branch, so a
-      # shallow clone of the feature branch alone is not enough.
+      # Full history: the 1.0 reference is built from the last 1.0 commit
+      # (ADZE_1_0_COMMIT), which a shallow clone does not contain.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -77,7 +84,7 @@ jobs:
       # included. test/patch_ref10.py then adds the one missing return in
       # 1.0 (Population::putNj), without which GCC 15 drops the store before
       # it and the reference reports no statistics; see that script. Neither
-      # changes master. -ffp-contract=off stops the compiler from fusing a
+      # changes the repository. -ffp-contract=off stops the compiler from fusing a
       # multiply and an add into one FMA instruction where the target has
       # one. The Ubuntu 26.04 runner's compiler does this, and it moves some
       # of 1.0's values by one unit in the last place, which is enough to
@@ -93,7 +100,7 @@ jobs:
           # exits before git archive has finished writing, and git archive is
           # then killed by SIGPIPE, which pipefail turns into a failed step
           # (exit 141).
-          git archive -o "$RUNNER_TEMP/ref10.tar" origin/master src
+          git archive -o "$RUNNER_TEMP/ref10.tar" "$ADZE_1_0_COMMIT" src
           tar -x -C ref10 -f "$RUNNER_TEMP/ref10.tar"
           python3 test/patch_ref10.py ref10/src
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -184,7 +191,7 @@ jobs:
       - name: Build the version 1.0 reference binary
         run: |
           set -euxo pipefail
-          git fetch --no-tags --depth=1 origin master
+          git fetch --no-tags --depth=1 origin "$ADZE_1_0_COMMIT"
           mkdir -p ref10
           git archive -o "$RUNNER_TEMP/ref10.tar" FETCH_HEAD src   # not a pipe; see the suites job
           tar -x -C ref10 -f "$RUNNER_TEMP/ref10.tar"
