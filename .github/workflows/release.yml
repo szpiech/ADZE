@@ -42,10 +42,20 @@ jobs:
         include:
           - name: linux-x86_64
             os: ubuntu-latest
+            shell: bash
           - name: macos-universal2
             os: macos-latest
+            shell: bash
           - name: windows-x86_64
             os: windows-latest
+            shell: msys2 {0}
+    # The shell for each run step that does not name its own. A step's shell:
+    # cannot read the matrix, and GitHub rejects the whole file if one tries,
+    # so that every push records a failed run with no jobs and a tag builds
+    # nothing. defaults.run is where the matrix may choose it.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
@@ -137,7 +147,6 @@ jobs:
       # readers to each other. A binary that links but computes wrongly --
       # a mis-set flag, a broken static libstdc++ -- fails here.
       - name: Verify the binary that will ship
-        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
         run: |
           set -euxo pipefail
           BIN=src/adze
@@ -154,7 +163,6 @@ jobs:
 
       - name: Package
         id: pack
-        shell: ${{ matrix.name == 'windows-x86_64' && 'msys2 {0}' || 'bash' }}
         run: |
           set -euxo pipefail
           V="${{ steps.ver.outputs.version }}"
