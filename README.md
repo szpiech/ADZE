@@ -6,11 +6,7 @@ Allelic Diversity Analyzer
 
 ADZE is a program that implements the rarefaction method for analyzing allelic diversity across populations while correcting for sample size differences. Using individual multilocus genotype data on genetic polymorphisms, ADZE computes estimates of allelic richness, private allelic richness, and private allelic richness for combinations of populations. 
 
-If you use ADZE, please cite both of the following. The first describes the method and version 1.0, and the second describes version 2.0.
-
-ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for counting alleles private to combinations of populations. Bioinformatics 24: 2498-2504.
-
-ZA Szpiech. (2026) ADZE 2.0: rarefaction estimates of allelic richness and private allelic richness for whole-genome data. bioRxiv doi: 10.64898/2026.11.05.764651.
+ZA Szpiech, M Jakobsson, NA Rosenberg. (2008) ADZE: a rarefaction approach for counting alleles private to combinations of populations. Bioinformatics 24: 2498-2504. 
 
 ## Binaries
 
